@@ -1,0 +1,2342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>MAA 整合包构筑台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <style>
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #94a3b8;
+            border-radius: 3px;
+        }
+
+        .tree-node {
+            position: relative;
+        }
+
+        .tree-children {
+            position: relative;
+            margin-left: 24px;
+            padding-left: 12px;
+        }
+
+        .tree-children::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            border-left: 2px dashed #cbd5e1;
+        }
+
+        .mod-card {
+            transition: all 0.2s ease;
+        }
+
+        .mod-card.highlight {
+            background-color: #e0e7ff !important;
+            border-color: #6366f1 !important;
+            box-shadow: 0 0 10px rgba(99, 102, 241, 0.4);
+            transform: translateX(5px);
+        }
+
+        .disabled-mod {
+            opacity: 0.45;
+            filter: grayscale(100%);
+        }
+
+        details > summary {
+            list-style: none;
+        }
+
+        details > summary::-webkit-details-marker {
+            display: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 h-screen font-sans overflow-hidden">
+<div id="app" class="h-full flex flex-col relative">
+
+    <!-- 顶部导航栏 -->
+    <header class="bg-slate-900 text-white p-4 shadow-lg flex justify-between items-center shrink-0 z-10 relative">
+        <div class="flex items-center gap-3">
+            <button v-if="authUser" @click="showSidebar = !showSidebar"
+                    class="bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-sm">☰</button>
+            <h1 class="text-xl font-bold tracking-widest">MAA 构筑总控台</h1>
+        </div>
+        <div class="flex gap-3 items-center">
+            <button v-if="!authUser" @click="showAuthModal = true"
+                    class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-lg font-bold text-sm">登录/注册</button>
+            <span v-if="authUser" class="text-slate-400 text-sm mr-2">👤 {{ authUser.username }}</span>
+            <button v-if="authUser" @click="currentView = 'profile'"
+                    class="bg-slate-700 hover:bg-slate-600 px-3 py-1.5 rounded text-sm">⚙️ 设置</button>
+            <button @click="openSandbox"
+                    class="bg-amber-600 hover:bg-amber-500 px-4 py-2 rounded-lg font-bold shadow text-sm flex items-center gap-1">
+                <span>🧪</span> 校验
+            </button>
+            <button @click="openDbView"
+                    class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded-lg font-bold shadow text-sm flex items-center gap-1">
+                <span>📚</span> 知识库
+            </button>
+            <button @click="currentView = 'knowledge-editor'; loadKeEnvs()"
+                    class="bg-purple-600 hover:bg-purple-500 px-4 py-2 rounded-lg font-bold shadow text-sm flex items-center gap-1">
+                <span>🧬</span> 规则编辑
+            </button>
+        </div>
+    </header>
+
+    <!-- 主聊天界面 -->
+    <div class="flex-1 flex flex-col h-full bg-slate-50 relative overflow-hidden" v-if="currentView === 'chat'">
+        <main class="flex-1 overflow-y-auto p-4 flex flex-col gap-4 max-w-4xl w-full mx-auto" ref="chatBox">
+            <div v-for="(msg, idx) in chatHistory" :key="idx"
+                 class="p-4 rounded-xl shadow-sm max-w-[85%] leading-relaxed whitespace-pre-wrap"
+                 :class="msg.role === 'user' ? 'bg-indigo-50 ml-auto border border-indigo-100 text-slate-800' : 'bg-white border border-slate-200 text-slate-700'">
+
+                <!-- 🔥 AI 历史消息的思考折叠面板 -->
+                <details v-if="msg.role === 'ai' && msg.thinkTime"
+                         class="mb-3 group bg-slate-50 rounded-lg p-3 border border-slate-200">
+                    <summary class="cursor-pointer font-bold text-slate-500 flex items-center text-xs">
+                        <span class="mr-2 transform group-open:rotate-90 transition-transform">▶</span>
+                        深度思考已完成 (耗时 {{ msg.thinkTime }} 秒)
+                    </summary>
+                    <div class="mt-2 text-xs text-slate-400 pl-4 border-l-2 border-slate-300 space-y-1">
+                        <p>1. 正在解析自然语言提取意图...</p>
+                        <p>2. 正在触发底层搜索大批量模组真实性...</p>
+                        <p>3. 正在组装最终的 XML 蓝图...</p>
+                    </div>
+                </details>
+
+                {{ msg.content }}
+                <div v-if="msg.role === 'ai' && msg.hasData" class="mt-3">
+                    <button @click="openLab"
+                            class="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-6 rounded-lg shadow transition flex items-center gap-2">
+                        <span>🔍</span> 查看当前构筑图谱
+                    </button>
+                </div>
+            </div>
+
+            <!-- 🔥 激动人心的实时思考动态面板 -->
+            <div v-if="isLoading"
+                 class="p-4 rounded-xl shadow-sm bg-white border border-slate-200 text-slate-700 max-w-[85%]">
+                <details class="group" open>
+                    <summary class="cursor-pointer font-bold text-indigo-600 flex items-center text-sm mb-2">
+                        <svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-indigo-600" xmlns="http://www.w3.org/2000/svg"
+                             fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor"
+                                    stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor"
+                                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Agent 深度思考与并发核实中... ({{ thinkTime }}s)
+                    </summary>
+                    <div class="pl-6 border-l-2 border-indigo-200 text-slate-500 text-sm">
+                        <p class="animate-pulse">{{ currentThought }}</p>
+                    </div>
+                </details>
+            </div>
+
+        </main>
+
+        <footer class="bg-white p-4 border-t shrink-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-20">
+            <div class="max-w-4xl mx-auto">
+                <!-- 🔥 待发送附件标签 -->
+                <div v-if="pendingMrpack" class="flex items-center gap-2 mb-2">
+                    <span class="bg-indigo-50 border border-indigo-200 text-indigo-700 px-3 py-1 rounded-lg text-sm font-bold flex items-center gap-2">
+                        📦 {{ pendingMrpack.name }}
+                        <button @click="pendingMrpack = null" class="text-indigo-400 hover:text-red-500 font-bold text-lg leading-none">&times;</button>
+                    </span>
+                </div>
+                <div class="flex gap-2 items-center">
+                <!-- 📎 上传 mrpack -->
+                <button @click="$refs.mrpackUpload.click()" :disabled="isLoading"
+                        class="bg-slate-200 hover:bg-indigo-100 disabled:opacity-40 px-3 py-3 rounded-lg transition"
+                        title="上传 .mrpack 继续编辑">
+                    <span class="text-lg">📦</span>
+                </button>
+                <input type="file" ref="mrpackUpload" accept=".mrpack" @change="onMrpackUpload" class="hidden">
+
+                <input v-model="userInput" @keyup.enter="sendMessage" type="text"
+                       class="flex-1 border-2 border-slate-200 rounded-lg px-4 py-3 focus:outline-none focus:border-indigo-500 transition"
+                       placeholder="上传mrpack展开构筑图谱，或输入指令..." :disabled="isLoading">
+                <!-- 🔥 发送指令按钮（非 Loading 状态显示） -->
+                <button v-if="!isLoading" @click="sendMessage"
+                        class="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-lg font-bold w-32 flex justify-center">
+                    发送指令
+                </button>
+
+                <!-- 🔥 强制终止按钮（Loading 状态显示） -->
+                <button v-if="isLoading" @click="abortThinking"
+                        class="bg-red-500 hover:bg-red-600 text-white px-8 py-3 rounded-lg font-bold w-32 flex justify-center shadow-md animate-pulse">
+                    终止思考
+                </button>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- 构筑装配台界面 -->
+    <div v-if="currentView === 'lab'" class="absolute inset-0 top-[68px] bg-white z-20 flex flex-col">
+        <header class="bg-slate-800 text-white p-2 flex justify-between items-center shadow-md shrink-0">
+            <button @click="currentView = 'chat'"
+                    class="bg-slate-700 hover:bg-slate-600 px-4 py-1.5 rounded-md text-sm font-bold">← 返回继续对话调优
+            </button>
+            <div class="flex items-center gap-4">
+                <span class="text-slate-400 font-mono text-sm"
+                      v-if="previewData">耗时: {{ (previewData.timeMs / 1000).toFixed(2) }}s</span>
+                <button @click="buildPack" :disabled="isBuilding"
+                        class="bg-green-500 hover:bg-green-600 px-6 py-1.5 rounded-md font-bold text-sm">
+                    {{ isBuilding ? '打包中...' : '确认打包下载 (.mrpack)' }}
+                </button>
+            </div>
+        </header>
+
+        <div class="flex-1 flex overflow-hidden bg-slate-50 relative">
+            <div v-if="isResolving" class="absolute inset-0 bg-white/90 z-20 flex flex-col items-center justify-center">
+                <div class="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                <p class="mt-4 font-bold text-slate-700">依赖穿透解析中...</p>
+            </div>
+
+            <!-- 左侧：A-Z 层级树 (包含过滤搜索) -->
+            <div class="w-[480px] border-r border-slate-200 bg-white flex flex-col z-10 shadow-lg">
+                <div class="p-3 border-b bg-slate-50 font-bold text-slate-700 shadow-sm flex flex-col gap-2">
+                    <div class="flex justify-between items-center">
+                        <span>📋 A-Z 依赖树</span>
+                        <span class="text-indigo-600 bg-indigo-100 px-2 py-0.5 rounded-full text-xs">已选 {{ selectedMods.size
+                            }} / {{ previewData?.nodes.length || 0 }}</span>
+                    </div>
+                    <!-- 🔥 搜索框 -->
+                    <input type="text" v-model="searchQuery" placeholder="输入名称或 slug 快速定位模组..."
+                           class="w-full border border-slate-300 rounded px-3 py-1.5 text-sm outline-none focus:border-indigo-500">
+                    <!-- 🔥 智能衍生操作台 -->
+                    <div class="flex gap-2 mt-1">
+                        <input v-model="manualAddSlug" @keyup.enter="directAddMod" placeholder="输入 slug 直接添加" class="flex-1 border border-slate-300 rounded px-2 py-1.5 text-xs outline-none focus:border-indigo-500">
+                        <button @click="directAddMod" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 rounded text-xs font-bold transition">添加</button>
+                        <button @click="openSuggestBoard" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 rounded text-xs font-bold transition whitespace-nowrap">💡 智能抽卡</button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-y-auto p-4" id="tree-container">
+                    <tree-node v-for="node in filteredRootNodes" :key="node.id" :node="node" :path="node.id"
+                               :visited="[]"></tree-node>
+                </div>
+            </div>
+
+            <!-- 右侧：DAG 图谱 -->
+            <div class="flex-1 relative bg-[#f8fafc]">
+                <div id="network-canvas" class="absolute inset-0 outline-none"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 知识库界面 -->
+    <div v-if="currentView === 'db'" class="absolute inset-0 top-[68px] bg-slate-50 z-30 flex flex-col">
+        <header class="bg-slate-800 text-white p-2 flex justify-between items-center shadow-md shrink-0">
+            <button @click="currentView = 'chat'"
+                    class="bg-slate-700 hover:bg-slate-600 px-4 py-1.5 rounded-md text-sm font-bold">← 返回对话
+            </button>
+            <h2 class="font-bold tracking-widest text-sm">🗂️ 知识库规则管理视图</h2>
+            <div class="w-[88px]"></div>
+        </header>
+        <div class="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full">
+            <div v-if="dbRules.length === 0" class="text-center text-slate-400 mt-20">暂无知识库数据</div>
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+                <details v-for="(envs, envName) in groupedDbData" :key="envName" class="mb-4 group" open>
+                    <summary class="cursor-pointer font-bold bg-slate-800 text-white p-3 rounded-lg flex items-center">
+                        🌍 环境: {{ envName }}
+                    </summary>
+                    <div class="ml-6 mt-3 pl-2 border-l-2 border-slate-300">
+                        <details v-for="(types, typeName) in envs" :key="typeName" class="mb-3 group" open>
+                            <summary class="cursor-pointer font-bold p-2 rounded bg-slate-100 flex items-center"
+                                     :class="typeName === 'CONFLICTS_WITH' ? 'text-red-600' : 'text-indigo-600'">
+                                {{ typeName === 'DEPENDS_ON' ? '🔗 强制依赖规则 (DEPENDS)' : '⚔️ 互斥冲突规则 (CONFLICTS)'
+                                }}
+                            </summary>
+                            <div class="ml-6 mt-2">
+                                <details v-for="(rules, modA) in types" :key="modA" class="mb-2 group">
+                                    <summary class="cursor-pointer text-sm font-bold text-slate-700 flex items-center">
+                                        📦 主模组: <a :href="'https://modrinth.com/mod/' + modA" target="_blank" class="font-mono bg-slate-100 px-1 ml-1 rounded hover:underline text-indigo-600">{{ modA }}</a></summary>
+                                    <ul class="ml-8 list-disc text-sm text-slate-600 mt-1">
+                                        <li v-for="rule in rules" :key="rule.id" class="mt-1 flex items-center gap-2">
+                                            <span>指向 ➡️</span>
+                                            <a :href="'https://modrinth.com/mod/' + rule.modB" target="_blank"
+                                               class="font-mono font-bold px-1 rounded hover:underline cursor-pointer"
+                                               :class="typeName === 'CONFLICTS_WITH' ? 'bg-red-50 text-red-600 hover:text-red-800' : 'bg-indigo-50 text-indigo-600 hover:text-indigo-800'">
+                                                {{ rule.modB }}
+                                            </a>
+                                            <span class="text-xs text-white px-2 rounded-full ml-2"
+                                                  :class="rule.sourceType === 'ADMIN' ? 'bg-red-500' : rule.sourceType === 'MODRINTH' ? 'bg-emerald-500' : 'bg-purple-500'">来源: {{ rule.sourceType }}</span>
+                                            <span v-if="rule.sourceType === 'USER_FEEDBACK'" class="text-xs px-2 rounded-full ml-1"
+                                                  :class="rule.confirmCount >= 3 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'">
+                                                可信度: {{ rule.confirmCount }} {{ rule.confirmCount >= 3 ? '✅ 可用' : '⏳ 需≥3' }}
+                                            </span>
+                                        </li>
+                                    </ul>
+                                </details>
+                            </div>
+                        </details>
+                    </div>
+                </details>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🧪 沙盒校验台 -->
+    <div v-if="currentView === 'sandbox'" class="absolute inset-0 top-[68px] bg-slate-50 z-30 flex flex-col">
+        <header class="bg-slate-800 text-white p-2 flex justify-between items-center shadow-md shrink-0">
+            <button @click="currentView = 'chat'"
+                    class="bg-slate-700 hover:bg-slate-600 px-4 py-1.5 rounded-md text-sm font-bold">← 返回对话
+            </button>
+            <h2 class="font-bold tracking-widest text-sm">🧪 沙盒校验台</h2>
+            <div class="w-[88px]"></div>
+        </header>
+
+        <div class="flex-1 overflow-y-auto p-8 max-w-3xl mx-auto w-full">
+            <!-- 上传区域 (idle 状态) -->
+            <div v-if="sandboxState === 'idle'" class="bg-white rounded-2xl shadow-lg border border-slate-200 p-8 mb-6">
+                <h3 class="text-xl font-bold text-slate-800 mb-2">上传整合包进行可用性校验</h3>
+                <p class="text-sm text-slate-500 mb-6">系统将在隔离沙箱中真实启动 Minecraft 服务端，自动检测模组冲突并通过 AI 专家诊断进行自愈修复。</p>
+
+                <div class="space-y-6">
+                    <!-- 文件上传 -->
+                    <div>
+                        <label class="block text-sm font-bold text-slate-700 mb-2">上传 .mrpack 文件：</label>
+                        <div class="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:border-amber-400 transition cursor-pointer"
+                             @click="$refs.fileInput.click()" @dragover.prevent @drop.prevent="handleFileDrop">
+                            <input type="file" ref="fileInput" accept=".mrpack" @change="onFileSelected" class="hidden">
+                            <div v-if="!sandboxFile" class="text-slate-400">
+                                <div class="text-3xl mb-2">📦</div>
+                                <p>拖拽 .mrpack 文件到此处，或点击选择文件</p>
+                            </div>
+                            <div v-else class="text-amber-600 font-bold">
+                                ✅ 已选择: {{ sandboxFile.name }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 或粘贴 slug 列表 -->
+                    <div class="border-t pt-4">
+                        <label class="block text-sm font-bold text-slate-700 mb-2">或直接粘贴模组 slug 列表 (每行一个，或用逗号分隔)：</label>
+                        <textarea v-model="sandboxSlugText" rows="4"
+                                  class="w-full border-2 border-slate-200 rounded-lg p-3 outline-none focus:border-amber-400 font-mono text-sm"
+                                  placeholder="irons-spells-n-spellbooks&#10;farmers-delight&#10;create"></textarea>
+                    </div>
+
+                    <!-- 配置 -->
+                    <div class="flex gap-4 pt-2">
+                        <div class="flex-1">
+                            <label class="block text-sm font-bold text-slate-700 mb-2">Minecraft 版本：</label>
+                            <select v-model="sandboxConfig.mcVersion"
+                                    class="w-full border-2 border-slate-200 rounded-lg p-2.5 outline-none focus:border-amber-400">
+                                <option value="1.21.1">1.21.1</option>
+                                <option value="1.20.1">1.20.1</option>
+                                <option value="1.19.2">1.19.2</option>
+                            </select>
+                        </div>
+                        <div class="flex-1">
+                            <label class="block text-sm font-bold text-slate-700 mb-2">加载器：</label>
+                            <select v-model="sandboxConfig.loader"
+                                    class="w-full border-2 border-slate-200 rounded-lg p-2.5 outline-none focus:border-amber-400">
+                                <option value="neoforge">NeoForge</option>
+                                <option value="forge">Forge</option>
+                                <option value="fabric">Fabric</option>
+                                <option value="quilt">Quilt</option>
+                            </select>
+                        </div>
+                        <div class="flex-1">
+                            <label class="block text-sm font-bold text-slate-700 mb-2">测试模式：</label>
+                            <select v-model="sandboxConfig.testMode"
+                                    class="w-full border-2 border-slate-200 rounded-lg p-2.5 outline-none focus:border-amber-400">
+                                <option value="server">🖥️ 服务端测试 (排除仅客户端模组)</option>
+                                <option value="client">🎮 客户端测试 (保留全部模组)</option>
+                            </select>
+                            <p class="text-xs text-slate-400 mt-1">
+                                服务端模式自动排除 sodium/iris 等仅客户端模组；客户端模式保留全部并在服务端环境中碰撞
+                            </p>
+                        </div>
+                    </div>
+
+                    <button @click="startValidation" :disabled="!canStartValidation"
+                            class="w-full bg-amber-600 hover:bg-amber-700 disabled:bg-slate-300 text-white font-bold py-3.5 rounded-xl transition shadow-md text-lg">
+                        🚀 开始校验
+                    </button>
+                </div>
+            </div>
+
+            <!-- 进度面板 (running 状态) -->
+            <div v-if="sandboxState === 'running'" class="bg-white rounded-2xl shadow-lg border border-slate-200 p-8">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-8 h-8 border-4 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
+                    <h3 class="font-bold text-lg text-slate-800">校验进行中...</h3>
+                </div>
+                <div class="bg-slate-900 rounded-xl p-4 font-mono text-sm max-h-[60vh] overflow-y-auto shadow-inner"
+                     id="sandbox-log-box">
+                    <div v-for="(entry, idx) in sandboxLogs" :key="idx" class="mb-1 leading-relaxed"
+                         :class="{
+                            'text-green-400': entry.stage === 'resolving' || entry.stage === 'resolved',
+                            'text-cyan-400': entry.stage === 'downloading',
+                            'text-yellow-400': entry.stage === 'testing',
+                            'text-red-400': entry.stage === 'crash',
+                            'text-amber-400': entry.action,
+                            'text-emerald-400': entry.success,
+                            'text-orange-400': !entry.success && entry.stage === 'failed',
+                            'text-slate-400 text-xs': entry.stage === 'mc-out',
+                            'text-purple-400': entry.stage === 'filtered',
+                            'text-blue-300 whitespace-pre-wrap': entry.stage === 'summary' || entry.stage === 'report'
+                         }">
+                        <span class="text-slate-500 text-xs mr-2">[{{ entry.timestamp || '--:--' }}]</span>
+                        <span v-if="entry.stage">{{ entry.message || entry.stage }}</span>
+                        <span v-else-if="entry.action">
+                            🔧 第{{ entry.cycle }}轮 {{ entry.action === 'ADD' ? '💉添加' : entry.action === 'REMOVE' ? '🔪移除' : '🧹清理孤儿子库' }}: <b>{{ entry.target }}</b>
+                            <div class="text-xs text-slate-400 ml-16">{{ entry.reason }}</div>
+                        </span>
+                        <span v-else-if="entry.success !== undefined">
+                            {{ entry.success ? '🎉 校验通过！无冲突启动成功！' : '💥 ' + entry.message }}
+                            <span v-if="entry.finalMods"> (存活 {{ entry.finalMods.length }} 个模组, {{ entry.cycles }} 轮修复)</span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 结果面板 (done 状态) -->
+            <div v-if="sandboxState === 'done'" class="bg-white rounded-2xl shadow-lg border p-8"
+                 :class="sandboxResult?.success ? 'border-emerald-300' : 'border-red-300'">
+                <div class="text-center mb-6">
+                    <div class="text-5xl mb-3">{{ sandboxResult?.success ? '🎉' : '💥' }}</div>
+                    <h3 class="text-2xl font-bold" :class="sandboxResult?.success ? 'text-emerald-600' : 'text-red-500'">
+                        {{ sandboxResult?.success ? '校验通过！' : '校验未通过' }}
+                    </h3>
+                    <p class="text-slate-500 mt-2">{{ sandboxResult?.message }}</p>
+                </div>
+
+                <div v-if="sandboxResult" class="grid grid-cols-2 gap-4 mb-6">
+                    <div class="bg-slate-50 rounded-lg p-4 text-center">
+                        <div class="text-2xl font-bold text-indigo-600">{{ sandboxResult.cycles || 0 }}</div>
+                        <div class="text-xs text-slate-500">修复轮次</div>
+                    </div>
+                    <div class="bg-slate-50 rounded-lg p-4 text-center">
+                        <div class="text-2xl font-bold text-emerald-600">{{ sandboxResult.finalMods?.length || 0 }}</div>
+                        <div class="text-xs text-slate-500">最终服务端模组数</div>
+                    </div>
+                </div>
+
+                <!-- 🔥 下载区域 - 仅成功时显示 -->
+                <div v-if="sandboxResult?.success && sandboxResult.finalMods?.length" class="mb-6 p-4 bg-emerald-50 rounded-xl border border-emerald-200">
+                    <h4 class="font-bold text-emerald-800 mb-3 text-lg">📦 下载校验通过的整合包</h4>
+                    <p class="text-sm text-emerald-700 mb-4">提供两种版本：
+                        <br>① <b>服务端安全版</b> — 已移除崩溃模组 + 自动排除仅客户端模组 ({{ sandboxServerSlugs.length }} 个)
+                        <br>② <b>完整版</b> — 已移除崩溃模组，但补回了只在客户端生效的模组 ({{ sandboxServerSlugs.length + sandboxSkippedClient.length }} 个)
+                    </p>
+                    <div class="flex gap-3">
+                        <button @click="downloadValidatedPack('server')"
+                                :disabled="isDownloadingPack"
+                                class="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-bold py-3 rounded-lg transition shadow-md flex items-center justify-center gap-2">
+                            <span v-if="isDownloadingPack" class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                            <span v-else>🖥️</span>
+                            下载服务端安全版 (.mrpack)
+                        </button>
+                        <button @click="downloadValidatedPack('full')"
+                                :disabled="isDownloadingPack"
+                                class="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-bold py-3 rounded-lg transition shadow-md flex items-center justify-center gap-2">
+                            <span v-if="isDownloadingPack" class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                            <span v-else>🎮</span>
+                            下载完整版 (.mrpack)
+                        </button>
+                    </div>
+                </div>
+
+                <div v-if="sandboxResult?.finalMods?.length" class="mb-6">
+                    <h4 class="font-bold text-slate-700 mb-2">最终存活模组列表：</h4>
+                    <div class="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
+                        <span v-for="slug in sandboxResult.finalMods" :key="slug"
+                              class="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-xs font-mono">{{ slug }}</span>
+                    </div>
+                </div>
+
+                <!-- 🔥 减法自愈报告 (成功/失败都展示) -->
+                <div v-if="sandboxReportText" class="mb-6">
+                    <h4 class="font-bold text-slate-700 mb-2">📊 减法自愈操作报告</h4>
+                    <pre class="bg-slate-800 text-emerald-400 p-4 rounded-lg text-xs font-mono max-h-60 overflow-y-auto whitespace-pre-wrap">{{ sandboxReportText }}</pre>
+                </div>
+
+                <button @click="sandboxState = 'idle'; sandboxLogs = []; sandboxReportText = ''"
+                        class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-xl transition shadow-md">
+                    🔄 重新校验
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🔐 登录/注册弹窗 -->
+    <div v-if="showAuthModal" class="absolute inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center">
+        <div class="bg-white rounded-2xl shadow-2xl w-96 p-8 relative">
+            <button @click="showAuthModal = false" class="absolute top-3 right-3 text-slate-400 hover:text-red-500 text-2xl leading-none">&times;</button>
+            <h3 class="text-xl font-bold mb-4">{{ authMode === 'login' ? '登录' : '注册' }}</h3>
+            <div class="space-y-3">
+                <div v-if="authMode === 'login'">
+                    <label class="text-sm font-bold text-slate-700">账号</label>
+                    <input v-model="authForm.account" class="w-full border rounded px-3 py-2 outline-none focus:border-blue-500">
+                </div>
+                <div v-if="authMode === 'register'">
+                    <label class="text-sm font-bold text-slate-700">用户名 (可选)</label>
+                    <input v-model="authForm.username" placeholder="留空则用账号作为用户名" class="w-full border rounded px-3 py-2 outline-none focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="text-sm font-bold text-slate-700">密码</label>
+                    <input v-model="authForm.password" type="password" @keyup.enter="doAuth" class="w-full border rounded px-3 py-2 outline-none focus:border-blue-500">
+                </div>
+                <p v-if="authError" class="text-red-500 text-sm">{{ authError }}</p>
+                <p v-if="authSuccess" class="text-emerald-600 text-sm font-bold">{{ authSuccess }}</p>
+                <button @click="doAuth" :disabled="authLoading"
+                        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg transition">
+                    {{ authLoading ? '处理中...' : (authMode === 'login' ? '登录' : '注册 (账号自动分配)') }}
+                </button>
+                <p class="text-sm text-slate-500 text-center cursor-pointer hover:text-blue-600"
+                   @click="authMode = authMode === 'login' ? 'register' : 'login'; authError = ''; authSuccess = ''">
+                    {{ authMode === 'login' ? '没有账号？去注册' : '已有账号？去登录' }}
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 📂 对话侧边栏 -->
+    <div v-if="authUser && showSidebar && currentView === 'chat'"
+         class="absolute left-0 top-[68px] bottom-0 w-64 bg-white border-r border-slate-200 z-20 flex flex-col shadow-lg">
+        <div class="p-3 border-b bg-slate-50 flex justify-between items-center">
+            <span class="font-bold text-sm text-slate-700">📂 对话历史</span>
+            <button @click="newConversation" class="bg-indigo-500 hover:bg-indigo-600 text-white px-2 py-0.5 rounded text-xs">+ 新对话</button>
+        </div>
+        <div class="flex-1 overflow-y-auto p-2">
+            <div v-for="c in conversationList" :key="c.id"
+                 @click="loadConversation(c.id)"
+                 class="p-2 rounded mb-1 cursor-pointer hover:bg-indigo-50 text-sm truncate"
+                 :class="currentConvId === c.id ? 'bg-indigo-100 font-bold' : 'text-slate-600'">
+                {{ c.title }}
+                <button @click.stop="deleteConversation(c.id)" class="float-right text-red-400 hover:text-red-600 text-xs">✕</button>
+            </div>
+            <div v-if="conversationList.length === 0" class="text-slate-400 text-sm text-center mt-4">暂无对话</div>
+        </div>
+    </div>
+
+    <!-- 👤 用户设置页面 -->
+    <div v-if="currentView === 'profile'" class="absolute inset-0 top-[68px] bg-slate-50 z-30 flex flex-col">
+        <header class="bg-slate-800 text-white p-2 flex justify-between items-center shadow-md shrink-0">
+            <button @click="currentView = 'chat'"
+                    class="bg-slate-700 hover:bg-slate-600 px-4 py-1.5 rounded-md text-sm font-bold">← 返回对话</button>
+            <h2 class="font-bold tracking-widest text-sm">⚙️ 用户设置</h2>
+            <button v-if="authUser" @click="logout" class="bg-red-600 hover:bg-red-500 px-4 py-1.5 rounded-md text-sm font-bold">退出登录</button>
+        </header>
+        <div class="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full space-y-6">
+            <!-- 账号信息 -->
+            <div class="bg-white rounded-xl shadow-sm border p-6">
+                <h3 class="font-bold text-lg mb-3">👤 账号信息</h3>
+                <div class="grid grid-cols-2 gap-4 text-sm">
+                    <div><span class="text-slate-500">账号：</span><span class="font-bold text-lg font-mono">{{ authUser?.accountNumber }}</span></div>
+                    <div><span class="text-slate-500">用户名：</span><span class="font-bold">{{ authUser?.username }}</span></div>
+                </div>
+            </div>
+
+            <!-- API Key -->
+            <div class="bg-white rounded-xl shadow-sm border p-6">
+                <h3 class="font-bold text-lg mb-3">🔑 DeepSeek API Key（建议新建Key独立管理）</h3>
+                <p class="text-sm text-slate-500 mb-2">AES 加密存储在服务器端，不会暴露在浏览器或传输中。</p>
+                <div v-if="hasApiKey" class="mb-3 flex items-center gap-2">
+                    <span class="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-sm font-bold">已设置</span>
+                    <span class="text-slate-400 text-xs">密钥已安全存储，对话时将使用你的个人 Key</span>
+                </div>
+                <input v-model="profileApiKey" type="password" placeholder="输入新 Key 覆盖旧 Key，或留空..." class="w-full border rounded px-3 py-2 outline-none focus:border-blue-500 font-mono text-sm">
+                <p v-if="profileApiKeyMsg" class="text-sm mt-1" :class="profileApiKeyMsg.includes('成功') ? 'text-emerald-600' : 'text-red-500'">{{ profileApiKeyMsg }}</p>
+                <button @click="saveApiKey" class="mt-3 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold">保存</button>
+            </div>
+
+            <!-- 修改密码 -->
+            <div class="bg-white rounded-xl shadow-sm border p-6">
+                <h3 class="font-bold text-lg mb-3">🔒 修改密码</h3>
+                <div class="space-y-2">
+                    <input v-model="pwOld" type="password" placeholder="当前密码" class="w-full border rounded px-3 py-2 text-sm outline-none focus:border-blue-500">
+                    <input v-model="pwNew" type="password" placeholder="新密码 (至少4位)" class="w-full border rounded px-3 py-2 text-sm outline-none focus:border-blue-500">
+                    <p v-if="pwMsg" class="text-sm" :class="pwMsg.includes('成功') ? 'text-emerald-600' : 'text-red-500'">{{ pwMsg }}</p>
+                    <button @click="changePassword" :disabled="!pwOld || !pwNew" class="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white px-4 py-2 rounded text-sm font-bold">修改密码</button>
+                </div>
+            </div>
+
+            <!-- 用户名修改 -->
+            <div class="bg-white rounded-xl shadow-sm border p-6">
+                <h3 class="font-bold text-lg mb-3">✏️ 修改用户名</h3>
+                <div class="flex gap-2">
+                    <input v-model="profileUsername" class="border rounded px-3 py-2 text-sm flex-1 outline-none focus:border-blue-500" :placeholder="authUser?.username">
+                    <button @click="saveUsername" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1 rounded text-sm font-bold">更新</button>
+                </div>
+            </div>
+
+            <!-- 偏好影响权重 -->
+            <div class="bg-white rounded-xl shadow-sm border p-6">
+                <h3 class="font-bold text-lg mb-2">📊 偏好影响权重</h3>
+                <p class="text-sm text-slate-500 mb-3">控制类别偏好和模组偏好对构筑结果的影响程度</p>
+                <div class="flex items-center gap-4">
+                    <span class="text-sm text-slate-400">无影响</span>
+                    <input type="range" v-model.number="profileWeight" min="0" max="1" step="0.1" @change="saveProfileWeight"
+                           class="flex-1 accent-indigo-600">
+                    <span class="text-sm text-slate-400">严重影响</span>
+                    <span class="font-bold text-indigo-600 w-10 text-center">{{ profileWeight.toFixed(1) }}</span>
+                </div>
+            </div>
+
+            <!-- 类别偏好 -->
+            <div class="bg-white rounded-xl shadow-sm border p-6">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="font-bold text-lg">🏷️ 模组类别偏好 (Top 5)</h3>
+                    <button @click="clearPrefs" class="bg-red-100 hover:bg-red-200 text-red-600 px-3 py-1 rounded text-xs font-bold">清除全部偏好</button>
+                </div>
+                <div class="flex flex-wrap gap-2 mb-3">
+                    <span v-for="cp in categoryPrefs" :key="cp.id"
+                          class="bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full text-sm font-bold cursor-pointer hover:bg-red-50 hover:text-red-500"
+                          @click="removeCategoryPref(cp.id)" :title="'排名: ' + cp.rank + ' | 点击删除'">
+                        {{ cp.category }} #{{ cp.rank }}
+                    </span>
+                </div>
+                <div class="flex gap-2 mt-2">
+                    <select v-model="newCatPref.category" class="border rounded px-2 py-1 text-sm flex-1">
+                        <option v-for="c in availableCategories" :value="c" :key="c">{{ c }}</option>
+                    </select>
+                    <input v-model.number="newCatPref.rank" type="number" min="1" max="5" class="border rounded px-2 py-1 w-16 text-sm" placeholder="排名">
+                    <button @click="addCategoryPref" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded text-xs font-bold">添加</button>
+                </div>
+            </div>
+
+            <!-- 模组偏好 -->
+            <div class="bg-white rounded-xl shadow-sm border p-6">
+                <h3 class="font-bold text-lg mb-2">📦 模组偏好 (按构建次数排序)</h3>
+                <p class="text-xs text-slate-500 mb-3">自动收集的模组需构建 ≥ 3 次才会影响偏好；手动添加的模组始终影响，构建次数自动追踪最高值</p>
+                <div class="flex gap-2 mb-3 flex-wrap">
+                    <input v-model="modPrefSearch" @input="modPrefPage.value=0" placeholder="搜索已有偏好 slug..." class="border rounded px-3 py-1 text-sm flex-1 min-w-[180px] outline-none focus:border-indigo-500">
+                    <div class="flex gap-1">
+                        <input v-model="manualSlugInput" @keyup.enter="addModBySlug" placeholder="输入 slug 手动添加..." class="border rounded-l px-3 py-1 text-sm w-48 outline-none focus:border-amber-400 font-mono">
+                        <button @click="addModBySlug" :disabled="addingModBySlug" class="bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white px-3 py-1 rounded-r text-xs font-bold whitespace-nowrap">{{ addingModBySlug ? '...' : '手动添加' }}</button>
+                    </div>
+                    <button @click="openSuggestBoardForPref" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded text-xs font-bold whitespace-nowrap">➕ 筛选选取</button>
+                </div>
+                <p v-if="modSlugAddMsg" class="text-xs mb-2" :class="modSlugAddMsg.includes('成功')||modSlugAddMsg.includes('已存在') ? 'text-emerald-600' : 'text-red-500'">{{ modSlugAddMsg }}</p>
+
+                <div class="space-y-2 max-h-[500px] overflow-y-auto">
+                    <div v-for="mp in pagedModPrefs" :key="mp.id"
+                         class="border rounded-lg p-3 flex items-start gap-3 text-sm transition-colors"
+                         :class="mp.source === 'user' ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200 hover:bg-indigo-50'">
+                        <!-- 图标 -->
+                        <img :src="(modInfoCache[mp.slug]||{}).icon || 'https://docs.modrinth.com/img/logo.svg'"
+                             class="w-10 h-10 rounded bg-slate-100 object-cover shrink-0 mt-0.5"
+                             :alt="mp.slug">
+                        <!-- 信息 -->
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <a :href="'https://modrinth.com/mod/' + mp.slug" target="_blank"
+                                   class="font-mono text-xs text-indigo-600 hover:underline font-bold truncate">{{ mp.slug }}</a>
+                                <span v-if="mp.source === 'user'" class="text-[10px] bg-amber-100 text-amber-700 px-1.5 rounded-full font-bold">👤 手动</span>
+                                <span v-if="mp.source === 'user'" class="text-[10px] text-amber-500" title="构建次数自动追踪全局最高值">🔥 追踪中</span>
+                                <span class="text-[10px] bg-slate-100 text-slate-500 px-1.5 rounded-full">{{ (modInfoCache[mp.slug]||{}).title || '加载中...' }}</span>
+                            </div>
+                            <p class="text-xs text-slate-400 mt-1 line-clamp-1">{{ (modInfoCache[mp.slug]||{}).description || '' }}</p>
+                            <div class="flex items-center gap-3 mt-1 text-[11px] text-slate-500">
+                                <span v-if="mp.category" class="bg-indigo-50 text-indigo-600 px-1.5 rounded text-[10px]">{{ mp.category }}</span>
+                                <span v-if="(modInfoCache[mp.slug]||{}).downloads" title="Modrinth 下载量">📥 {{ ((modInfoCache[mp.slug]||{}).downloads / 10000).toFixed(1) }}W</span>
+                                <span class="font-bold cursor-pointer hover:bg-slate-100 px-1 rounded"
+                                      :class="mp.buildCount >= 10 ? 'text-emerald-600' : mp.buildCount >= 5 ? 'text-blue-600' : 'text-slate-600'"
+                                      @click="startEditBuildCount(mp)">
+                                    🏗️ {{ editingBuildCountId === mp.id ? '' : mp.buildCount + '次' }}
+                                </span>
+                                <!-- 编辑模式：直接输入 -->
+                                <input v-if="editingBuildCountId === mp.id" v-model.number="editingBuildCountVal"
+                                       @keyup.enter="saveBuildCount(mp)" @blur="saveBuildCount(mp)"
+                                       class="w-16 border border-indigo-400 rounded px-1 py-0.5 text-xs text-center font-bold outline-none"
+                                       type="number" min="0" ref="buildCountInput">
+                            </div>
+                        </div>
+                        <!-- 操作按钮 -->
+                        <div class="flex flex-col gap-1 shrink-0">
+                            <button v-if="mp.source === 'user'" @click="toggleModSource(mp)"
+                                    class="text-[10px] text-slate-400 hover:text-indigo-600 whitespace-nowrap" title="取消手动标记">
+                                取消标记
+                            </button>
+                            <button v-else @click="toggleModSource(mp)"
+                                    class="text-[10px] text-slate-400 hover:text-amber-600 whitespace-nowrap" title="设为手动追踪">
+                                手动追踪
+                            </button>
+                            <button @click="removeModPref(mp.id)"
+                                    class="text-[10px] text-slate-400 hover:text-red-500 whitespace-nowrap">删除</button>
+                        </div>
+                    </div>
+                    <div v-if="filteredModPrefs.length === 0 && modPrefSearch" class="text-center text-slate-400 py-8">没有匹配的模组偏好</div>
+                    <div v-if="modPrefs.length === 0 && !modPrefSearch" class="text-center text-slate-400 py-8">
+                        <p>暂无模组偏好</p>
+                        <p class="text-xs mt-1">输入 slug 手动添加，或点击"筛选选取"从 Modrinth 盲盒中挑选</p>
+                    </div>
+                </div>
+                <!-- 分页 -->
+                <div v-if="modPrefTotalPages > 1" class="flex justify-center items-center gap-2 mt-3 pt-3 border-t">
+                    <button @click="prevModPrefPage" :disabled="modPrefPage===0" class="px-2 py-1 bg-slate-200 hover:bg-slate-300 disabled:opacity-40 rounded text-xs font-bold">上一页</button>
+                    <span class="text-xs text-slate-500">第 <b>{{ modPrefPage + 1 }}</b> / {{ modPrefTotalPages }} 页</span>
+                    <button @click="nextModPrefPage" :disabled="modPrefPage>=modPrefTotalPages-1" class="px-2 py-1 bg-slate-200 hover:bg-slate-300 disabled:opacity-40 rounded text-xs font-bold">下一页</button>
+                    <input v-model.number="modPrefJump" @keyup.enter="jumpModPrefPage" placeholder="页码" class="w-14 border rounded px-2 py-0.5 text-xs text-center outline-none">
+                    <button @click="jumpModPrefPage" class="px-2 py-0.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded text-xs font-bold">跳转</button>
+                </div>
+            </div>
+
+            <!-- 黑名单 -->
+            <div class="bg-white rounded-xl shadow-sm border p-6">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="font-bold text-lg">🚫 模组黑名单</h3>
+                    <div class="flex items-center gap-2">
+                        <input type="checkbox" v-model="enableBlacklist" @change="saveBlacklistToggle" class="w-5 h-5 accent-red-500">
+                        <span class="text-sm font-bold" :class="enableBlacklist ? 'text-red-600' : 'text-slate-400'">当前状态: {{ enableBlacklist ? '🚫 已启用' : '⏹ 未启用' }}</span>
+                    </div>
+                </div>
+                <p class="text-xs text-slate-500 mb-3">启用后，构筑整合包时将排除黑名单模组及其级联依赖，确保基本可用性</p>
+                <div class="flex gap-2 mb-3 flex-wrap">
+                    <input v-model="blacklistSlugInput" @keyup.enter="addBlacklistBySlug" placeholder="输入 slug 拉黑..." class="border rounded-l px-3 py-1 text-sm w-48 outline-none focus:border-red-400 font-mono">
+                    <button @click="addBlacklistBySlug" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded-r text-xs font-bold whitespace-nowrap">拉黑</button>
+                    <button @click="openSuggestBoardForBlacklist" class="bg-slate-500 hover:bg-slate-600 text-white px-3 py-1 rounded text-xs font-bold whitespace-nowrap">➕ 筛选选取</button>
+                    <button @click="clearBlacklist" class="bg-red-100 hover:bg-red-200 text-red-600 px-3 py-1 rounded text-xs font-bold whitespace-nowrap">清空</button>
+                </div>
+                <p v-if="blacklistMsg" class="text-xs mb-2" :class="blacklistMsg.includes('错误') ? 'text-red-500' : 'text-emerald-600'">{{ blacklistMsg }}</p>
+                <div class="space-y-2 max-h-[400px] overflow-y-auto">
+                    <div v-for="b in pagedBlacklist" :key="b.id" class="border border-red-200 rounded-lg p-3 flex items-start gap-3 text-sm bg-red-50/30">
+                        <img :src="(modInfoCache[b.slug]||{}).icon || 'https://docs.modrinth.com/img/logo.svg'" class="w-10 h-10 rounded bg-slate-100 object-cover shrink-0 mt-0.5">
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <a :href="'https://modrinth.com/mod/' + b.slug" target="_blank" class="font-mono text-xs text-red-600 hover:underline font-bold truncate">{{ b.slug }}</a>
+                                <span class="text-[10px] bg-slate-100 text-slate-500 px-1.5 rounded-full">{{ (modInfoCache[b.slug]||{}).title || '加载中...' }}</span>
+                            </div>
+                            <p class="text-xs text-slate-400 mt-1 line-clamp-1">{{ (modInfoCache[b.slug]||{}).description || '' }}</p>
+                            <div class="flex items-center gap-3 mt-1 text-[11px] text-slate-500">
+                                <span v-if="(modInfoCache[b.slug]||{}).downloads">📥 {{ ((modInfoCache[b.slug]||{}).downloads / 10000).toFixed(1) }}W</span>
+                            </div>
+                        </div>
+                        <button @click="removeBlacklistItem(b.id)" class="text-red-400 hover:text-red-600 text-xs shrink-0">✕ 移除</button>
+                    </div>
+                    <div v-if="blacklistItems.length === 0" class="text-center text-slate-400 py-8 text-sm">暂无黑名单模组</div>
+                </div>
+                <div v-if="blacklistTotalPages > 1" class="flex justify-center items-center gap-2 mt-3 pt-3 border-t">
+                    <button @click="prevBlacklistPageFn" :disabled="blacklistPage===0" class="px-2 py-1 bg-slate-200 hover:bg-slate-300 disabled:opacity-40 rounded text-xs font-bold">上一页</button>
+                    <span class="text-xs text-slate-500">第 <b>{{ blacklistPage + 1 }}</b> / {{ blacklistTotalPages }} 页</span>
+                    <button @click="nextBlacklistPageFn" :disabled="blacklistPage>=blacklistTotalPages-1" class="px-2 py-1 bg-slate-200 hover:bg-slate-300 disabled:opacity-40 rounded text-xs font-bold">下一页</button>
+                    <input v-model.number="blacklistJump" @keyup.enter="jumpBlacklistPageFn" placeholder="页码" class="w-14 border rounded px-2 py-0.5 text-xs text-center outline-none">
+                    <button @click="jumpBlacklistPageFn" class="px-2 py-0.5 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded text-xs font-bold">跳转</button>
+                </div>
+            </div>
+
+            <!-- 用户反馈规则开关 -->
+            <div class="bg-white rounded-xl shadow-sm border p-6">
+                <h3 class="font-bold text-lg mb-2">🔗 用户反馈规则</h3>
+                <p class="text-xs text-slate-500 mb-3">是否在构筑时参考用户社区反馈的模组依赖/冲突规则</p>
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" v-model="enableUserFeedbackRules" @change="saveFeedbackRulesToggle" class="w-5 h-5 accent-purple-500">
+                    <span class="text-sm font-bold" :class="enableUserFeedbackRules ? 'text-purple-600' : 'text-slate-400'">当前状态: {{ enableUserFeedbackRules ? '✅ 参考' : '⏹ 忽略' }}</span>
+                    <span class="text-xs text-slate-400 ml-2">默认关闭，开启后构筑图谱中用户规则以紫色连线显示</span>
+                </div>
+            </div>
+
+            <!-- 导出/导入 -->
+            <div class="bg-white rounded-xl shadow-sm border p-6 flex gap-3">
+                <button @click="exportPrefs" class="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg font-bold">📤 导出偏好</button>
+                <button @click="$refs.prefImport.click()" class="bg-slate-600 hover:bg-slate-700 text-white px-6 py-2 rounded-lg font-bold">📥 导入偏好</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🧬 知识规则编辑器 -->
+    <div v-if="currentView === 'knowledge-editor'" class="absolute inset-0 top-[68px] bg-slate-50 z-30 flex flex-col">
+        <header class="bg-slate-800 text-white p-2 flex justify-between items-center shadow-md shrink-0">
+            <button @click="currentView = 'chat'" class="bg-slate-700 hover:bg-slate-600 px-4 py-1.5 rounded-md text-sm font-bold">← 返回</button>
+            <h2 class="font-bold tracking-widest text-sm">🧬 模组关系规则编辑器</h2>
+            <div class="w-[88px]"></div>
+        </header>
+        <div class="flex-1 overflow-y-auto p-6 max-w-3xl mx-auto w-full space-y-6">
+            <div class="bg-white rounded-xl shadow-sm border p-6">
+                <h3 class="font-bold text-lg mb-4">添加规则</h3>
+                <div class="space-y-4">
+                    <div>
+                        <label class="text-sm font-bold text-slate-700 mb-2 block">环境</label>
+                        <select v-model="keEnv" class="border rounded px-3 py-2 text-sm w-64 outline-none focus:border-purple-500">
+                            <option v-for="e in keEnvs" :value="e" :key="e">{{ e }}</option>
+                        </select>
+                        <button @click="loadKeEnvs" class="ml-2 text-xs text-indigo-500 hover:underline">刷新列表</button>
+                    </div>
+                    <div>
+                        <label class="text-sm font-bold text-slate-700 mb-2 block">规则类型</label>
+                        <div class="flex gap-4">
+                            <label class="flex items-center gap-1 cursor-pointer"><input type="radio" v-model="keRelation" value="DEPENDS_ON" class="accent-indigo-600"> 依赖规则 (DEPENDS_ON)</label>
+                            <label class="flex items-center gap-1 cursor-pointer"><input type="radio" v-model="keRelation" value="CONFLICTS_WITH" class="accent-red-600"> 冲突规则 (CONFLICTS_WITH)</label>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="text-sm font-bold text-slate-700 mb-1 block">模组 A ({{ keRelation === 'DEPENDS_ON' ? '主模组' : '任意一方' }})</label>
+                            <input v-model="keModA" @input="onKeSlugInput('A')" placeholder="输入 slug..." class="w-full border rounded px-3 py-2 text-sm font-mono outline-none focus:border-purple-500">
+                            <p v-if="keModAError" class="text-xs text-red-500 mt-1">{{ keModAError }}</p>
+                            <div v-if="keModAInfo" class="mt-2 border rounded-lg p-3 flex gap-3 bg-purple-50">
+                                <img :src="keModAInfo.icon || 'https://docs.modrinth.com/img/logo.svg'" class="w-12 h-12 rounded object-cover shrink-0">
+                                <div class="min-w-0">
+                                    <a :href="'https://modrinth.com/mod/' + keModAInfo.slug" target="_blank" class="font-mono text-xs text-indigo-600 hover:underline font-bold">{{ keModAInfo.slug }}</a>
+                                    <p class="text-xs font-bold text-purple-700">{{ keModAInfo.title }}</p>
+                                    <p class="text-xs text-slate-500">{{ (keModAInfo.downloads/10000).toFixed(1) }}W 下载</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="text-sm font-bold text-slate-700 mb-1 block">模组 B ({{ keRelation === 'DEPENDS_ON' ? '前置模组' : '任意一方' }})</label>
+                            <input v-model="keModB" @input="onKeSlugInput('B')" placeholder="输入 slug..." class="w-full border rounded px-3 py-2 text-sm font-mono outline-none focus:border-purple-500">
+                            <p v-if="keModBError" class="text-xs text-red-500 mt-1">{{ keModBError }}</p>
+                            <div v-if="keModBInfo" class="mt-2 border rounded-lg p-3 flex gap-3 bg-purple-50">
+                                <img :src="keModBInfo.icon || 'https://docs.modrinth.com/img/logo.svg'" class="w-12 h-12 rounded object-cover shrink-0">
+                                <div class="min-w-0">
+                                    <a :href="'https://modrinth.com/mod/' + keModBInfo.slug" target="_blank" class="font-mono text-xs text-indigo-600 hover:underline font-bold">{{ keModBInfo.slug }}</a>
+                                    <p class="text-xs font-bold text-purple-700">{{ keModBInfo.title }}</p>
+                                    <p class="text-xs text-slate-500">{{ (keModBInfo.downloads/10000).toFixed(1) }}W 下载</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-if="keRelation === 'DEPENDS_ON' && keModBInfo" class="text-center text-sm text-slate-500">
+                        ⬆️ {{ keModB || 'B' }} → {{ keModA || 'A' }} ({{ keModB || 'B' }} 是 {{ keModA || 'A' }} 的前置)
+                    </div>
+                    <div v-if="keRelation === 'CONFLICTS_WITH' && keModAInfo && keModBInfo" class="text-center text-sm text-slate-500">
+                        ↔️ {{ keModA || 'A' }} 与 {{ keModB || 'B' }} 互斥冲突
+                    </div>
+                    <p v-if="keMsg" class="text-sm" :class="keMsg.includes('成功')||keMsg.includes('已更新') ? 'text-emerald-600' : 'text-amber-600'">{{ keMsg }}</p>
+                    <button @click="submitKeRule" :disabled="!keModAInfo||!keModBInfo" class="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-slate-300 text-white font-bold py-3 rounded-lg transition">确认添加规则</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 💡 智能衍生推荐面板 (Modal) -->
+    <div v-if="showSuggestBoard" class="absolute inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center">
+        <div class="bg-white rounded-2xl shadow-2xl w-4/5 max-w-5xl max-h-[85vh] flex flex-col overflow-hidden">
+            <div class="bg-slate-800 p-4 flex justify-between items-center text-white">
+                <h3 class="font-bold tracking-widest text-lg">💡 Modrinth 盲盒抽卡引擎</h3>
+                <button @click="showSuggestBoard = false" class="hover:text-red-400 font-bold text-xl">×</button>
+            </div>
+
+            <div class="p-4 bg-slate-50 border-b flex flex-col gap-3 text-sm">
+                <!-- 🔥 分类标签点击池 -->
+                <div>
+                    <label class="font-bold text-slate-700 mb-2 block">偏好分类 (可多选，不选则全抓)：</label>
+                    <div class="flex flex-wrap gap-2">
+                        <span v-for="cat in availableCategories" :key="cat"
+                              @click="toggleSuggestCategory(cat)"
+                              class="px-3 py-1 rounded-full text-xs font-bold cursor-pointer transition-colors border"
+                              :class="suggestForm.categories.includes(cat) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-300 hover:border-indigo-400'">
+                            {{ cat }}
+                        </span>
+                    </div>
+                </div>
+
+                <div class="flex gap-4 items-end mt-2">
+                    <div class="flex flex-col gap-1 w-1/5">
+                        <label class="font-bold text-slate-700">最低下载量</label>
+                        <input type="number" v-model="suggestForm.minDownloads" class="border rounded px-2 py-1.5 outline-none focus:border-indigo-500">
+                    </div>
+                    <div class="flex flex-col gap-1 w-1/5">
+                        <label class="font-bold text-slate-700">最高下载量</label>
+                        <input type="number" v-model="suggestForm.maxDownloads" class="border rounded px-2 py-1.5 outline-none focus:border-indigo-500">
+                    </div>
+                    <div class="flex flex-col gap-1 flex-1">
+                        <label class="font-bold text-slate-700">筛选方式</label>
+                        <select v-model="suggestForm.sortType" @change="resetSuggestPage" class="border rounded px-2 py-1.5 outline-none focus:border-indigo-500">
+                            <option value="downloads">🌟 按下载量排位顺序下钻 (支持翻页)</option>
+                            <option value="random">🎲 抛弃算法逻辑，直接盲抽 15 个！</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 🔥 操作与翻页栏 -->
+                <div class="flex justify-between items-center mt-2 border-t pt-3 border-slate-200">
+                    <div class="flex gap-2 items-center">
+                        <button v-if="suggestForm.sortType === 'downloads'" @click="suggestPageDown" :disabled="suggestForm.page === 0 || isSuggesting" class="px-3 py-1 bg-slate-200 hover:bg-slate-300 disabled:opacity-50 rounded font-bold text-slate-700 transition">上一页</button>
+
+                        <span v-if="suggestForm.sortType === 'downloads'" class="text-sm font-bold text-slate-600 px-2 min-w-[60px] text-center">第 {{ suggestForm.page + 1 }} 页</span>
+
+                        <button v-if="suggestForm.sortType === 'downloads'" @click="suggestPageUp" :disabled="isSuggesting" class="px-3 py-1 bg-slate-200 hover:bg-slate-300 disabled:opacity-50 rounded font-bold text-slate-700 transition">下一页</button>
+
+                        <!-- 🔥 新增：快速跳转页码输入框 -->
+                        <div v-if="suggestForm.sortType === 'downloads'" class="flex items-center gap-1 ml-4 border-l-2 border-slate-200 pl-4">
+                            <input type="number" v-model="pageJumpInput" min="1" @keyup.enter="jumpToPage" class="border-2 border-slate-200 rounded-md px-2 py-1 w-16 text-sm outline-none focus:border-indigo-500 text-center font-bold text-slate-700" placeholder="页码">
+                            <button @click="jumpToPage" :disabled="isSuggesting" class="px-3 py-1 bg-indigo-100 hover:bg-indigo-200 disabled:opacity-50 text-indigo-700 rounded-md text-sm font-bold transition">跳转</button>
+                        </div>
+                    </div>
+
+                    <button @click="fetchSuggestions" class="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold py-2 px-8 rounded-lg shadow-sm transition">
+                        {{ isSuggesting ? '深潜网络建池搜寻中...' : '开始侦测' }}
+                    </button>
+                </div>
+            </div>
+
+            <!-- 3x4 模组陈列区 -->
+            <div class="flex-1 overflow-y-auto p-4 bg-slate-100">
+                <div v-if="suggestedMods.length === 0" class="text-center text-slate-400 mt-20">设定条件，开启未知的模组宇宙吧！</div>
+                <div class="grid grid-cols-3 gap-4">
+                    <div v-for="mod in suggestedMods" :key="mod.slug"
+                         class="bg-white border rounded-xl p-3 shadow-sm hover:shadow-md transition cursor-pointer flex flex-col gap-2"
+                         :class="selectedSuggests.has(mod.slug) ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-slate-200'"
+                         @click="toggleSuggestSelection(mod.slug)">
+                        <div class="flex gap-3 items-center">
+                            <img :src="mod.icon_url || 'https://docs.modrinth.com/img/logo.svg'" class="w-10 h-10 rounded bg-slate-100 object-cover shrink-0">
+                            <div class="flex-1 min-w-0">
+                                <h4 class="font-bold text-sm text-slate-800 truncate" :title="mod.title">{{ mod.title }}</h4>
+                                <div class="flex items-center gap-1 mt-1">
+                                    <span class="text-[10px] bg-emerald-50 text-emerald-600 px-1.5 rounded">{{ (mod.downloads/10000).toFixed(1) }}W 下载</span>
+                                    <a :href="'https://modrinth.com/mod/' + mod.slug" target="_blank" @click.stop class="text-[10px] text-blue-500 hover:underline">主页↗</a>
+                                </div>
+                            </div>
+                            <input type="checkbox" :checked="selectedSuggests.has(mod.slug)" class="w-4 h-4 text-indigo-600 rounded shrink-0">
+                        </div>
+                        <p class="text-xs text-slate-500 line-clamp-3 leading-relaxed mt-1">{{ mod.description }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-4 bg-white border-t flex justify-between items-center">
+                <span class="text-sm font-bold text-indigo-600">已选中 {{ selectedSuggests.size }} 个模组</span>
+                <div class="flex gap-3">
+                    <button @click="showSuggestBoard = false" class="px-6 py-2 rounded font-bold text-slate-600 hover:bg-slate-100">取消</button>
+                    <button @click="confirmAddSuggestedMods" class="px-6 py-2 rounded font-bold bg-green-500 hover:bg-green-600 text-white shadow-md transition">
+                        {{ suggestMode === 'prefs' ? '添加到模组偏好' : '注入构筑图谱，开始依赖穿透解析！' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Vue 递归树组件模板 (增加了 Slug 超链接) -->
+<script type="text/x-template" id="tree-node-template">
+    <div class="tree-node mt-2">
+        <div :id="'tree-node-' + node.id"
+             class="mod-card border border-slate-200 rounded-lg p-2 flex items-center gap-3 bg-white"
+             :class="{ 'disabled-mod': !isSelected, 'highlight': globalHighlightId === node.id }">
+            <input type="checkbox" :checked="isSelected" @change="toggle"
+                   class="w-4 h-4 text-indigo-600 rounded cursor-pointer shrink-0">
+            <img :src="node.icon || 'https://docs.modrinth.com/img/logo.svg'"
+                 class="w-7 h-7 rounded bg-slate-100 object-cover shrink-0">
+            <div class="flex-1 overflow-hidden">
+                <div class="flex items-center flex-wrap gap-1">
+                    <h4 class="font-bold text-sm text-slate-800 truncate" :title="node.title">{{ node.title }}</h4>
+                    <!-- 🔥 这是你要的 Slug 超链接，点击新标签页打开，且阻止冒泡 -->
+                    <a :href="'https://modrinth.com/mod/' + node.slug" target="_blank" @click.stop
+                       class="text-[11px] text-blue-500 hover:text-blue-700 hover:underline px-1 bg-blue-50 rounded cursor-pointer">
+                        #{{ node.slug }}
+                    </a>
+                </div>
+                <div class="text-[10px] bg-slate-100 text-slate-500 px-1 rounded inline-block mt-1">{{ node.versionId
+                    }}
+                </div>
+            </div>
+        </div>
+
+        <div v-if="isCycle" class="text-[11px] text-red-500 mt-1 pl-4">🔗 [循环依赖截断]</div>
+        <div v-else-if="children.length > 0" class="tree-children mt-1">
+            <tree-node v-for="child in children" :key="path + '-' + child.id" :node="child"
+                       :path="path + '-' + child.id" :visited="currentVisited"></tree-node>
+        </div>
+    </div>
+</script>
+
+<script>
+    const {createApp, ref, reactive, computed, inject, provide, nextTick, watch} = Vue;
+
+    const TreeNodeComponent = {
+        name: 'TreeNode',
+        template: '#tree-node-template',
+        props: ['node', 'path', 'visited'],
+        setup(props) {
+            const selectedMods = inject('selectedMods');
+            const toggleMod = inject('toggleMod');
+            const childrenMap = inject('childrenMap');
+            const nodesMap = inject('nodesMap');
+            const globalHighlightId = inject('globalHighlightId');
+
+            const isSelected = computed(() => selectedMods.value.has(props.node.id));
+            const toggle = () => toggleMod(props.node.id);
+
+            const childrenIds = computed(() => childrenMap.value[props.node.id] || []);
+            const children = computed(() => {
+                let arr = childrenIds.value.map(id => nodesMap.value[id]).filter(Boolean);
+                return arr.sort((a, b) => (a.slug || '').localeCompare(b.slug || ''));
+            });
+
+            const isCycle = computed(() => props.visited.includes(props.node.id));
+            const currentVisited = computed(() => [...props.visited, props.node.id]);
+
+            return {isSelected, toggle, children, isCycle, currentVisited, globalHighlightId};
+        }
+    };
+
+    const app = createApp({
+        setup() {
+            const currentView = ref('chat');    // 控制当前显示的视图: chat, lab, db, sync
+            const chatHistory = ref([]);        // 存储所有消息 [{role, content, thinkTime}]
+            const userInput = ref('');          // 输入框当前文本
+            const sessionUuid = ref('session-' + Date.now() + '-' + Math.random().toString(36).slice(2,8));
+
+            // 🔥 新增：用于左侧树状图过滤的搜索关键词
+            const searchQuery = ref('');
+
+            // 🔥 新增：计时器状态
+            const thinkTime = ref('0.0');
+            const currentThought = ref('');     // 当前显示的思考步骤文案
+            let timerInterval = null;
+
+            const isLoading = ref(false);
+            const isResolving = ref(false);
+            const isBuilding = ref(false);
+
+            const packData = reactive({
+                name: "MAA-Pack",
+                mcVersion: "1.21.1",
+                loader: "neoforge",
+                modSlugs: []
+            });
+            const previewData = ref(null);
+
+            const selectedMods = ref(new Set());
+            const rootTreeNodes = ref([]);              // 根节点（不被任何模组依赖的模组）
+            const nodesMap = ref({});                   // ID -> 模组对象的映射表
+            const childrenMap = ref({});                // ID -> 依赖它的模组ID数组
+            const globalHighlightId = ref(null);        // 当前高亮的模组ID
+
+            const dbRules = ref([]);                    // 存储从后端获取的所有规则
+
+            // Sync Hub State
+            // 🧪 Sandbox State
+            const sandboxState = ref('idle'); // idle | running | done
+            const sandboxFile = ref(null);
+            const sandboxConfig = reactive({ mcVersion: '1.21.1', loader: 'neoforge', testMode: 'server' });
+            const sandboxSlugText = ref('');
+            const sandboxLogs = ref([]);
+            const sandboxResult = ref(null);
+            const sandboxReportText = ref('');        // 减法自愈报告文本
+            const sandboxMcVersion = ref('1.21.1');   // 成功校验后用于下载
+            const sandboxLoader = ref('neoforge');    // 成功校验后用于下载
+            const sandboxSkippedClient = ref([]);     // 被排除的仅客户端模组
+            const sandboxServerSlugs = ref([]);       // 服务端存活 slugs
+            const isDownloadingPack = ref(false);     // 下载中状态
+            const canStartValidation = computed(() => {
+                return sandboxState.value === 'idle'
+                    && (sandboxFile.value !== null || sandboxSlugText.value.trim().length > 0);
+            });
+
+            let networkGraph = null;
+
+            provide('selectedMods', selectedMods);
+            provide('nodesMap', nodesMap);
+            provide('childrenMap', childrenMap);
+            provide('globalHighlightId', globalHighlightId);
+            provide('toggleMod', (id) => toggleModState(id));
+
+            // 🔥 深度搜索算法 (DFS)：判断一个节点及其所有子孙节点是否包含关键词
+            const doesNodeOrChildrenMatch = (nodeId, kw) => {
+                const node = nodesMap.value[nodeId];
+                if (!node) return false;
+
+                // 自己匹配上了
+                if ((node.title && node.title.toLowerCase().includes(kw)) ||
+                    (node.slug && node.slug.toLowerCase().includes(kw))) {
+                    return true;
+                }
+
+                // 自己没匹配上，去问儿子们
+                const children = childrenMap.value[nodeId] || [];
+                for (let childId of children) {
+                    if (doesNodeOrChildrenMatch(childId, kw)) return true;
+                }
+
+                return false;
+            };
+
+            const filteredRootNodes = computed(() => {
+                let arr = rootTreeNodes.value;
+                if (searchQuery.value && searchQuery.value.trim() !== '') {
+                    const kw = searchQuery.value.toLowerCase();
+                    // 如果某个根节点底下的隐藏层级有符合的模组，这个根节点就会显示出来！
+                    arr = arr.filter(n => doesNodeOrChildrenMatch(n.id, kw));
+                }
+                return arr;
+            });
+
+            // 🔥 启动思维模拟器：显示思考状态和思考时间
+            const startThinking = () => {
+                isLoading.value = true;
+                const startMs = Date.now();
+                currentThought.value = "🧠 正在解析自然语言，提取核心构筑意图...";
+
+                timerInterval = setInterval(() => {
+                    const elapsed = (Date.now() - startMs) / 1000;
+                    thinkTime.value = elapsed.toFixed(1);
+
+                    if (elapsed > 2 && elapsed <= 5) currentThought.value = "🌐 正在将中文意图翻译为官方英文标准 Slug...";
+                    else if (elapsed > 5 && elapsed <= 15) currentThought.value = "⚡ 正在调用虚拟线程库，向 Modrinth 发起大批量并发验证...";
+                    else if (elapsed > 15) currentThought.value = "🧩 正在根据加载器和游戏版本，装配过滤最终的蓝图清单...";
+                }, 100);
+            };
+
+            const stopThinking = () => {
+                isLoading.value = false;
+                if (timerInterval) {
+                    clearInterval(timerInterval);
+                    timerInterval = null;
+                }
+            };
+
+            // 🔥 新增：手动终止请求
+            const abortThinking = async () => {
+                try {
+                    await fetch('http://localhost:8080/api/chat/abort', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ uuid: sessionUuid.value })
+                    });
+                    stopThinking();
+                    chatHistory.value.push({role: 'ai', content: "⛔ 思考已手动终止。"});
+                } catch (e) {
+                    console.error("终止请求发送失败", e);
+                }
+            };
+
+            // 🔥 待发送的 mrpack 附件
+            const pendingMrpack = ref(null);
+
+            const sendMessage = async () => {
+                let msg = userInput.value.trim();
+                const attached = pendingMrpack.value;
+                if ((!msg && !attached) || isLoading.value) return;
+
+                // 🔥 立即显示用户消息 (含附件标记)
+                let userContent = msg;
+                if (attached) {
+                    userContent = (msg ? '📦 ' + attached.name + '\n' + msg : '📦 ' + attached.name);
+                }
+                chatHistory.value.push({role: 'user', content: userContent});
+                userInput.value = '';
+                const fileToParse = attached ? attached.file : null;
+                pendingMrpack.value = null;
+
+                // 🔥 如果有附件, 先切到 lab 显示加载动画, 再后台解析 mrpack
+                let baseSlugs = packData.modSlugs;
+                if (fileToParse) {
+                    // 立即切到 lab 视图显示 spinner
+                    currentView.value = 'lab';
+                    isResolving.value = true;
+                    try {
+                        const fd = new FormData();
+                        fd.append('file', fileToParse);
+                        const parseRes = await fetch('http://localhost:8080/api/modpack/parse-mrpack', {
+                            method: 'POST', body: fd
+                        });
+                        const parseData = await parseRes.json();
+                        if (parseData.slugs && parseData.slugs.length > 0) {
+                            baseSlugs = parseData.slugs;
+                            packData.name = fileToParse.name.replace('.mrpack', '');
+                        }
+                    } catch (e) {
+                        isResolving.value = false;
+                        currentView.value = 'chat';
+                        chatHistory.value.push({role: 'ai', content: '❌ 解析 ' + fileToParse.name + ' 失败'});
+                        return;
+                    }
+
+                    if (!msg) {
+                        // 只有附件无文字 → 直接渲染图谱 (大包需要等待 Modrinth API 逐个拉取图标, 可能较慢)
+                        packData.modSlugs = baseSlugs;
+                        chatHistory.value.push({
+                            role: 'ai',
+                            content: '已解析 ' + fileToParse.name + '，共 ' + baseSlugs.length + ' 个模组。正在展开构筑图谱 (加载模组图标和依赖关系)...',
+                            hasData: true
+                        });
+                        try {
+                            const previewRes = await fetch('http://localhost:8080/api/modpack/preview', {
+                                method: 'POST', headers: {'Content-Type': 'application/json', ...authHeader()},
+                                body: JSON.stringify({...packData, excludeUserFeedbackRules: !enableUserFeedbackRules.value})
+                            });
+                            const data = await previewRes.json();
+                            previewData.value = data;
+                            selectedMods.value = new Set(data.nodes.map(n => n.id));
+                            buildTreeData(data);
+                            setTimeout(() => renderGraph(), 100);
+                        } finally {
+                            isResolving.value = false;
+                        }
+                        return;
+                    }
+
+                    // 有文字指令 → 切回聊天, 附件模组已记录在 baseSlugs 中
+                    packData.modSlugs = baseSlugs;
+                    isResolving.value = false;
+                    currentView.value = 'chat';
+                }
+
+                // 有文字指令 → 发给 AI (currentMods 使用 baseSlugs)
+                startThinking();
+                try {
+                    const res = await fetch('http://localhost:8080/api/chat', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json', ...authHeader()},
+                        body: JSON.stringify({ prompt: msg, currentMods: baseSlugs.join(','), uuid: sessionUuid.value })
+                    });
+                    const aiReply = await res.text();
+                    if (aiReply.includes("⛔ 思考已手动终止")) return;
+
+                    const modsMatch = aiReply.match(/<mods>(.*?)<\/mods>/s);
+                    let hasData = false;
+                    if (modsMatch) {
+                        packData.modSlugs = modsMatch[1].split(',').map(m => m.trim()).filter(Boolean);
+                        packData.name = (aiReply.match(/<name>(.*?)<\/name>/s) || [])[1] || packData.name;
+                        packData.mcVersion = (aiReply.match(/<mc>(.*?)<\/mc>/s) || [])[1] || packData.mcVersion;
+                        packData.loader = (aiReply.match(/<loader>(.*?)<\/loader>/s) || [])[1] || packData.loader;
+                        hasData = true;
+                    }
+                    const cleanReply = aiReply.replace(/<name>.*?<\/name>|<mc>.*?<\/mc>|<loader>.*?<\/loader>|<mods>.*?<\/mods>/gs, '').trim();
+                    const finalTime = thinkTime.value;
+                    stopThinking();
+                    chatHistory.value.push({
+                        role: 'ai', content: cleanReply, hasData, thinkTime: finalTime
+                    });
+                } catch (e) {
+                    stopThinking();
+                    chatHistory.value.push({role: 'ai', content: "系统连接中断，请检查后端服务是否启动。"});
+                } finally {
+                    nextTick(() => {
+                        if (currentView.value === 'chat') {
+                            const box = document.querySelector('main');
+                            if (box) box.scrollTop = box.scrollHeight;
+                        }
+                    });
+                }
+            };
+
+            // 🔥 mrpack 上传 → 只暂存文件, 不立即解析
+            const onMrpackUpload = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                pendingMrpack.value = { file, name: file.name };
+                e.target.value = '';
+            };
+
+            const openLab = async () => {
+                currentView.value = 'lab';
+                isResolving.value = true;
+                try {
+                    const res = await fetch('http://localhost:8080/api/modpack/preview', {
+                        method: 'POST', headers: {'Content-Type': 'application/json', ...authHeader()},
+                        body: JSON.stringify({...packData, excludeUserFeedbackRules: !enableUserFeedbackRules.value})
+                    });
+                    const data = await res.json();
+                    previewData.value = data;
+                    selectedMods.value = new Set(data.nodes.map(n => n.id));
+                    buildTreeData(data);
+                    setTimeout(() => renderGraph(), 100);
+                } finally {
+                    isResolving.value = false;
+                }
+            };
+
+            const buildTreeData = (data) => {
+                const map = {};
+                data.nodes.forEach(n => map[n.id] = n);
+                nodesMap.value = map;
+                const reqBy = {};
+                const depOn = {};
+                data.edges.forEach(e => {
+                    if (!reqBy[e.from]) reqBy[e.from] = [];
+                    reqBy[e.from].push(e.to);
+                    if (!depOn[e.to]) depOn[e.to] = [];
+                    depOn[e.to].push(e.from);
+                });
+                childrenMap.value = depOn;
+                rootTreeNodes.value = data.nodes.filter(n => !reqBy[n.id]).sort((a, b) => (a.slug || '').localeCompare(b.slug || ''));
+            };
+
+            const toggleModState = (id) => {
+                const newSet = new Set(selectedMods.value);
+                if (newSet.has(id)) newSet.delete(id); else newSet.add(id);
+                selectedMods.value = newSet;
+
+                if (networkGraph) {
+                    networkGraph.body.data.nodes.update({
+                        id: id,
+                        color: newSet.has(id) ? {border: '#4f46e5', background: '#fff'} : {
+                            border: '#cbd5e1',
+                            background: '#f1f5f9'
+                        },
+                        font: {color: newSet.has(id) ? '#1e293b' : '#94a3b8'}
+                    });
+                }
+            };
+
+            const renderGraph = () => {
+                const container = document.getElementById('network-canvas');
+                if (!container) return;
+                const visNodes = new vis.DataSet(previewData.value.nodes.map(n => ({
+                    id: n.id,
+                    label: n.title,
+                    title: n.description,
+                    shape: 'circularImage',
+                    image: n.icon || 'https://docs.modrinth.com/img/logo.svg',
+                    size: 24,
+                    font: {size: 12, face: 'sans-serif'},
+                    color: {border: '#4f46e5', background: '#fff'},
+                    borderWidth: 3
+                })));
+                const visEdges = new vis.DataSet(previewData.value.edges.map(e => ({
+                    from: e.from,
+                    to: e.to,
+                    arrows: 'to',
+                    dashes: e.sourceType === 'USER_FEEDBACK' ? false : (e.dashes || false),
+                    color: {color: e.sourceType === 'USER_FEEDBACK' ? '#7c3aed' : (e.dashes ? '#f59e0b' : '#94a3b8')},
+                    smooth: {type: 'continuous'}
+                })));
+
+                const options = {
+                    layout: {hierarchical: false},
+                    physics: {
+                        solver: 'barnesHut',
+                        barnesHut: {
+                            gravitationalConstant: -2000,
+                            centralGravity: 0.3,
+                            springLength: 150,
+                            springConstant: 0.04,
+                            damping: 0.2,
+                            avoidOverlap: 1
+                        },
+                        stabilization: {iterations: 300}
+                    },
+                    interaction: {hover: true, tooltipDelay: 200}
+                };
+
+                networkGraph = new vis.Network(container, {nodes: visNodes, edges: visEdges}, options);
+
+                networkGraph.on("stabilizationIterationsDone", function () {
+                    networkGraph.setOptions({physics: {enabled: false}});
+                });
+
+                networkGraph.on("click", (params) => {
+                    if (params.nodes.length > 0) {
+                        const nodeId = params.nodes[0];
+                        toggleModState(nodeId);
+                        globalHighlightId.value = nodeId;
+                        setTimeout(() => {
+                            if (globalHighlightId.value === nodeId) globalHighlightId.value = null;
+                        }, 1200);
+                        const el = document.getElementById('tree-node-' + nodeId);
+                        if (el) el.scrollIntoView({behavior: 'smooth', block: 'center'});
+                    }
+                });
+            };
+
+            const buildPack = async () => {
+                if (selectedMods.value.size === 0) return alert("请至少选中一个模组！");
+                isBuilding.value = true;
+                const selectedFiles = previewData.value.nodes.filter(n => selectedMods.value.has(n.id)).map(n => n.fileInfo);
+                try {
+                    const res = await fetch('http://localhost:8080/api/modpack/build', {
+                        method: 'POST', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({...packData, selectedFiles})
+                    });
+                    const blob = await res.blob();
+                    const a = document.createElement('a');
+                    a.href = window.URL.createObjectURL(blob);
+                    a.download = `${packData.name}.mrpack`;
+                    a.click();
+                } finally {
+                    isBuilding.value = false;
+                }
+            };
+
+            const openDbView = async () => {
+                currentView.value = 'db';
+                try {
+                    const res = await fetch('http://localhost:8080/api/knowledge');
+                    dbRules.value = await res.json();
+                } catch (e) {
+                    alert("获取知识库失败");
+                }
+            };
+
+            const groupedDbData = computed(() => {
+                const groups = {};
+                dbRules.value.forEach(rule => {
+                    if (!groups[rule.environment]) groups[rule.environment] = {};
+                    if (!groups[rule.environment][rule.relationType]) groups[rule.environment][rule.relationType] = {};
+                    if (!groups[rule.environment][rule.relationType][rule.modA]) groups[rule.environment][rule.relationType][rule.modA] = [];
+                    groups[rule.environment][rule.relationType][rule.modA].push(rule);
+                });
+                return groups;
+            });
+
+            // == 新增智能衍生变量 ==
+            const manualAddSlug = ref('');
+            const showSuggestBoard = ref(false);
+            const isSuggesting = ref(false);
+            const suggestedMods = ref([]);
+            const selectedSuggests = ref(new Set());
+
+            // 完整的官方可用分类池
+            const availableCategories = ['technology', 'magic', 'adventure', 'worldgen', 'food',
+                'storage', 'optimization', 'equipment', 'utility', 'decoration',
+                'mobs', 'cursed', 'economy', 'game-mechanics', 'management',
+                'minigame', 'social', 'transportation'];
+            const suggestForm = reactive({ categories: [], minDownloads: 0, maxDownloads: 2100000000, sortType: 'downloads', page: 0 });
+
+            // 🔥 新增快速跳转相关状态
+            const pageJumpInput = ref('');
+
+            const toggleSuggestCategory = (cat) => {
+                const idx = suggestForm.categories.indexOf(cat);
+                if (idx === -1) suggestForm.categories.push(cat);
+                else suggestForm.categories.splice(idx, 1);
+            };
+
+            const suggestPageUp = () => { suggestForm.page++; fetchSuggestions(); };
+            const suggestPageDown = () => { if (suggestForm.page > 0) { suggestForm.page--; fetchSuggestions(); } };
+            const resetSuggestPage = () => { suggestForm.page = 0; };
+
+            // 🔥 新增：页码跳转逻辑
+            const jumpToPage = () => {
+                const target = parseInt(pageJumpInput.value);
+                if (!isNaN(target) && target > 0) {
+                    suggestForm.page = target - 1; // 内部页码从 0 开始
+                    fetchSuggestions();
+                } else {
+                    alert("请输入有效的页码！");
+                }
+            };
+
+            // 1. 手动添加逻辑
+            const directAddMod = () => {
+                const slug = manualAddSlug.value.trim().toLowerCase();
+                if (!slug) return;
+                if (!packData.modSlugs.includes(slug)) {
+                    packData.modSlugs.push(slug);
+                    openLab(); // 重新触发全量图谱绘制
+                }
+                manualAddSlug.value = '';
+            };
+
+            // 2. 呼出衍生面板
+            const openSuggestBoard = () => {
+                showSuggestBoard.value = true;
+                suggestMode.value = 'pack'; // 默认: 添加到整合包
+                suggestedMods.value = [];
+                selectedSuggests.value = new Set();
+            };
+            const suggestMode = ref('pack'); // 'pack' = 添加到整合包, 'prefs' = 添加到偏好
+
+            // 从偏好页打开: 选中的模组添加到偏好
+            const openSuggestBoardForPref = () => {
+                showSuggestBoard.value = true;
+                suggestMode.value = 'prefs';
+                suggestedMods.value = [];
+                selectedSuggests.value = new Set();
+            };
+
+            // 3. 点击卡片选择
+            const toggleSuggestSelection = (slug) => {
+                const newSet = new Set(selectedSuggests.value);
+                if (newSet.has(slug)) newSet.delete(slug); else newSet.add(slug);
+                selectedSuggests.value = newSet;
+            };
+
+            // 4. 调用后端搜索
+            const fetchSuggestions = async () => {
+                isSuggesting.value = true;
+                try {
+                    const req = {
+                        loader: packData.loader,
+                        mcVersion: packData.mcVersion,
+                        categories: suggestForm.categories,
+                        minDownloads: suggestForm.minDownloads,
+                        maxDownloads: suggestForm.maxDownloads,
+                        sortMethod: suggestForm.sortType,
+                        page: suggestForm.page,
+                        currentSlugs: Array.from(selectedMods.value).map(id => nodesMap.value[id]?.slug).filter(Boolean)
+                    };
+                    const res = await fetch('http://localhost:8080/api/modpack/suggest', {
+                        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(req)
+                    });
+                    suggestedMods.value = await res.json();
+                } catch(e) {
+                    alert("衍生请求失败！");
+                } finally { isSuggesting.value = false; }
+            };
+
+            // 5. 确认添加
+            const confirmAddSuggestedMods = async () => {
+                if (selectedSuggests.value.size === 0) return;
+                if (suggestMode.value === 'blacklist') {
+                    for (const slug of selectedSuggests.value) {
+                        await fetch('http://localhost:8080/api/prefs/blacklist', {
+                            method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
+                            body: JSON.stringify({slug, source: 'agent'})
+                        });
+                    }
+                    await loadBlacklist();
+                } else if (suggestMode.value === 'prefs') {
+                    // 添加到模组偏好
+                    for (const slug of selectedSuggests.value) {
+                        await fetch('http://localhost:8080/api/prefs/mods', {
+                            method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
+                            body: JSON.stringify({slug, category: ''})
+                        });
+                    }
+                    await loadPrefs();
+                } else {
+                    // 添加到整合包
+                    selectedSuggests.value.forEach(slug => {
+                        if (!packData.modSlugs.includes(slug)) packData.modSlugs.push(slug);
+                    });
+                    openLab();
+                }
+                showSuggestBoard.value = false;
+            };
+
+            // 🧪 沙盒校验方法
+            const openSandbox = () => {
+                currentView.value = 'sandbox';
+                sandboxState.value = 'idle';
+                sandboxFile.value = null;
+                sandboxSlugText.value = '';
+                sandboxLogs.value = [];
+                sandboxResult.value = null;
+            };
+
+            const onFileSelected = (e) => {
+                const files = e.target.files;
+                if (files && files.length > 0) {
+                    sandboxFile.value = files[0];
+                    sandboxSlugText.value = '';
+                }
+            };
+
+            const handleFileDrop = (e) => {
+                const files = e.dataTransfer.files;
+                if (files && files.length > 0 && files[0].name.endsWith('.mrpack')) {
+                    sandboxFile.value = files[0];
+                    sandboxSlugText.value = '';
+                }
+            };
+
+            const addLog = (entry) => {
+                const now = new Date();
+                entry.timestamp = now.toLocaleTimeString('zh-CN', { hour12: false });
+                sandboxLogs.value.push(entry);
+                nextTick(() => {
+                    const box = document.getElementById('sandbox-log-box');
+                    if (box) box.scrollTop = box.scrollHeight;
+                });
+            };
+
+            const startValidation = async () => {
+                sandboxState.value = 'running';
+                sandboxLogs.value = [];
+                sandboxResult.value = null;
+
+                const formData = new FormData();
+                if (sandboxFile.value) {
+                    formData.append('file', sandboxFile.value);
+                }
+                if (sandboxSlugText.value.trim()) {
+                    // 将文本转换为 JSON 数组
+                    const slugs = sandboxSlugText.value
+                        .split(/[\n,]+/)
+                        .map(s => s.trim())
+                        .filter(Boolean);
+                    formData.append('slugs', JSON.stringify(slugs));
+                }
+                formData.append('mcVersion', sandboxConfig.mcVersion);
+                formData.append('loader', sandboxConfig.loader);
+                formData.append('testMode', sandboxConfig.testMode);
+
+                addLog({ stage: 'parsing', message: '正在准备校验请求...' });
+
+                try {
+                    const response = await fetch('http://localhost:8080/api/sandbox/validate', {
+                        method: 'POST',
+                        headers: authHeader(),
+                        body: formData
+                    });
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    let currentEvent = '';
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
+
+                        for (const line of lines) {
+                            if (line.startsWith('event:')) {
+                                currentEvent = line.substring(6).trim();
+                            } else if (line.startsWith('data:') && currentEvent) {
+                                try {
+                                    const json = line.substring(5).trim();
+                                    if (!json) continue;
+                                    const data = JSON.parse(json);
+
+                                    if (currentEvent === 'phase') {
+                                        addLog(data);
+                                        if (data.stage === 'complete') {
+                                            sandboxResult.value = {
+                                                success: true,
+                                                finalMods: data.finalMods || [],
+                                                cycles: data.cycles || 0,
+                                                message: data.message || '校验通过！'
+                                            };
+                                            sandboxState.value = 'done';
+                                            return;
+                                        }
+                                        if (data.stage === 'failed') {
+                                            sandboxResult.value = {
+                                                success: false,
+                                                finalMods: data.finalMods || [],
+                                                cycles: data.cycles || 0,
+                                                message: data.message || '校验未通过'
+                                            };
+                                            sandboxState.value = 'done';
+                                            return;
+                                        }
+                                    } else if (currentEvent === 'healing') {
+                                        addLog(data);
+                                    } else if (currentEvent === 'filtered') {
+                                        const skipped = data.skippedSlugs ? data.skippedSlugs.split(',') : [];
+                                        addLog({ stage: 'filtered', message: '🚫 [服务端模式] 自动排除 ' + skipped.length + ' 个仅客户端模组: ' + skipped.join(', ') });
+                                    } else if (currentEvent === 'summary') {
+                                        addLog({ stage: 'summary', message: data.text || '' });
+                                    } else if (currentEvent === 'report') {
+                                        sandboxReportText.value = data.text || '';
+                                        addLog({ stage: 'report', message: data.text || '' });
+                                    } else if (currentEvent === 'crash') {
+                                        addLog({ stage: 'crash', message: '服务端崩溃，正在提取日志并呼叫 AI 专家诊断...' });
+                                    } else if (currentEvent === 'test-output') {
+                                        // MC 服务端实时输出 (只显示关键行, 不刷屏)
+                                        const line = data.line || '';
+                                        const isKey = line.includes('Done (') || line.includes('Error')
+                                                || line.includes('FAILED') || line.includes('Exception')
+                                                || line.includes('Starting') || line.includes('Mod loading');
+                                        if (isKey || sandboxLogs.value.filter(l => l.stage === 'mc-out').length < 30) {
+                                            addLog({ stage: 'mc-out', message: line.substring(0, 200) });
+                                        }
+                                    } else if (currentEvent === 'result') {
+                                        // 存储完整数据, 含 skippedClient 用于双版本下载
+                                        sandboxResult.value = data;
+                                        sandboxMcVersion.value = data.mcVersion || '1.21.1';
+                                        sandboxLoader.value = data.loader || 'neoforge';
+                                        sandboxSkippedClient.value = data.skippedClient || [];
+                                        sandboxServerSlugs.value = data.finalMods || [];
+                                        sandboxState.value = 'done';
+                                        return;
+                                    } else if (currentEvent === 'error') {
+                                        addLog({ stage: 'error', message: '❌ ' + (data.message || '未知错误') });
+                                        sandboxResult.value = {
+                                            success: false,
+                                            finalMods: [],
+                                            cycles: 0,
+                                            message: data.message || '未知错误'
+                                        };
+                                        sandboxState.value = 'done';
+                                        return;
+                                    }
+                                } catch (e) {
+                                    // skip malformed JSON lines
+                                }
+                                currentEvent = '';
+                            }
+                        }
+                    }
+                } catch (e) {
+                    addLog({ stage: 'error', message: '❌ 连接中断: ' + e.message });
+                    sandboxState.value = 'done';
+                    sandboxResult.value = {
+                        success: false,
+                        finalMods: [],
+                        cycles: 0,
+                        message: '连接中断。可能原因: ① 服务端仍在处理(请查看终端日志确认) ② 网络超时(300s沙盒测试期间浏览器可能断开) ③ 服务端未启动 \n错误详情: ' + e.message
+                    };
+                }
+
+                // 兜底: stream 正常结束但没有收到 result 事件
+                if (sandboxState.value === 'running') {
+                    sandboxState.value = 'done';
+                    sandboxResult.value = {
+                        success: false,
+                        finalMods: [],
+                        cycles: 0,
+                        message: '服务端连接已关闭但未返回最终结果。请检查后端终端日志确认校验是否仍在执行。'
+                    };
+                }
+            };
+
+            // 🔥 下载校验通过的整合包
+            const downloadValidatedPack = async (mode) => {
+                isDownloadingPack.value = true;
+                try {
+                    let slugs;
+                    let packName;
+                    if (mode === 'server') {
+                        slugs = sandboxServerSlugs.value;
+                        packName = 'MAA-Validated-Server-' + sandboxMcVersion.value;
+                    } else {
+                        // full: 服务端存活 + 被排除的仅客户端模组
+                        slugs = [...sandboxServerSlugs.value, ...sandboxSkippedClient.value];
+                        packName = 'MAA-Validated-Full-' + sandboxMcVersion.value;
+                    }
+
+                    const res = await fetch('http://localhost:8080/api/sandbox/build-pack', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...authHeader() },
+                        body: JSON.stringify({
+                            slugs: slugs,
+                            mcVersion: sandboxMcVersion.value,
+                            loader: sandboxLoader.value,
+                            packName: packName
+                        })
+                    });
+
+                    if (!res.ok) {
+                        alert('下载失败，请检查后端日志');
+                        return;
+                    }
+
+                    const blob = await res.blob();
+                    const a = document.createElement('a');
+                    a.href = window.URL.createObjectURL(blob);
+                    a.download = packName + '.mrpack';
+                    a.click();
+                } catch (e) {
+                    alert('下载失败: ' + e.message);
+                } finally {
+                    isDownloadingPack.value = false;
+                }
+            };
+
+            // ========== 用户认证 ==========
+            const showAuthModal = ref(false);
+            const authMode = ref('login');  // 'login' | 'register'
+            const authForm = reactive({account: '', username: '', password: ''});
+            const authError = ref('');
+            const authSuccess = ref('');
+            const authLoading = ref(false);
+            const authUser = ref(null);  // {token, accountNumber, username}
+            const showSidebar = ref(false);
+            const currentConvId = ref(null);
+            const conversationList = ref([]);
+
+            // 从 localStorage 恢复登录 — 先恢复再异步校验服务端是否有效
+            const savedAuth = localStorage.getItem('maa-auth');
+            if (savedAuth) { try { authUser.value = JSON.parse(savedAuth); } catch(e){} }
+            // 异步校验 token 有效性，同步前后端状态
+            if (authUser.value && authUser.value.token) {
+                fetch('http://localhost:8080/api/user/check-token', {
+                    headers: {'X-Auth-Token': authUser.value.token}
+                }).then(r => r.json()).then(d => {
+                    if (!d.valid) {
+                        authUser.value = null;
+                        localStorage.removeItem('maa-auth');
+                        console.log('令牌已过期，已清除本地登录状态');
+                    } else {
+                        // 同步服务端最新数据
+                        authUser.value = { ...authUser.value, ...d, token: authUser.value.token };
+                        hasApiKey.value = d.hasApiKey === true;
+                        localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
+                    }
+                }).catch(() => {});
+            }
+            const authHeader = () => authUser.value ? {'X-Auth-Token': authUser.value.token} : {};
+
+            // 🔥 全局 fetch 包装: 捕获未登录错误并提示重新登录
+            const apiFetch = async (url, opts = {}) => {
+                const res = await fetch(url, { ...opts, headers: { ...opts.headers, ...authHeader() } });
+                // 401: 服务端明确返回未授权
+                if (res.status === 401) {
+                    authUser.value = null; localStorage.removeItem('maa-auth');
+                    authError.value = '登录已过期，请重新登录';
+                    showAuthModal.value = true;
+                    throw new Error('未登录');
+                }
+                // 500 with 未登录 text
+                if (res.status === 500) {
+                    try {
+                        const text = await res.clone().text();
+                        if (text.includes('未登录') || text.includes('RuntimeException')) {
+                            authUser.value = null; localStorage.removeItem('maa-auth');
+                            authError.value = '登录状态异常，请重新登录';
+                            showAuthModal.value = true;
+                            throw new Error('未登录');
+                        }
+                    } catch(e) { if (e.message === '未登录') throw e; }
+                }
+                // 200 but JSON body contains error field (defense in depth)
+                if (res.status === 200 && res.headers.get('content-type')?.includes('application/json')) {
+                    try {
+                        const cloned = res.clone();
+                        const json = await cloned.json();
+                        if (json.error && (json.error.includes('未登录') || json.error.includes('不存在'))) {
+                            authUser.value = null; localStorage.removeItem('maa-auth');
+                            authError.value = '登录已过期，请重新登录';
+                            showAuthModal.value = true;
+                            throw new Error('未登录');
+                        }
+                        if (json.error) throw new Error(json.error);
+                    } catch(e) { if (e.message === '未登录') throw e; }
+                }
+                return res;
+            };
+
+            const doAuth = async () => {
+                authLoading.value = true; authError.value = ''; authSuccess.value = '';
+                const url = authMode.value === 'login' ? '/api/user/login' : '/api/user/register';
+                const body = authMode.value === 'login'
+                    ? { account: authForm.account, password: authForm.password }
+                    : { username: authForm.username, password: authForm.password };
+                try {
+                    const r = await fetch('http://localhost:8080' + url, {
+                        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+                    });
+                    const d = await r.json();
+                    if (d.error) { authError.value = d.error; return; }
+                    authUser.value = d;
+                    localStorage.setItem('maa-auth', JSON.stringify(d));
+                    if (authMode.value === 'register') {
+                        authSuccess.value = '✅ 注册成功！你的账号是: ' + d.accountNumber + ' (已自动登录)';
+                        setTimeout(() => { showAuthModal.value = false; authSuccess.value = ''; }, 3000);
+                    } else {
+                        showAuthModal.value = false;
+                    }
+                    await loadConversations();
+                } catch(e) { authError.value = '网络错误'; }
+                finally { authLoading.value = false; }
+            };
+            const logout = () => {
+                authUser.value = null; localStorage.removeItem('maa-auth');
+                currentView.value = 'chat'; showSidebar.value = false; conversationList.value = [];
+            };
+
+            // ========== 对话历史 ==========
+            const loadConversations = async () => {
+                if (!authUser.value) return;
+                try {
+                    const r = await fetch('http://localhost:8080/api/prefs/conversations', {headers: authHeader()});
+                    conversationList.value = await r.json();
+                } catch(e) {}
+            };
+            const newConversation = async () => {
+                if (!authUser.value) return;
+                try {
+                    const r = await fetch('http://localhost:8080/api/prefs/conversations', {
+                        method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
+                        body: JSON.stringify({title: '新对话 ' + new Date().toLocaleDateString()})
+                    });
+                    const d = await r.json();
+                    currentConvId.value = d.id;
+                    chatHistory.value = []; packData.modSlugs = [];
+                    await loadConversations();
+                } catch(e) {}
+            };
+            const loadConversation = async (id) => {
+                try {
+                    const r = await fetch('http://localhost:8080/api/prefs/conversations/' + id + '/messages', {headers: authHeader()});
+                    const msgs = await r.json();
+                    chatHistory.value = msgs.map(m => ({
+                        role: m.role, content: m.content, hasData: m.hasData,
+                        thinkTime: m.thinkTime || undefined
+                    }));
+                    if (msgs.length > 0 && msgs[msgs.length-1].modSlugs) {
+                        packData.modSlugs = msgs[msgs.length-1].modSlugs.split(',');
+                    }
+                    currentConvId.value = id;
+                } catch(e) {}
+            };
+            const deleteConversation = async (id) => {
+                await fetch('http://localhost:8080/api/prefs/conversations/' + id, {
+                    method: 'DELETE', headers: authHeader()
+                });
+                if (currentConvId.value === id) { currentConvId.value = null; chatHistory.value = []; }
+                await loadConversations();
+            };
+            const saveMsg = async (role, content, hasData, thinkTime, slugs) => {
+                if (!authUser.value || !currentConvId.value) return;
+                try {
+                    const body = {role, content, hasData, thinkTime: thinkTime||'', modSlugs: (slugs||[]).join(',')};
+                    const title = chatHistory.value.length <= 2 && role === 'user' ? content.substring(0, 30) : null;
+                    if (title) body.title = title;
+                    await fetch('http://localhost:8080/api/prefs/conversations/' + currentConvId.value + '/messages', {
+                        method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
+                        body: JSON.stringify(body)
+                    });
+                } catch(e) {}
+            };
+
+            // ========== 设置页 ==========
+            const profileApiKey = ref('');
+            const profileApiKeyMsg = ref('');
+            const profileUsername = ref('');
+            const profileWeight = ref(authUser.value ? authUser.value.preferenceWeight : 0.3);
+            const hasApiKey = ref(false);  // 是否已设置 API Key
+            const saveApiKey = async () => {
+                const key = profileApiKey.value.trim();
+                if (!key) return;
+                try {
+                    const r = await apiFetch('http://localhost:8080/api/user/profile', {
+                        method: 'PUT', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({apiKey: key})
+                    });
+                    const d = await r.json();
+                    hasApiKey.value = d.hasApiKey === true;
+                    if (authUser.value) {
+                        authUser.value.hasApiKey = hasApiKey.value;
+                        localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
+                    }
+                    profileApiKey.value = '';
+                    profileApiKeyMsg.value = 'API Key 已保存成功';
+                    setTimeout(() => profileApiKeyMsg.value = '', 3000);
+                } catch(e) {
+                    if (e.message === '未登录') return;
+                    profileApiKeyMsg.value = '保存失败: ' + e.message;
+                }
+            };
+            const pwOld = ref('');
+            const pwNew = ref('');
+            const pwMsg = ref('');
+            const changePassword = async () => {
+                if (!pwOld.value || !pwNew.value) return;
+                pwMsg.value = '';
+                try {
+                    const r = await apiFetch('http://localhost:8080/api/user/change-password', {
+                        method: 'PUT', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({oldPassword: pwOld.value, newPassword: pwNew.value})
+                    });
+                    const d = await r.json();
+                    if (d.error) { pwMsg.value = d.error; return; }
+                    pwMsg.value = '密码修改成功';
+                    pwOld.value = ''; pwNew.value = '';
+                    setTimeout(() => pwMsg.value = '', 3000);
+                } catch(e) { if (e.message !== '未登录') pwMsg.value = '修改失败'; }
+            };
+
+            const saveUsername = async () => {
+                const uname = profileUsername.value.trim();
+                if (!uname) return;
+                await apiFetch('http://localhost:8080/api/user/profile', {
+                    method: 'PUT', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username: uname})
+                });
+                authUser.value.username = uname;
+                localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
+                profileUsername.value = '';
+            };
+            const saveProfileWeight = async () => {
+                if (!authUser.value) return;
+                await fetch('http://localhost:8080/api/user/profile', {
+                    method: 'PUT', headers: {...authHeader(), 'Content-Type': 'application/json'},
+                    body: JSON.stringify({preferenceWeight: String(profileWeight.value)})
+                });
+                authUser.value.preferenceWeight = profileWeight.value;
+                localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
+            };
+
+            // ========== 偏好 ==========
+            const categoryPrefs = ref([]);
+            const modPrefs = ref([]);
+            const modPrefSearch = ref('');
+            const newCatPref = reactive({category: 'adventure', rank: 5});
+            const filteredModPrefs = computed(() => {
+                let arr = modPrefs.value;
+                if (modPrefSearch.value) {
+                    const kw = modPrefSearch.value.toLowerCase();
+                    arr = arr.filter(m => m.slug.includes(kw) || (m.category||'').includes(kw) || ((modInfoCache.value[m.slug]||{}).title||'').toLowerCase().includes(kw));
+                }
+                return arr;
+            });
+
+            // ========== 分页 ==========
+            const pageSize = 10;
+            const modPrefPage = ref(0);
+            const modPrefJump = ref('');
+            const modPrefTotalPages = computed(() => Math.max(1, Math.ceil(filteredModPrefs.value.length / pageSize)));
+            const pagedModPrefs = computed(() => {
+                const start = modPrefPage.value * pageSize;
+                return filteredModPrefs.value.slice(start, start + pageSize);
+            });
+            const blacklistPage = ref(0);
+            const blacklistJump = ref('');
+            const filteredBlacklist = computed(() => blacklistItems.value);
+            const blacklistTotalPages = computed(() => Math.max(1, Math.ceil(filteredBlacklist.value.length / pageSize)));
+            const pagedBlacklist = computed(() => {
+                const start = blacklistPage.value * pageSize;
+                return filteredBlacklist.value.slice(start, start + pageSize);
+            });
+            const prevModPrefPage = () => { if (modPrefPage.value > 0) modPrefPage.value--; };
+            const nextModPrefPage = () => { if (modPrefPage.value < modPrefTotalPages.value - 1) modPrefPage.value++; };
+            const jumpModPrefPage = () => {
+                const t = parseInt(modPrefJump.value);
+                if (!isNaN(t) && t >= 1 && t <= modPrefTotalPages.value) modPrefPage.value = t - 1;
+            };
+            const prevBlacklistPageFn = () => { if (blacklistPage.value > 0) blacklistPage.value--; };
+            const nextBlacklistPageFn = () => { if (blacklistPage.value < blacklistTotalPages.value - 1) blacklistPage.value++; };
+            const jumpBlacklistPageFn = () => {
+                const t = parseInt(blacklistJump.value);
+                if (!isNaN(t) && t >= 1 && t <= blacklistTotalPages.value) blacklistPage.value = t - 1;
+            };
+
+            // Modrinth 数据缓存 (仅渲染时获取，不存储在导出文件)
+            const modInfoCache = ref({});
+            const loadModInfoCache = async (slugs) => {
+                for (const slug of slugs) {
+                    if (modInfoCache.value[slug]) continue;
+                    try {
+                        const r = await fetch('http://localhost:8080/api/prefs/mod-info/' + slug);
+                        const d = await r.json();
+                        if (!d.error) modInfoCache.value[slug] = d;
+                    } catch(e) {}
+                }
+            };
+
+            // 手动 slug 输入添加
+            const manualSlugInput = ref('');
+            const addingModBySlug = ref(false);
+            const modSlugAddMsg = ref('');
+            const addModBySlug = async () => {
+                const slug = manualSlugInput.value.trim().toLowerCase();
+                if (!slug) return;
+                addingModBySlug.value = true; modSlugAddMsg.value = '';
+                try {
+                    // 先验证 slug 有效
+                    const infoR = await fetch('http://localhost:8080/api/prefs/mod-info/' + slug);
+                    const info = await infoR.json();
+                    if (info.error) { modSlugAddMsg.value = '该 slug 不存在于 Modrinth'; return; }
+                    // 添加到偏好
+                    const r = await apiFetch('http://localhost:8080/api/prefs/mods', {
+                        method: 'POST', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({slug, source: 'user'})
+                    });
+                    const d = await r.json();
+                    modInfoCache.value[slug] = info;
+                    modSlugAddMsg.value = '成功添加: ' + slug;
+                    manualSlugInput.value = '';
+                    await loadPrefs();
+                } catch(e) {
+                    if (e.message !== '未登录') modSlugAddMsg.value = '添加失败';
+                } finally { addingModBySlug.value = false; }
+            };
+
+            // 编辑构建次数
+            const editingBuildCountId = ref(null);
+            const editingBuildCountVal = ref(0);
+            const startEditBuildCount = (mp) => {
+                editingBuildCountId.value = mp.id;
+                editingBuildCountVal.value = mp.buildCount;
+                nextTick(() => {
+                    const el = document.querySelector('input[type=number][min="0"]');
+                    if (el) el.focus();
+                });
+            };
+            const saveBuildCount = async (mp) => {
+                const val = editingBuildCountVal.value;
+                editingBuildCountId.value = null;
+                if (val === mp.buildCount) return;
+                try {
+                    await apiFetch('http://localhost:8080/api/prefs/mods/' + mp.id, {
+                        method: 'PUT', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({buildCount: val})
+                    });
+                    mp.buildCount = val;
+                } catch(e) { if (e.message !== '未登录') alert('更新失败'); }
+            };
+
+            // 切换 source (手动 ↔ 自动)
+            const toggleModSource = async (mp) => {
+                const newSource = mp.source === 'user' ? 'agent' : 'user';
+                try {
+                    const r = await apiFetch('http://localhost:8080/api/prefs/mods/' + mp.id, {
+                        method: 'PUT', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({source: newSource})
+                    });
+                    const d = await r.json();
+                    if (d.deleted) { await loadPrefs(); return; }
+                    mp.source = d.source;
+                    mp.buildCount = d.buildCount;
+                } catch(e) { if (e.message !== '未登录') alert('操作失败'); }
+            };
+
+            const loadPrefs = async () => {
+                if (!authUser.value) return;
+                try {
+                    const cr = await fetch('http://localhost:8080/api/prefs/categories', {headers: authHeader()});
+                    categoryPrefs.value = await cr.json();
+                    const mr = await fetch('http://localhost:8080/api/prefs/mods', {headers: authHeader()});
+                    modPrefs.value = await mr.json();
+                    // 异步加载 Modrinth 卡片数据
+                    loadModInfoCache(modPrefs.value.map(m => m.slug));
+                } catch(e) {}
+            };
+            // 进入设置页时自动加载偏好
+            watch(currentView, (v) => {
+                if (v === 'profile') {
+                    loadPrefs();
+                    loadBlacklist();
+                    profileWeight.value = authUser.value ? authUser.value.preferenceWeight : 0.3;
+                    hasApiKey.value = authUser.value ? authUser.value.hasApiKey === true : false;
+                    enableBlacklist.value = authUser.value ? authUser.value.enableBlacklist === true : false;
+                    enableUserFeedbackRules.value = authUser.value ? authUser.value.enableUserFeedbackRules === true : false;
+                }
+                if (v === 'knowledge-editor') loadKeEnvs();
+            });
+
+            const addCategoryPref = async () => {
+                await fetch('http://localhost:8080/api/prefs/categories', {
+                    method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
+                    body: JSON.stringify({category: newCatPref.category, rank: String(newCatPref.rank)})
+                }); loadPrefs();
+            };
+            const removeCategoryPref = async (id) => {
+                await fetch('http://localhost:8080/api/prefs/categories/' + id, {method: 'DELETE', headers: authHeader()});
+                loadPrefs();
+            };
+            const removeModPref = async (id) => {
+                await fetch('http://localhost:8080/api/prefs/mods/' + id, {method: 'DELETE', headers: authHeader()});
+                loadPrefs();
+            };
+            const clearPrefs = async () => {
+                await fetch('http://localhost:8080/api/prefs/clear', {method: 'POST', headers: authHeader()});
+                loadPrefs();
+            };
+
+            // ========== 黑名单管理 ==========
+            const blacklistItems = ref([]);
+            const blacklistSlugInput = ref('');
+            const blacklistMsg = ref('');
+            const enableBlacklist = ref(false);
+            const enableUserFeedbackRules = ref(false);
+
+            const loadBlacklist = async () => {
+                if (!authUser.value) return;
+                try {
+                    const r = await fetch('http://localhost:8080/api/prefs/blacklist', {headers: authHeader()});
+                    blacklistItems.value = await r.json();
+                    loadModInfoCache(blacklistItems.value.map(b => b.slug).filter(s => !modInfoCache.value[s]));
+                } catch(e) {}
+            };
+            const addBlacklistBySlug = async () => {
+                const slug = blacklistSlugInput.value.trim().toLowerCase();
+                if (!slug) return;
+                blacklistMsg.value = '';
+                try {
+                    // 先验证 slug 存在于 Modrinth
+                    const infoR = await fetch('http://localhost:8080/api/prefs/mod-info/' + slug);
+                    const info = await infoR.json();
+                    if (info.error) { blacklistMsg.value = '该 slug 在 Modrinth 不存在'; return; }
+                    modInfoCache.value[slug] = info;
+                    const r = await apiFetch('http://localhost:8080/api/prefs/blacklist', {
+                        method: 'POST', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({slug, source: 'user'})
+                    });
+                    const d = await r.json();
+                    if (d.error) { blacklistMsg.value = d.error; return; }
+                    blacklistSlugInput.value = '';
+                    blacklistMsg.value = '已添加: ' + slug;
+                    setTimeout(() => blacklistMsg.value = '', 3000);
+                    await loadBlacklist();
+                } catch(e) { if (e.message !== '未登录') blacklistMsg.value = '添加失败'; }
+            };
+            const removeBlacklistItem = async (id) => {
+                await fetch('http://localhost:8080/api/prefs/blacklist/' + id, {method: 'DELETE', headers: authHeader()});
+                loadBlacklist();
+            };
+            const clearBlacklist = async () => {
+                await fetch('http://localhost:8080/api/prefs/blacklist/clear', {method: 'POST', headers: authHeader()});
+                loadBlacklist();
+            };
+            const saveBlacklistToggle = async () => {
+                if (!authUser.value) return;
+                await fetch('http://localhost:8080/api/user/profile', {
+                    method: 'PUT', headers: {...authHeader(), 'Content-Type': 'application/json'},
+                    body: JSON.stringify({enableBlacklist: String(enableBlacklist.value)})
+                });
+                authUser.value.enableBlacklist = enableBlacklist.value;
+                localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
+            };
+            const saveFeedbackRulesToggle = async () => {
+                if (!authUser.value) return;
+                await fetch('http://localhost:8080/api/user/profile', {
+                    method: 'PUT', headers: {...authHeader(), 'Content-Type': 'application/json'},
+                    body: JSON.stringify({enableUserFeedbackRules: String(enableUserFeedbackRules.value)})
+                });
+                authUser.value.enableUserFeedbackRules = enableUserFeedbackRules.value;
+                localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
+            };
+            const openSuggestBoardForBlacklist = () => {
+                showSuggestBoard.value = true;
+                suggestMode.value = 'blacklist';
+                suggestedMods.value = [];
+                selectedSuggests.value = new Set();
+            };
+
+            // ========== 知识规则编辑器 ==========
+            const keEnvs = ref(['neoforge-1.21.1']);
+            const keEnv = ref('neoforge-1.21.1');
+            const keRelation = ref('DEPENDS_ON');
+            const keModA = ref('');
+            const keModB = ref('');
+            const keModAInfo = ref(null);
+            const keModBInfo = ref(null);
+            const keModAError = ref('');
+            const keModBError = ref('');
+            const keMsg = ref('');
+
+            const loadKeEnvs = async () => {
+                try {
+                    const r = await fetch('http://localhost:8080/api/knowledge/feedback/environments');
+                    const envs = await r.json();
+                    if (envs.length > 0) { keEnvs.value = envs; keEnv.value = envs[0]; }
+                } catch(e) {}
+            };
+            const onKeSlugInput = async (which) => {
+                const slug = (which === 'A' ? keModA.value : keModB.value).trim().toLowerCase();
+                const setInfo = which === 'A' ? (v) => keModAInfo.value = v : (v) => keModBInfo.value = v;
+                const setError = which === 'A' ? (v) => keModAError.value = v : (v) => keModBError.value = v;
+                if (!slug) { setInfo(null); setError(''); return; }
+                setError('');
+                try {
+                    const r = await fetch('http://localhost:8080/api/prefs/mod-info/' + slug);
+                    const d = await r.json();
+                    if (d.error) { setInfo(null); setError('该 slug 在 Modrinth 不存在'); }
+                    else { setInfo(d); setError(''); }
+                } catch(e) { setError('查询失败'); }
+            };
+            const submitKeRule = async () => {
+                if (!keModAInfo.value || !keModBInfo.value) return;
+                keMsg.value = '';
+                try {
+                    const r = await apiFetch('http://localhost:8080/api/knowledge/feedback/add', {
+                        method: 'POST', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            environment: keEnv.value,
+                            modA: keModAInfo.value.slug,
+                            modB: keModBInfo.value.slug,
+                            relationType: keRelation.value
+                        })
+                    });
+                    const d = await r.json();
+                    if (d.error) { keMsg.value = d.error; return; }
+                    keMsg.value = d.message || '规则已添加';
+                    if (d.ok) { keModA.value = ''; keModB.value = ''; keModAInfo.value = null; keModBInfo.value = null; }
+                    setTimeout(() => keMsg.value = '', 5000);
+                } catch(e) { if (e.message !== '未登录') keMsg.value = '提交失败'; }
+            };
+            const exportPrefs = async () => {
+                const r = await fetch('http://localhost:8080/api/prefs/export', {headers: authHeader()});
+                const blob = await r.blob();
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'maa-preferences-' + new Date().toISOString().slice(0,10) + '.json';
+                a.click();
+            };
+            const importPrefs = async (e) => {
+                const file = e.target.files[0]; if (!file) return;
+                const text = await file.text();
+                await fetch('http://localhost:8080/api/prefs/import', {
+                    method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'}, body: text
+                });
+                loadPrefs(); e.target.value = '';
+            };
+
+            // 🔥 buildPack 包装: 构建后更新偏好
+            const origBuildPack = buildPack;
+            const buildPackWithPref = async () => {
+                await origBuildPack();
+                if (authUser.value && packData.modSlugs.length > 0) {
+                    fetch('http://localhost:8080/api/prefs/update-on-build', {
+                        method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
+                        body: JSON.stringify({slugs: packData.modSlugs})
+                    }).finally(() => loadPrefs());
+                }
+            };
+
+            // 🔥 sendMessage 包装: 自动创建/保存对话
+            const origSendMessage = sendMessage;
+            const sendMessageWithHistory = async () => {
+                if (authUser.value && !currentConvId.value) await newConversation();
+                const msg = userInput.value.trim();
+                const attached = pendingMrpack.value;
+                await origSendMessage();
+                if (authUser.value && currentConvId.value) {
+                    const userContent = msg + (attached ? ' 📦'+attached.name : '');
+                    saveMsg('user', userContent, false, '', []);
+                    nextTick(() => {
+                        const last = chatHistory.value[chatHistory.value.length - 1];
+                        if (last && last.role === 'ai') {
+                            saveMsg('ai', last.content, last.hasData||false, last.thinkTime||'', packData.modSlugs);
+                        }
+                    });
+                }
+            };
+
+            return {
+                currentView, chatHistory, userInput, isLoading, thinkTime, currentThought,
+                isResolving, isBuilding,
+                previewData, selectedMods, rootTreeNodes, dbRules, groupedDbData,
+                searchQuery, filteredRootNodes,
+                manualAddSlug, showSuggestBoard, isSuggesting, suggestedMods, selectedSuggests, suggestForm,availableCategories,
+                pageJumpInput,
+                sendMessage: sendMessageWithHistory, openLab, buildPack: buildPackWithPref, openDbView, abortThinking, onMrpackUpload, pendingMrpack,
+                directAddMod, openSuggestBoard, openSuggestBoardForPref, suggestMode, toggleSuggestSelection, fetchSuggestions, confirmAddSuggestedMods,
+                jumpToPage, toggleSuggestCategory,suggestPageUp,suggestPageDown,resetSuggestPage,
+                // 🔐 auth
+                showAuthModal, authMode, authForm, authError, authSuccess, authLoading, authUser, showSidebar,
+                doAuth, logout,
+                // 📂 conversations
+                conversationList, currentConvId, loadConversation, deleteConversation, newConversation,
+                // 👤 profile
+                profileApiKey, profileApiKeyMsg, hasApiKey, profileUsername, profileWeight, saveApiKey, saveUsername, saveProfileWeight,
+                pwOld, pwNew, pwMsg, changePassword,
+                // 📊 preferences
+                categoryPrefs, modPrefs, modPrefSearch, modPrefJump, newCatPref, filteredModPrefs,
+                pagedModPrefs, modPrefPage, modPrefTotalPages, modPrefJump,
+                pagedBlacklist, blacklistPage, blacklistTotalPages, blacklistJump,
+                pageSize,
+                prevModPrefPage, nextModPrefPage, jumpModPrefPage,
+                prevBlacklistPageFn, nextBlacklistPageFn, jumpBlacklistPageFn,
+                modInfoCache, manualSlugInput, addingModBySlug, modSlugAddMsg, addModBySlug,
+                editingBuildCountId, editingBuildCountVal, startEditBuildCount, saveBuildCount, toggleModSource,
+                addCategoryPref, removeCategoryPref, removeModPref, clearPrefs, exportPrefs, importPrefs,
+                // 🚫 blacklist
+                blacklistItems, blacklistSlugInput, blacklistMsg, enableBlacklist, enableUserFeedbackRules,
+                addBlacklistBySlug, removeBlacklistItem, clearBlacklist, saveBlacklistToggle, saveFeedbackRulesToggle, openSuggestBoardForBlacklist,
+                // 🧬 knowledge editor
+                keEnvs, keEnv, keRelation, keModA, keModB, keModAInfo, keModBInfo, keModAError, keModBError, keMsg,
+                loadKeEnvs, onKeSlugInput, submitKeRule,
+                // 🧪 sandbox
+                sandboxState, sandboxFile, sandboxConfig, sandboxSlugText, sandboxLogs, sandboxResult,
+                sandboxReportText,
+                sandboxMcVersion, sandboxLoader, sandboxSkippedClient, sandboxServerSlugs,
+                isDownloadingPack,
+                canStartValidation,
+                openSandbox, startValidation, onFileSelected, handleFileDrop,
+                downloadValidatedPack
+            };
+        }
+    });
+
+    app.component('tree-node', TreeNodeComponent);
+    app.mount('#app');
+</script>
+</body>
+</html>

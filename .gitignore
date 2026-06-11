@@ -1,0 +1,47 @@
+# ===== 编译产物 =====
+target/
+*.class
+*.jar
+*.war
+
+# ===== 环境变量 (含敏感信息) =====
+.env
+.env.local
+.env.*.local
+*.env
+
+# ===== IDE =====
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+*.swp
+*.swo
+*~
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== 数据库文件 (含用户数据) =====
+maa_db/*.mv.db
+maa_db/*.trace.db
+maa_db/*.lock.db
+
+# ===== 日志 =====
+*.log
+logs/
+
+# ===== Maven =====
+.mvn/wrapper/maven-wrapper.jar
+
+# ===== 临时文件 =====
+tmp/
+temp/
+
+# ===== 自用MD =====
+DEPLOY.md
+InsForAdmin.md
