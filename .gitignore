@@ -45,3 +45,9 @@ temp/
 # ===== 自用MD =====
 DEPLOY.md
 InsForAdmin.md
+
+# ===== 底座服务器 =====
+maa-base-server/
+
+# ===== other =====
+*.tar

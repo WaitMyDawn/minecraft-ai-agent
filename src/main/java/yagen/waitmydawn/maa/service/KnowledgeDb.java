@@ -88,6 +88,7 @@ public class KnowledgeDb implements CommandLineRunner {
 
         repo.save(new KnowledgeRule(env, "optifine", "embeddium", "CONFLICTS_WITH", KnowledgeRule.SourceType.ADMIN, 999));
         repo.save(new KnowledgeRule(env, "sodium", "embeddium", "CONFLICTS_WITH", KnowledgeRule.SourceType.ADMIN, 999));
+        repo.save(new KnowledgeRule(env, "sodium", "supplementaries", "CONFLICTS_WITH", KnowledgeRule.SourceType.ADMIN, 999));
         repo.save(new KnowledgeRule(env, "shoulder-surfing-reloaded", "better-third-person", "CONFLICTS_WITH", KnowledgeRule.SourceType.ADMIN, 999));
 
         System.out.println("💾 管理员硬编码知识库已在系统就绪后重新加载并覆盖写入！");

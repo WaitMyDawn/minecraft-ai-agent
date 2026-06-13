@@ -1,0 +1,13 @@
+services:
+  maa:
+    image: maa:latest
+    container_name: maa
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - ./maa-app.jar:/app/app.jar
+      - ./maa_db:/app/maa_db
+      - ./maa-base-server:/app/maa-base-server

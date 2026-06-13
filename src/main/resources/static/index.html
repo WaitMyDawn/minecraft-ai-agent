@@ -1095,7 +1095,7 @@
             // 🔥 新增：手动终止请求
             const abortThinking = async () => {
                 try {
-                    await fetch('http://localhost:8080/api/chat/abort', {
+                    await fetch('/api/chat/abort', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({ uuid: sessionUuid.value })
@@ -1134,7 +1134,7 @@
                     try {
                         const fd = new FormData();
                         fd.append('file', fileToParse);
-                        const parseRes = await fetch('http://localhost:8080/api/modpack/parse-mrpack', {
+                        const parseRes = await fetch('/api/modpack/parse-mrpack', {
                             method: 'POST', body: fd
                         });
                         const parseData = await parseRes.json();
@@ -1158,7 +1158,7 @@
                             hasData: true
                         });
                         try {
-                            const previewRes = await fetch('http://localhost:8080/api/modpack/preview', {
+                            const previewRes = await fetch('/api/modpack/preview', {
                                 method: 'POST', headers: {'Content-Type': 'application/json', ...authHeader()},
                                 body: JSON.stringify({...packData, excludeUserFeedbackRules: !enableUserFeedbackRules.value})
                             });
@@ -1182,7 +1182,7 @@
                 // 有文字指令 → 发给 AI (currentMods 使用 baseSlugs)
                 startThinking();
                 try {
-                    const res = await fetch('http://localhost:8080/api/chat', {
+                    const res = await fetch('/api/chat', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json', ...authHeader()},
                         body: JSON.stringify({ prompt: msg, currentMods: baseSlugs.join(','), uuid: sessionUuid.value })
@@ -1230,7 +1230,7 @@
                 currentView.value = 'lab';
                 isResolving.value = true;
                 try {
-                    const res = await fetch('http://localhost:8080/api/modpack/preview', {
+                    const res = await fetch('/api/modpack/preview', {
                         method: 'POST', headers: {'Content-Type': 'application/json', ...authHeader()},
                         body: JSON.stringify({...packData, excludeUserFeedbackRules: !enableUserFeedbackRules.value})
                     });
@@ -1342,7 +1342,7 @@
                 isBuilding.value = true;
                 const selectedFiles = previewData.value.nodes.filter(n => selectedMods.value.has(n.id)).map(n => n.fileInfo);
                 try {
-                    const res = await fetch('http://localhost:8080/api/modpack/build', {
+                    const res = await fetch('/api/modpack/build', {
                         method: 'POST', headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({...packData, selectedFiles})
                     });
@@ -1359,7 +1359,7 @@
             const openDbView = async () => {
                 currentView.value = 'db';
                 try {
-                    const res = await fetch('http://localhost:8080/api/knowledge');
+                    const res = await fetch('/api/knowledge');
                     dbRules.value = await res.json();
                 } catch (e) {
                     alert("获取知识库失败");
@@ -1464,7 +1464,7 @@
                         page: suggestForm.page,
                         currentSlugs: Array.from(selectedMods.value).map(id => nodesMap.value[id]?.slug).filter(Boolean)
                     };
-                    const res = await fetch('http://localhost:8080/api/modpack/suggest', {
+                    const res = await fetch('/api/modpack/suggest', {
                         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(req)
                     });
                     suggestedMods.value = await res.json();
@@ -1478,7 +1478,7 @@
                 if (selectedSuggests.value.size === 0) return;
                 if (suggestMode.value === 'blacklist') {
                     for (const slug of selectedSuggests.value) {
-                        await fetch('http://localhost:8080/api/prefs/blacklist', {
+                        await fetch('/api/prefs/blacklist', {
                             method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
                             body: JSON.stringify({slug, source: 'agent'})
                         });
@@ -1487,7 +1487,7 @@
                 } else if (suggestMode.value === 'prefs') {
                     // 添加到模组偏好
                     for (const slug of selectedSuggests.value) {
-                        await fetch('http://localhost:8080/api/prefs/mods', {
+                        await fetch('/api/prefs/mods', {
                             method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
                             body: JSON.stringify({slug, category: ''})
                         });
@@ -1563,7 +1563,7 @@
                 addLog({ stage: 'parsing', message: '正在准备校验请求...' });
 
                 try {
-                    const response = await fetch('http://localhost:8080/api/sandbox/validate', {
+                    const response = await fetch('/api/sandbox/validate', {
                         method: 'POST',
                         headers: authHeader(),
                         body: formData
@@ -1699,7 +1699,7 @@
                         packName = 'MAA-Validated-Full-' + sandboxMcVersion.value;
                     }
 
-                    const res = await fetch('http://localhost:8080/api/sandbox/build-pack', {
+                    const res = await fetch('/api/sandbox/build-pack', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', ...authHeader() },
                         body: JSON.stringify({
@@ -1744,7 +1744,7 @@
             if (savedAuth) { try { authUser.value = JSON.parse(savedAuth); } catch(e){} }
             // 异步校验 token 有效性，同步前后端状态
             if (authUser.value && authUser.value.token) {
-                fetch('http://localhost:8080/api/user/check-token', {
+                fetch('/api/user/check-token', {
                     headers: {'X-Auth-Token': authUser.value.token}
                 }).then(r => r.json()).then(d => {
                     if (!d.valid) {
@@ -1807,9 +1807,15 @@
                     ? { account: authForm.account, password: authForm.password }
                     : { username: authForm.username, password: authForm.password };
                 try {
-                    const r = await fetch('http://localhost:8080' + url, {
+                    const r = await fetch(url, {  // url 已是 /api/user/login 格式，浏览器自动拼域名
                         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
                     });
+                    // 非 JSON 响应 = 后端未启动或用 file:// 打开，给明确提示
+                    const contentType = r.headers.get('content-type') || '';
+                    if (!contentType.includes('application/json')) {
+                        authError.value = '请通过 http://localhost:8080 访问，不要用文件方式打开';
+                        return;
+                    }
                     const d = await r.json();
                     if (d.error) { authError.value = d.error; return; }
                     authUser.value = d;
@@ -1821,8 +1827,10 @@
                         showAuthModal.value = false;
                     }
                     await loadConversations();
-                } catch(e) { authError.value = '网络错误'; }
-                finally { authLoading.value = false; }
+                } catch(e) {
+                    console.error('Auth request failed:', e);
+                    authError.value = '网络错误: ' + (e.message || '请检查后端是否启动');
+                } finally { authLoading.value = false; }
             };
             const logout = () => {
                 authUser.value = null; localStorage.removeItem('maa-auth');
@@ -1833,14 +1841,14 @@
             const loadConversations = async () => {
                 if (!authUser.value) return;
                 try {
-                    const r = await fetch('http://localhost:8080/api/prefs/conversations', {headers: authHeader()});
+                    const r = await fetch('/api/prefs/conversations', {headers: authHeader()});
                     conversationList.value = await r.json();
                 } catch(e) {}
             };
             const newConversation = async () => {
                 if (!authUser.value) return;
                 try {
-                    const r = await fetch('http://localhost:8080/api/prefs/conversations', {
+                    const r = await fetch('/api/prefs/conversations', {
                         method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
                         body: JSON.stringify({title: '新对话 ' + new Date().toLocaleDateString()})
                     });
@@ -1852,7 +1860,7 @@
             };
             const loadConversation = async (id) => {
                 try {
-                    const r = await fetch('http://localhost:8080/api/prefs/conversations/' + id + '/messages', {headers: authHeader()});
+                    const r = await fetch('/api/prefs/conversations/' + id + '/messages', {headers: authHeader()});
                     const msgs = await r.json();
                     chatHistory.value = msgs.map(m => ({
                         role: m.role, content: m.content, hasData: m.hasData,
@@ -1865,7 +1873,7 @@
                 } catch(e) {}
             };
             const deleteConversation = async (id) => {
-                await fetch('http://localhost:8080/api/prefs/conversations/' + id, {
+                await fetch('/api/prefs/conversations/' + id, {
                     method: 'DELETE', headers: authHeader()
                 });
                 if (currentConvId.value === id) { currentConvId.value = null; chatHistory.value = []; }
@@ -1877,7 +1885,7 @@
                     const body = {role, content, hasData, thinkTime: thinkTime||'', modSlugs: (slugs||[]).join(',')};
                     const title = chatHistory.value.length <= 2 && role === 'user' ? content.substring(0, 30) : null;
                     if (title) body.title = title;
-                    await fetch('http://localhost:8080/api/prefs/conversations/' + currentConvId.value + '/messages', {
+                    await fetch('/api/prefs/conversations/' + currentConvId.value + '/messages', {
                         method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
                         body: JSON.stringify(body)
                     });
@@ -1894,7 +1902,7 @@
                 const key = profileApiKey.value.trim();
                 if (!key) return;
                 try {
-                    const r = await apiFetch('http://localhost:8080/api/user/profile', {
+                    const r = await apiFetch('/api/user/profile', {
                         method: 'PUT', headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({apiKey: key})
                     });
@@ -1919,7 +1927,7 @@
                 if (!pwOld.value || !pwNew.value) return;
                 pwMsg.value = '';
                 try {
-                    const r = await apiFetch('http://localhost:8080/api/user/change-password', {
+                    const r = await apiFetch('/api/user/change-password', {
                         method: 'PUT', headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({oldPassword: pwOld.value, newPassword: pwNew.value})
                     });
@@ -1934,7 +1942,7 @@
             const saveUsername = async () => {
                 const uname = profileUsername.value.trim();
                 if (!uname) return;
-                await apiFetch('http://localhost:8080/api/user/profile', {
+                await apiFetch('/api/user/profile', {
                     method: 'PUT', headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({username: uname})
                 });
@@ -1944,7 +1952,7 @@
             };
             const saveProfileWeight = async () => {
                 if (!authUser.value) return;
-                await fetch('http://localhost:8080/api/user/profile', {
+                await fetch('/api/user/profile', {
                     method: 'PUT', headers: {...authHeader(), 'Content-Type': 'application/json'},
                     body: JSON.stringify({preferenceWeight: String(profileWeight.value)})
                 });
@@ -2002,7 +2010,7 @@
                 for (const slug of slugs) {
                     if (modInfoCache.value[slug]) continue;
                     try {
-                        const r = await fetch('http://localhost:8080/api/prefs/mod-info/' + slug);
+                        const r = await fetch('/api/prefs/mod-info/' + slug);
                         const d = await r.json();
                         if (!d.error) modInfoCache.value[slug] = d;
                     } catch(e) {}
@@ -2019,11 +2027,11 @@
                 addingModBySlug.value = true; modSlugAddMsg.value = '';
                 try {
                     // 先验证 slug 有效
-                    const infoR = await fetch('http://localhost:8080/api/prefs/mod-info/' + slug);
+                    const infoR = await fetch('/api/prefs/mod-info/' + slug);
                     const info = await infoR.json();
                     if (info.error) { modSlugAddMsg.value = '该 slug 不存在于 Modrinth'; return; }
                     // 添加到偏好
-                    const r = await apiFetch('http://localhost:8080/api/prefs/mods', {
+                    const r = await apiFetch('/api/prefs/mods', {
                         method: 'POST', headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({slug, source: 'user'})
                     });
@@ -2053,7 +2061,7 @@
                 editingBuildCountId.value = null;
                 if (val === mp.buildCount) return;
                 try {
-                    await apiFetch('http://localhost:8080/api/prefs/mods/' + mp.id, {
+                    await apiFetch('/api/prefs/mods/' + mp.id, {
                         method: 'PUT', headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({buildCount: val})
                     });
@@ -2065,7 +2073,7 @@
             const toggleModSource = async (mp) => {
                 const newSource = mp.source === 'user' ? 'agent' : 'user';
                 try {
-                    const r = await apiFetch('http://localhost:8080/api/prefs/mods/' + mp.id, {
+                    const r = await apiFetch('/api/prefs/mods/' + mp.id, {
                         method: 'PUT', headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({source: newSource})
                     });
@@ -2079,9 +2087,9 @@
             const loadPrefs = async () => {
                 if (!authUser.value) return;
                 try {
-                    const cr = await fetch('http://localhost:8080/api/prefs/categories', {headers: authHeader()});
+                    const cr = await fetch('/api/prefs/categories', {headers: authHeader()});
                     categoryPrefs.value = await cr.json();
-                    const mr = await fetch('http://localhost:8080/api/prefs/mods', {headers: authHeader()});
+                    const mr = await fetch('/api/prefs/mods', {headers: authHeader()});
                     modPrefs.value = await mr.json();
                     // 异步加载 Modrinth 卡片数据
                     loadModInfoCache(modPrefs.value.map(m => m.slug));
@@ -2101,21 +2109,21 @@
             });
 
             const addCategoryPref = async () => {
-                await fetch('http://localhost:8080/api/prefs/categories', {
+                await fetch('/api/prefs/categories', {
                     method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
                     body: JSON.stringify({category: newCatPref.category, rank: String(newCatPref.rank)})
                 }); loadPrefs();
             };
             const removeCategoryPref = async (id) => {
-                await fetch('http://localhost:8080/api/prefs/categories/' + id, {method: 'DELETE', headers: authHeader()});
+                await fetch('/api/prefs/categories/' + id, {method: 'DELETE', headers: authHeader()});
                 loadPrefs();
             };
             const removeModPref = async (id) => {
-                await fetch('http://localhost:8080/api/prefs/mods/' + id, {method: 'DELETE', headers: authHeader()});
+                await fetch('/api/prefs/mods/' + id, {method: 'DELETE', headers: authHeader()});
                 loadPrefs();
             };
             const clearPrefs = async () => {
-                await fetch('http://localhost:8080/api/prefs/clear', {method: 'POST', headers: authHeader()});
+                await fetch('/api/prefs/clear', {method: 'POST', headers: authHeader()});
                 loadPrefs();
             };
 
@@ -2129,7 +2137,7 @@
             const loadBlacklist = async () => {
                 if (!authUser.value) return;
                 try {
-                    const r = await fetch('http://localhost:8080/api/prefs/blacklist', {headers: authHeader()});
+                    const r = await fetch('/api/prefs/blacklist', {headers: authHeader()});
                     blacklistItems.value = await r.json();
                     loadModInfoCache(blacklistItems.value.map(b => b.slug).filter(s => !modInfoCache.value[s]));
                 } catch(e) {}
@@ -2140,11 +2148,11 @@
                 blacklistMsg.value = '';
                 try {
                     // 先验证 slug 存在于 Modrinth
-                    const infoR = await fetch('http://localhost:8080/api/prefs/mod-info/' + slug);
+                    const infoR = await fetch('/api/prefs/mod-info/' + slug);
                     const info = await infoR.json();
                     if (info.error) { blacklistMsg.value = '该 slug 在 Modrinth 不存在'; return; }
                     modInfoCache.value[slug] = info;
-                    const r = await apiFetch('http://localhost:8080/api/prefs/blacklist', {
+                    const r = await apiFetch('/api/prefs/blacklist', {
                         method: 'POST', headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({slug, source: 'user'})
                     });
@@ -2157,16 +2165,16 @@
                 } catch(e) { if (e.message !== '未登录') blacklistMsg.value = '添加失败'; }
             };
             const removeBlacklistItem = async (id) => {
-                await fetch('http://localhost:8080/api/prefs/blacklist/' + id, {method: 'DELETE', headers: authHeader()});
+                await fetch('/api/prefs/blacklist/' + id, {method: 'DELETE', headers: authHeader()});
                 loadBlacklist();
             };
             const clearBlacklist = async () => {
-                await fetch('http://localhost:8080/api/prefs/blacklist/clear', {method: 'POST', headers: authHeader()});
+                await fetch('/api/prefs/blacklist/clear', {method: 'POST', headers: authHeader()});
                 loadBlacklist();
             };
             const saveBlacklistToggle = async () => {
                 if (!authUser.value) return;
-                await fetch('http://localhost:8080/api/user/profile', {
+                await fetch('/api/user/profile', {
                     method: 'PUT', headers: {...authHeader(), 'Content-Type': 'application/json'},
                     body: JSON.stringify({enableBlacklist: String(enableBlacklist.value)})
                 });
@@ -2175,7 +2183,7 @@
             };
             const saveFeedbackRulesToggle = async () => {
                 if (!authUser.value) return;
-                await fetch('http://localhost:8080/api/user/profile', {
+                await fetch('/api/user/profile', {
                     method: 'PUT', headers: {...authHeader(), 'Content-Type': 'application/json'},
                     body: JSON.stringify({enableUserFeedbackRules: String(enableUserFeedbackRules.value)})
                 });
@@ -2203,7 +2211,7 @@
 
             const loadKeEnvs = async () => {
                 try {
-                    const r = await fetch('http://localhost:8080/api/knowledge/feedback/environments');
+                    const r = await fetch('/api/knowledge/feedback/environments');
                     const envs = await r.json();
                     if (envs.length > 0) { keEnvs.value = envs; keEnv.value = envs[0]; }
                 } catch(e) {}
@@ -2215,7 +2223,7 @@
                 if (!slug) { setInfo(null); setError(''); return; }
                 setError('');
                 try {
-                    const r = await fetch('http://localhost:8080/api/prefs/mod-info/' + slug);
+                    const r = await fetch('/api/prefs/mod-info/' + slug);
                     const d = await r.json();
                     if (d.error) { setInfo(null); setError('该 slug 在 Modrinth 不存在'); }
                     else { setInfo(d); setError(''); }
@@ -2225,7 +2233,7 @@
                 if (!keModAInfo.value || !keModBInfo.value) return;
                 keMsg.value = '';
                 try {
-                    const r = await apiFetch('http://localhost:8080/api/knowledge/feedback/add', {
+                    const r = await apiFetch('/api/knowledge/feedback/add', {
                         method: 'POST', headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({
                             environment: keEnv.value,
@@ -2242,7 +2250,7 @@
                 } catch(e) { if (e.message !== '未登录') keMsg.value = '提交失败'; }
             };
             const exportPrefs = async () => {
-                const r = await fetch('http://localhost:8080/api/prefs/export', {headers: authHeader()});
+                const r = await fetch('/api/prefs/export', {headers: authHeader()});
                 const blob = await r.blob();
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(blob);
@@ -2252,7 +2260,7 @@
             const importPrefs = async (e) => {
                 const file = e.target.files[0]; if (!file) return;
                 const text = await file.text();
-                await fetch('http://localhost:8080/api/prefs/import', {
+                await fetch('/api/prefs/import', {
                     method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'}, body: text
                 });
                 loadPrefs(); e.target.value = '';
@@ -2263,7 +2271,7 @@
             const buildPackWithPref = async () => {
                 await origBuildPack();
                 if (authUser.value && packData.modSlugs.length > 0) {
-                    fetch('http://localhost:8080/api/prefs/update-on-build', {
+                    fetch('/api/prefs/update-on-build', {
                         method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
                         body: JSON.stringify({slugs: packData.modSlugs})
                     }).finally(() => loadPrefs());
