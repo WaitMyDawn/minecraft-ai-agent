@@ -56,14 +56,24 @@ public class DependencyEngine {
         String altLoader = getAltLoader(loader.toLowerCase());
         List<KnowledgeRule> activeRules = knowledgeDb.getActiveRules(loader.toLowerCase() + "-" + mcVersion);
 
-        System.out.println("🕸️ 深度依赖穿透引擎启动！初始模组数: " + initialSlugs.size());
+        long startTime = System.currentTimeMillis();
+        System.out.println("🕸️ 深度依赖穿透引擎启动！初始模组数: " + initialSlugs.size()
+                + ", loader=" + loader + ", mc=" + mcVersion);
 
         Map<String, String> idToSlugCache = new ConcurrentHashMap<>();
+        int bfsLevel = 0;
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             while (!queue.isEmpty()) {
+                bfsLevel++;
+                int currentQueueSize = queue.size();
+                long levelStart = System.currentTimeMillis();
+                System.out.printf("  🔍 BFS 第 %d 层: %d 个模组待解析...%n", bfsLevel, currentQueueSize);
+
                 List<CompletableFuture<Void>> futures = new ArrayList<>();
                 Queue<String> nextLevelQueue = new ConcurrentLinkedQueue<>();
+                java.util.concurrent.atomic.AtomicInteger completed = new java.util.concurrent.atomic.AtomicInteger(0);
+                java.util.concurrent.atomic.AtomicInteger failed = new java.util.concurrent.atomic.AtomicInteger(0);
 
                 for (String slugOrId : queue) {
                     if (slugOrId == null || slugOrId.trim().isEmpty()) continue;
@@ -146,16 +156,34 @@ public class DependencyEngine {
                                 }
                             }
                         } catch (Exception e) {
-                            System.err.println("依赖解析中断 (跳过): " + slugOrId + " - " + e.getMessage());
+                            failed.incrementAndGet();
+                            System.err.println("依赖解析中断: " + slugOrId + " - " + e.getMessage());
                         } finally {
                             rateLimiter.release();
+                            int done = completed.incrementAndGet();
+                            if (done % 10 == 0 || done == currentQueueSize) {
+                                System.out.printf("    进度: %d/%d (失败:%d)%n", done, currentQueueSize, failed.get());
+                            }
                         }
                     }, executor));
                 }
                 CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+                long levelMs = System.currentTimeMillis() - levelStart;
+                System.out.printf("  ✅ BFS 第 %d 层完成: %d mods, 新增 %d 依赖, 耗时 %.1fs%n",
+                        bfsLevel, currentQueueSize, nextLevelQueue.size(), levelMs / 1000.0);
                 queue = nextLevelQueue;
+
+                // 防止无限递归 — 最多 8 层
+                if (bfsLevel >= 8 && !nextLevelQueue.isEmpty()) {
+                    System.out.printf("  ⚠️ 达到最大 BFS 层数(8), 跳过剩余 %d 个依赖%n", nextLevelQueue.size());
+                    break;
+                }
             }
         }
+
+        long totalMs = System.currentTimeMillis() - startTime;
+        System.out.printf("🕸️ 依赖穿透完成: %d 个模组, BFS %d 层, 总耗时 %.1fs%n",
+                graph.allSlugs.size(), bfsLevel, totalMs / 1000.0);
 
         DependencyGraph resolvedGraph = resolveGraphIds(graph, idToSlugCache);
 

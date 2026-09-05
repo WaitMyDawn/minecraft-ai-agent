@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">MAA — Minecraft 整合包智能构筑系统</h1>
   <p align="center">
-    <strong>M</strong>inecraft <strong>A</strong>I <strong>A</strong>gent · 基于 Agentic RAG 的多智能体模组整合包生成器
+    <strong>M</strong>inecraft <strong>A</strong>I <strong>A</strong>gent · 多智能体模组整合包生成器
   </p>
 </p>
 

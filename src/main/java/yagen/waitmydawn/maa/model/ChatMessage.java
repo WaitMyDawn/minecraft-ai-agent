@@ -51,4 +51,5 @@ public class ChatMessage {
     public String getModSlugs() { return modSlugs; }
     public void setModSlugs(String v) { this.modSlugs = v; }
     public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime v) { this.createdAt = v; }
 }

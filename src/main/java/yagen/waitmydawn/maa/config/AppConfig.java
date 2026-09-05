@@ -25,11 +25,17 @@ public class AppConfig {
         return cacheManager;
     }
 
-    // 引入 Spring Boot 3.2+ 现代 HTTP 客户端 RestClient
+    // RestClient — Modrinth API 调用
+    // 设置 connect=8s / read=15s 防止网络波动导致请求无限等待
     @Bean
     public RestClient restClient() {
+        org.springframework.http.client.SimpleClientHttpRequestFactory factory =
+                new org.springframework.http.client.SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(java.time.Duration.ofSeconds(8));
+        factory.setReadTimeout(java.time.Duration.ofSeconds(15));
         return RestClient.builder()
                 .defaultHeader("User-Agent", "MAA-Pro-Agent/5.0 (contact@example.com)")
+                .requestFactory(factory)
                 .build();
     }
 }

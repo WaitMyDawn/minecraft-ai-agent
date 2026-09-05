@@ -34,7 +34,8 @@ public class ChatController {
     private final UserRepository userRepo;
     private final CategoryPreferenceRepository catRepo;
     private final ModPreferenceRepository modRepo;
-    private final Map<String, Thread> activeSessions = new ConcurrentHashMap<>();
+    // 使用 volatile 标记替代 Thread.interrupt() 实现即时终止
+    private final Map<String, Boolean> abortedSessions = new ConcurrentHashMap<>();
 
     // 🔥 用于记录候选模组的数据结构 (含多路召回重合度 HitScore)
     static class CandidateMod {
@@ -152,39 +153,56 @@ public class ChatController {
         sb.append("【用户指令】：\n").append(prompt).append("\n");
 
         try {
-            activeSessions.put(uuid, Thread.currentThread());
-
             System.out.println("\n=======================================================");
             System.out.println("🤖 [阶段 1] 呼叫规划师 (Architect Agent) 分析意图与蓝图...");
             String aiBlueprint = aiAgentService.planBlueprint(sb.toString(), effectiveApiKey);
 
-            if (Thread.currentThread().isInterrupted()) {
-                System.out.println("🛑 发现中断标记，已放弃后续蓝图组装。");
+            if (isAborted(uuid)) {
+                System.out.println("🛑 用户终止 — 放弃后续蓝图组装。");
                 return "⛔ 思考已手动终止。";
             }
 
-            return processAndAssembleBlueprint(aiBlueprint, currentMods, prompt, effectiveApiKey);
+            return processAndAssembleBlueprint(aiBlueprint, currentMods, prompt, effectiveApiKey, uuid);
         } catch (Exception e) {
-            System.err.println("AI 思考中断: " + e.getMessage());
-            return "糟糕，大模型响应超时，请稍等片刻重试。";
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            System.err.println("AI 调用异常: " + msg);
+
+            // 区分不同错误类型给出友好提示
+            if (msg.contains("service_unavailable") || msg.contains("too busy")) {
+                return "DeepSeek 官方服务繁忙，请稍等片刻后重试。\n\n建议：稍等 1-2 分钟后重试，或者更换 API Key 对应的账户。";
+            }
+            if (msg.contains("Interrupted") || isAborted(uuid)) {
+                return "⛔ 思考已手动终止。";
+            }
+            if (msg.contains("timeout") || msg.contains("Timeout")) {
+                return "大模型响应超时，请稍等片刻重试。";
+            }
+            if (msg.contains("401") || msg.contains("403") || msg.contains("unauthorized")) {
+                return "API Key 无效或已过期，请在设置中更新你的 DeepSeek API Key。";
+            }
+            if (msg.contains("insufficient") || msg.contains("quota") || msg.contains("balance")) {
+                return "API 额度不足，请检查 DeepSeek 账户余额。";
+            }
+            return "AI 调用异常: " + msg.substring(0, Math.min(200, msg.length())) + "\n请稍后重试。";
         } finally {
-            activeSessions.remove(uuid);
+            abortedSessions.remove(uuid);
         }
     }
 
     @PostMapping("/abort")
     public String abortChat(@RequestBody Map<String, String> payload) {
         String uuid = payload.getOrDefault("uuid", "default-user");
-        Thread activeThread = activeSessions.get(uuid);
-        if (activeThread != null) {
-            System.out.println("🛑 收到用户指令，强行终止大模型思考线程！");
-            activeThread.interrupt();
-            return "ok";
-        }
-        return "not_found";
+        abortedSessions.put(uuid, true);
+        System.out.println("🛑 收到用户终止指令 (volatile flag) — uuid=" + uuid);
+        return "ok";
     }
 
-    private String processAndAssembleBlueprint(String aiBlueprint, String currentMods, String prompt, String effectiveApiKey) {
+    /** 检查是否已终止 */
+    private boolean isAborted(String uuid) {
+        return Boolean.TRUE.equals(abortedSessions.getOrDefault(uuid, false));
+    }
+
+    private String processAndAssembleBlueprint(String aiBlueprint, String currentMods, String prompt, String effectiveApiKey, String uuid) {
         try {
             String loader = extractTag(aiBlueprint, "loader", "neoforge");
             String mcVersion = extractTag(aiBlueprint, "mc", "1.21.1");
@@ -208,6 +226,17 @@ public class ChatController {
             }
 
             int needed = targetCount - initialMods.size();
+
+            // ★ 空图谱模式: 无核心模组 + 无搜索意图 + 无已有模组 → 直接返回空图谱
+            if (initialMods.isEmpty() && searchIntentsStr.isEmpty() && expandAddonsStr.isEmpty()) {
+                System.out.println("📋 空图谱模式 — 用户自行构建，跳过阶段2-4");
+                String cleanReply = aiBlueprint.replaceAll("<target_count>[\\s\\S]*?</target_count>", "")
+                        .replaceAll("<max_downloads>[\\s\\S]*?</max_downloads>", "")
+                        .replaceAll("<core_mods>[\\s\\S]*?</core_mods>", "")
+                        .replaceAll("<expand_addons>[\\s\\S]*?</expand_addons>", "")
+                        .replaceAll("<search_intents>[\\s\\S]*?</search_intents>", "");
+                return cleanReply + "\n<mods></mods>";
+            }
 
             // ==========================================
             // 🚀 多智能体重排机制：构建供 Critic 审核的上下文
@@ -244,7 +273,7 @@ public class ChatController {
                     System.out.println("   🔍 捕获到 AI 关键词矩阵: [" + searchIntentsStr + "]");
                     criticContext.append("【待审核意图候选池】（请优先选择 HitScore 分数高的模组，并筛除与核心存在冲突的）\n");
 
-                    List<CandidateMod> fillers = buildFillerPoolByKeywords(searchIntentsStr, loader, mcVersion, initialMods, maxDownloads);
+                    List<CandidateMod> fillers = buildFillerPoolByKeywords(searchIntentsStr, loader, mcVersion, initialMods, maxDownloads, uuid);
 
                     // 打印前 5 名高分候选模组给开发者看
                     System.out.print("   🏆 多路召回重排 Top 5 候选: ");
@@ -270,7 +299,7 @@ public class ChatController {
                     System.out.println("🕵️‍♂️ [阶段 3] 海选池建立完毕！提交给 Critic Agent 审核员...");
                     System.out.println("   ⏳ 等待审核员结合描述和 HitScore 进行最终裁决...");
 
-                    if (Thread.currentThread().isInterrupted()) return "⛔ 思考已手动终止。";
+                    if (isAborted(uuid)) return "⛔ 思考已手动终止。";
 
                     String criticReply = aiAgentService.criticPools(criticContext.toString(), effectiveApiKey);
 
@@ -352,7 +381,7 @@ public class ChatController {
     }
 
     // 🚀 建池器 2：多路召回重排引擎
-    private List<CandidateMod> buildFillerPoolByKeywords(String intentsStr, String loader, String mcVersion, Set<String> existing, long maxDownloads) {
+    private List<CandidateMod> buildFillerPoolByKeywords(String intentsStr, String loader, String mcVersion, Set<String> existing, long maxDownloads, String uuid) {
         Map<String, CandidateMod> hitMap = new ConcurrentHashMap<>();
         String facetsRaw = String.format("[[\"project_type:mod\"], [\"categories:%s\"], [\"versions:%s\"]]", loader, mcVersion);
         String encodedFacets = URLEncoder.encode(facetsRaw, StandardCharsets.UTF_8);
@@ -371,7 +400,7 @@ public class ChatController {
                 for (String kw : keywords) {
                     final String safeKw = kw.trim();
                     futures.add(CompletableFuture.runAsync(() -> {
-                        if (Thread.currentThread().isInterrupted()) return;
+                        if (isAborted(uuid)) return;
                         try {
                             String queryUrl = String.format("https://api.modrinth.com/v2/search?query=%s&limit=30&facets=%s",
                                     URLEncoder.encode(safeKw, StandardCharsets.UTF_8), encodedFacets);

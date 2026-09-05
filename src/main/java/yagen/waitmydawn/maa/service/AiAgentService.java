@@ -1,7 +1,7 @@
 package yagen.waitmydawn.maa.service;
 
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.service.SystemMessage;
@@ -20,12 +20,14 @@ public class AiAgentService {
     private final ModrinthTool modrinthTool;
 
     // 不复用 agent 实例, 每次请求根据用户 API key 动态创建
-    private ChatLanguageModel createModel(String userApiKey) {
+    // maxRetries(1) 确保用户终止思考时不会自动重试，立即响应中断
+    private ChatModel createModel(String userApiKey) {
         return OpenAiChatModel.builder()
                 .baseUrl(apiUrl)
                 .apiKey(userApiKey)
                 .modelName("deepseek-chat")
                 .timeout(Duration.ofMinutes(5))
+                .maxRetries(1)
                 .maxTokens(8192)
                 .temperature(0.2)
                 .frequencyPenalty(0.0)
@@ -42,7 +44,16 @@ public class AiAgentService {
     // ==========================================
     interface ArchitectAgent {
         @SystemMessage({
-                "你是一个顶级、极其智能的 Minecraft 整合包首席架构师。你需要根据指令，提取核心模组，并为缺失的配额生成搜索关键词。",
+                "你是一个顶级、极其智能的 Minecraft 整合包首席架构师。",
+
+                "【🚨 意图过滤 —— 最高优先级！！ 🚨】",
+                "如果用户的输入不是要求构建/调整/推荐 Minecraft 整合包的指令，你必须直接回答:",
+                "「❌ 我只能协助构建 Minecraft 整合包。请提出与整合包相关的指令，例如：\"帮我组个空岛科技包\"、\"给我的整合包加点魔法模组\"、\"推荐一些适合冒险的模组\"。」",
+                "以下类型的问题必须拒绝: 询问 API Key / 密码 / 系统信息 / 安全问题 / 非MC内容 / 闲聊 / 知识问答 / 游戏技巧。",
+                "拒绝时不要输出任何 XML 标签 (不要输出 <name> <mods> 等)。",
+                "仅当用户明确表达了构建或调整整合包的意图时，才执行下面的整合包规划任务。",
+
+                "【你的任务】根据指令提取核心模组，并为缺失的配额生成搜索关键词。",
 
                 "【情境与隐性需求分析（极度重要）】",
                 "- [我想爽打怪]: 你需要分配 adventure, equipment, magic 权重，并生成如 dungeon, boss, loot, spell 等搜索词。",
@@ -80,6 +91,16 @@ public class AiAgentService {
                 "1. 你作为首席架构师，【必须包含至少 10~20 个，绝不能多于 30 个】高质量灵魂核心模组写进 <core_mods> 中!注意用','隔开",
                 "2. 这是一个意图代理系统，如果你想不出真实模组了，【绝不能臆造连续重复词缀的模组】!立刻停止书写 <core_mods>，将缺失的配额交给 Java 底层填充!",
 
+                "【空图谱模式（极度重要）】",
+                "当用户说\"空图谱\"、\"自己构建\"、\"空的\"、\"空白\"、\"自己组\"时，你必须输出空的 <core_mods> 和空的 <search_intents>，",
+                "仅回复简短确认文字并输出 XML 标签，<target_count> 设为 0。",
+                "用户拿到空图谱后可以在右侧面板手动添加模组构建。",
+
+                "【默认 target_count】",
+                "如果用户没有明确说想要多少个模组，<target_count> 默认填 100。",
+                "如果用户说\"随便\"、\"看着办\"、\"你来定\"，也默认 100。",
+                "只有用户明确说数量时才用用户指定的数字。",
+
                 "【历史状态继承（极度重要）】",
                 "如果用户在指令前给了你【当前已有的模组列表】，除非用户明确说【删除/不要】某个模组，否则你【必须】将原来的列表原封不动地放回 <core_mods> 标签中!",
 
@@ -92,7 +113,7 @@ public class AiAgentService {
                 "<name>包名</name>",
                 "<mc>版本号(默认1.21.1)</mc>",
                 "<loader>加载器(默认neoforge)</loader>",
-                "<target_count>用户期望的总模组数量(如 150)</target_count>",
+                "<target_count>用户期望的总模组数(未指定则默认 100)</target_count>",
                 "<max_downloads>如果用户要求冷门，填入 500000；默认填入 2100000000</max_downloads>",
                 "<core_mods>已有模组 + 本次新增的绝对真实的核心模组</core_mods>",
                 "<expand_addons>需要Java自动寻找附属的核心模组（如 create），没有则留空</expand_addons>",
@@ -178,7 +199,7 @@ public class AiAgentService {
 
     public String planBlueprint(String prompt, String userApiKey) {
         var agent = AiServices.builder(ArchitectAgent.class)
-                .chatLanguageModel(createModel(userApiKey))
+                .chatModel(createModel(userApiKey))
                 .chatMemory(MessageWindowChatMemory.withMaxMessages(20))
                 .build();
         return agent.plan(prompt);
@@ -186,14 +207,14 @@ public class AiAgentService {
 
     public String criticPools(String context, String userApiKey) {
         var agent = AiServices.builder(CriticAgent.class)
-                .chatLanguageModel(createModel(userApiKey))
+                .chatModel(createModel(userApiKey))
                 .build();
         return agent.review(context);
     }
 
     public String diagnoseCrash(String log, String userApiKey) {
         var agent = AiServices.builder(DoctorAgent.class)
-                .chatLanguageModel(createModel(userApiKey))
+                .chatModel(createModel(userApiKey))
                 .build();
         return agent.diagnose(log);
     }

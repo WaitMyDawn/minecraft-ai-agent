@@ -59,6 +59,7 @@
         details > summary::-webkit-details-marker {
             display: none;
         }
+
     </style>
 </head>
 <body class="bg-gray-50 h-screen font-sans overflow-hidden">
@@ -92,7 +93,7 @@
         </div>
     </header>
 
-    <!-- 主聊天界面 -->
+    <!-- 主聊天界面 (整合包构筑) -->
     <div class="flex-1 flex flex-col h-full bg-slate-50 relative overflow-hidden" v-if="currentView === 'chat'">
         <main class="flex-1 overflow-y-auto p-4 flex flex-col gap-4 max-w-4xl w-full mx-auto" ref="chatBox">
             <div v-for="(msg, idx) in chatHistory" :key="idx"
@@ -144,7 +145,7 @@
 
         </main>
 
-        <footer class="bg-white p-4 border-t shrink-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-20">
+        <footer class="bg-white px-4 pt-3 pb-10 border-t shrink-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-20">
             <div class="max-w-4xl mx-auto">
                 <!-- 🔥 待发送附件标签 -->
                 <div v-if="pendingMrpack" class="flex items-center gap-2 mb-2">
@@ -506,20 +507,22 @@
 
     <!-- 📂 对话侧边栏 -->
     <div v-if="authUser && showSidebar && currentView === 'chat'"
-         class="absolute left-0 top-[68px] bottom-0 w-64 bg-white border-r border-slate-200 z-20 flex flex-col shadow-lg">
-        <div class="p-3 border-b bg-slate-50 flex justify-between items-center">
-            <span class="font-bold text-sm text-slate-700">📂 对话历史</span>
-            <button @click="newConversation" class="bg-indigo-500 hover:bg-indigo-600 text-white px-2 py-0.5 rounded text-xs">+ 新对话</button>
-        </div>
-        <div class="flex-1 overflow-y-auto p-2">
-            <div v-for="c in conversationList" :key="c.id"
-                 @click="loadConversation(c.id)"
-                 class="p-2 rounded mb-1 cursor-pointer hover:bg-indigo-50 text-sm truncate"
-                 :class="currentConvId === c.id ? 'bg-indigo-100 font-bold' : 'text-slate-600'">
-                {{ c.title }}
-                <button @click.stop="deleteConversation(c.id)" class="float-right text-red-400 hover:text-red-600 text-xs">✕</button>
+         class="absolute left-0 top-[68px] bottom-0 w-64 bg-white border-r border-slate-200 z-20 flex flex-col shadow-lg overflow-y-auto">
+        <!-- 构筑对话 -->
+        <div class="flex flex-col h-full">
+            <div class="p-3 border-b bg-slate-50 flex justify-between items-center shrink-0">
+                <span class="font-bold text-sm text-slate-700">🧩 构筑对话</span>
+                <button @click="newConversation" class="bg-indigo-500 hover:bg-indigo-600 text-white px-2 py-0.5 rounded text-xs">+ 新对话</button>
             </div>
-            <div v-if="conversationList.length === 0" class="text-slate-400 text-sm text-center mt-4">暂无对话</div>
+            <div class="flex-1 overflow-y-auto p-2">
+                <div v-for="c in conversationList" :key="c.id"
+                     @click="loadConversation(c.id)" class="p-2 rounded mb-1 cursor-pointer hover:bg-indigo-50 text-sm truncate"
+                     :class="currentConvId === c.id ? 'bg-indigo-100 font-bold' : 'text-slate-600'">
+                    {{ c.title }}
+                    <button @click.stop="deleteConversation(c.id)" class="float-right text-red-400 hover:text-red-600 text-xs">✕</button>
+                </div>
+                <div v-if="conversationList.length === 0" class="text-slate-400 text-sm text-center mt-4">暂无对话</div>
+            </div>
         </div>
     </div>
 
@@ -1072,15 +1075,26 @@
             const startThinking = () => {
                 isLoading.value = true;
                 const startMs = Date.now();
-                currentThought.value = "🧠 正在解析自然语言，提取核心构筑意图...";
+                currentThought.value = "🧠 阶段1/4 — 正在解析自然语言，提取核心构筑意图与情景需求...";
 
                 timerInterval = setInterval(() => {
                     const elapsed = (Date.now() - startMs) / 1000;
                     thinkTime.value = elapsed.toFixed(1);
 
-                    if (elapsed > 2 && elapsed <= 5) currentThought.value = "🌐 正在将中文意图翻译为官方英文标准 Slug...";
-                    else if (elapsed > 5 && elapsed <= 15) currentThought.value = "⚡ 正在调用虚拟线程库，向 Modrinth 发起大批量并发验证...";
-                    else if (elapsed > 15) currentThought.value = "🧩 正在根据加载器和游戏版本，装配过滤最终的蓝图清单...";
+                    if (elapsed > 2 && elapsed <= 5)
+                        currentThought.value = "🌐 阶段1/4 — 中文黑话翻译为英文 Slug，构建搜索关键词矩阵...";
+                    else if (elapsed > 5 && elapsed <= 12)
+                        currentThought.value = "⚡ 阶段2/4 — 多路并发召回，向 Modrinth 发起大批量虚拟线程验证...";
+                    else if (elapsed > 12 && elapsed <= 20)
+                        currentThought.value = "🕵️ 阶段3/4 — Critic 审核员正在评估候选池，剔除冲突模组、筛定最终名单...";
+                    else if (elapsed > 20 && elapsed <= 35)
+                        currentThought.value = "🛠️ 阶段4/4 — 图谱引擎运行中，BFS 深度依赖穿透 + 死链抢救 + 冲突检测...";
+                    else if (elapsed > 35 && elapsed <= 60)
+                        currentThought.value = "🛠️ 阶段4/4 — 仍在穿透深层依赖链，请耐心等待 Modrinth API 响应...";
+                    else if (elapsed > 60 && elapsed <= 90)
+                        currentThought.value = "⏳ 网络延迟较高，依赖穿透正在重试失败的请求 (已耗时 " + Math.floor(elapsed) + "s)...";
+                    else if (elapsed > 90)
+                        currentThought.value = "🧩 最终阶段 — 装配过滤蓝图清单，生成构筑图谱...";
                 }, 100);
             };
 
@@ -1319,8 +1333,46 @@
 
                 networkGraph = new vis.Network(container, {nodes: visNodes, edges: visEdges}, options);
 
+                // 物理引擎控制: 稳定后冻结; 拖动时唤醒; 松手后渐进减速再冻结
+                const enablePhysics = (dampingVal, iterations) => {
+                    networkGraph.setOptions({
+                        physics: {
+                            enabled: true,
+                            solver: 'barnesHut',
+                            barnesHut: {
+                                gravitationalConstant: -2000,
+                                centralGravity: 0.3,
+                                springLength: 150,
+                                springConstant: 0.04,
+                                damping: dampingVal,
+                                avoidOverlap: 0.5
+                            },
+                            stabilization: {
+                                enabled: true,
+                                iterations: iterations,
+                                fit: false
+                            }
+                        }
+                    });
+                };
+
                 networkGraph.on("stabilizationIterationsDone", function () {
                     networkGraph.setOptions({physics: {enabled: false}});
+                });
+
+                networkGraph.on("dragStart", function () {
+                    // 拖动时完全启用物理 (低阻尼, 长迭代, 让节点自由运动)
+                    enablePhysics(0.15, 1000);
+                });
+
+                networkGraph.on("dragEnd", function () {
+                    // 松手后渐进减速: 分两阶段
+                    // 阶段1 (立即): 中阻尼 400 迭代 → 快速减速
+                    enablePhysics(0.3, 400);
+                    // 阶段2 (2s后): 高阻尼 200 迭代 → 接近静止 → 完成后冻结
+                    setTimeout(() => {
+                        enablePhysics(0.6, 200);
+                    }, 2000);
                 });
 
                 networkGraph.on("click", (params) => {
@@ -1759,6 +1811,7 @@
                     }
                 }).catch(() => {});
             }
+
             const authHeader = () => authUser.value ? {'X-Auth-Token': authUser.value.token} : {};
 
             // 🔥 全局 fetch 包装: 捕获未登录错误并提示重新登录
@@ -2338,7 +2391,7 @@
                 isDownloadingPack,
                 canStartValidation,
                 openSandbox, startValidation, onFileSelected, handleFileDrop,
-                downloadValidatedPack
+                downloadValidatedPack,
             };
         }
     });
@@ -2346,5 +2399,17 @@
     app.component('tree-node', TreeNodeComponent);
     app.mount('#app');
 </script>
+
+<!-- 页脚备案信息 — 高 z-index 浮于页面底部 -->
+<div style="position:fixed;bottom:0;left:0;right:0;z-index:60;text-align:center;padding:4px 6px;background:rgba(255,255,255,0.92);font-size:11px;color:#94a3b8;line-height:1.4;border-top:1px solid rgba(0,0,0,0.06);">
+    <a href="https://beian.miit.gov.cn/" target="_blank" style="color:#94a3b8;text-decoration:none;">浙ICP备2026046361号-1</a>
+    &nbsp;|&nbsp;
+    <a href="https://beian.mps.gov.cn/#/query/webSearch?code=33010602014721" rel="noreferrer" target="_blank" style="color:#94a3b8;text-decoration:none;display:inline-flex;align-items:center;gap:4px;">
+        <img src="beian-icon.png" alt="公安备案" style="height:16px;vertical-align:middle;">
+        浙公网安备33010602014721号
+    </a>
+    &nbsp;|&nbsp;
+    &copy; Copyright MAA Project 2026 All rights reserved.
+</div>
 </body>
 </html>

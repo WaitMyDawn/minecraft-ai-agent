@@ -45,9 +45,13 @@ temp/
 # ===== 自用MD =====
 DEPLOY.md
 InsForAdmin.md
+RAG-project.md
+MAA-QA.md
+workflow.md
 
 # ===== 底座服务器 =====
 maa-base-server/
 
 # ===== other =====
 *.tar
+src/main/resources/static/beian-icon.png
