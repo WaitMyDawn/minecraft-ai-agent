@@ -8,6 +8,7 @@ import dev.langchain4j.service.SystemMessage;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import yagen.waitmydawn.maa.logging.MaaLog;
 
 import java.time.Duration;
 
@@ -16,8 +17,6 @@ public class AiAgentService {
 
     @Value("${ai.api.url}")
     private String apiUrl;
-
-    private final ModrinthTool modrinthTool;
 
     // 不复用 agent 实例, 每次请求根据用户 API key 动态创建
     // maxRetries(1) 确保用户终止思考时不会自动重试，立即响应中断
@@ -33,10 +32,6 @@ public class AiAgentService {
                 .frequencyPenalty(0.0)
                 .presencePenalty(0.0)
                 .build();
-    }
-
-    public AiAgentService(ModrinthTool modrinthTool) {
-        this.modrinthTool = modrinthTool;
     }
 
     // ==========================================
@@ -58,7 +53,7 @@ public class AiAgentService {
                 "【情境与隐性需求分析（极度重要）】",
                 "- [我想爽打怪]: 你需要分配 adventure, equipment, magic 权重，并生成如 dungeon, boss, loot, spell 等搜索词。",
                 "- [建筑党]: 需要 decoration, worldgen 权重，生成如 furniture, biomes, roof 等搜索词, 但要注意 worldgen 权重最高也不能超过5。",
-                "虽然模组类别有technology, magic, adventure, worldgen, food, storage, optimization, equipment, utillity, decoration, mobs, cursed, economy, game-mechanics, management, minigame, social, transportation, 但你不用每个类别都分配权重，而是要考虑用户指令给出的情景",
+                "虽然模组类别有technology, magic, adventure, worldgen, food, storage, optimization, equipment, utility, decoration, mobs, cursed, economy, game-mechanics, library, management, minigame, social, transportation, 但你不用每个类别都分配权重，而是要考虑用户指令给出的情景",
 
                 "【Diversity: 多样性原则 (极度重要)】",
                 "1. search_intents 必须覆盖至少 3-4 个不同类别，不能只集中在1-2个类别!",
@@ -197,25 +192,57 @@ public class AiAgentService {
         String diagnose(String crashLog);
     }
 
-    public String planBlueprint(String prompt, String userApiKey) {
-        var agent = AiServices.builder(ArchitectAgent.class)
-                .chatModel(createModel(userApiKey))
-                .chatMemory(MessageWindowChatMemory.withMaxMessages(20))
-                .build();
-        return agent.plan(prompt);
+    public String planBlueprint(String prompt, String userApiKey, Object... tools) {
+        String key = MaaLog.userKey();
+        MaaLog.user("=== Agent: Architect 开始 ===\n【完整输入】\n" + prompt);
+        long t0 = System.currentTimeMillis();
+        try {
+            var builder = AiServices.builder(ArchitectAgent.class)
+                    .chatModel(createModel(userApiKey));
+            if (tools != null && tools.length > 0) {
+                builder.tools(tools);
+            }
+            String output = builder.build().plan(prompt);
+            MaaLog.user("=== Agent: Architect 结束 (耗时 "
+                    + (System.currentTimeMillis() - t0) + "ms) ===\n【完整输出】\n" + output);
+            return output;
+        } catch (Exception e) {
+            MaaLog.error("Architect 调用失败", e);
+            throw e;
+        }
     }
 
     public String criticPools(String context, String userApiKey) {
-        var agent = AiServices.builder(CriticAgent.class)
-                .chatModel(createModel(userApiKey))
-                .build();
-        return agent.review(context);
+        MaaLog.user("=== Agent: Critic 开始 ===\n【完整输入】\n" + context);
+        long t0 = System.currentTimeMillis();
+        try {
+            var agent = AiServices.builder(CriticAgent.class)
+                    .chatModel(createModel(userApiKey))
+                    .build();
+            String output = agent.review(context);
+            MaaLog.user("=== Agent: Critic 结束 (耗时 "
+                    + (System.currentTimeMillis() - t0) + "ms) ===\n【完整输出】\n" + output);
+            return output;
+        } catch (Exception e) {
+            MaaLog.error("Critic 调用失败", e);
+            throw e;
+        }
     }
 
     public String diagnoseCrash(String log, String userApiKey) {
-        var agent = AiServices.builder(DoctorAgent.class)
-                .chatModel(createModel(userApiKey))
-                .build();
-        return agent.diagnose(log);
+        MaaLog.user("=== Agent: Doctor 开始 ===\n【完整输入】\n" + log);
+        long t0 = System.currentTimeMillis();
+        try {
+            var agent = AiServices.builder(DoctorAgent.class)
+                    .chatModel(createModel(userApiKey))
+                    .build();
+            String output = agent.diagnose(log);
+            MaaLog.user("=== Agent: Doctor 结束 (耗时 "
+                    + (System.currentTimeMillis() - t0) + "ms) ===\n【完整输出】\n" + output);
+            return output;
+        } catch (Exception e) {
+            MaaLog.error("Doctor 调用失败", e);
+            throw e;
+        }
     }
 }

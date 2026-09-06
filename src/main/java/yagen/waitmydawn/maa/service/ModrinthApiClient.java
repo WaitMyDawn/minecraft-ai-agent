@@ -22,6 +22,27 @@ public class ModrinthApiClient {
         return executeWithSmartRetry("https://api.modrinth.com/v2/project/{id}/version?game_versions=[\"{v}\"]&loaders={l}", projectId, mcVersion, loaders);
     }
 
+    /**
+     * 方案 A 优先：直接按 slug 查最新兼容版本；若该 slug 路由 404/无结果，
+     * 走方案 B：projectInfo 解析出稳定 project_id 后用 id 再查一次。
+     * 返回 null 表示该 slug 在当前 loader+mc 下没有可用版本（或项目已不存在）。
+     */
+    @Cacheable(value = "modVersionsBySlug", key = "#slug + '|' + #mcVersion + '|' + #loader", sync = true)
+    public JsonNode getLatestCompatibleVersionBySlug(String slug, String mcVersion, String loader) {
+        String loaders = "[\"" + loader + "\"]";
+        JsonNode version = executeWithSmartRetry(
+                "https://api.modrinth.com/v2/project/{slug}/version?game_versions=[\"{v}\"]&loaders={l}",
+                slug, mcVersion, loaders);
+        if (version != null) {
+            return version;
+        }
+        JsonNode info = getProjectInfo(slug);
+        if (info == null || !info.has("id")) {
+            return null;
+        }
+        return getLatestVersion(info.path("id").asText(), mcVersion, loaders);
+    }
+
     @Cacheable(value = "projectInfo", key = "#slugOrId", sync = true)
     public JsonNode getProjectInfo(String slugOrId) {
         return executeWithSmartRetry("https://api.modrinth.com/v2/project/{id}", slugOrId);

@@ -3,6 +3,7 @@ package yagen.waitmydawn.maa.service;
 import tools.jackson.databind.JsonNode;
 import org.springframework.stereotype.Service;
 import yagen.waitmydawn.maa.model.DependencyGraph;
+import yagen.waitmydawn.maa.logging.MaaLog;
 import yagen.waitmydawn.maa.model.KnowledgeRule;
 
 import java.util.*;
@@ -19,6 +20,12 @@ public class DependencyEngine {
     private final KnowledgeDb knowledgeDb;
 
     private final Semaphore rateLimiter = new Semaphore(5);
+    /** 整包解析结果缓存：key=loader|mc|sortedSlugs，TTL 10 分钟（避免 chat→preview 重复 BFS） */
+    private static final long RESOLVE_CACHE_TTL_MS = 10 * 60 * 1000L;
+    private final ConcurrentHashMap<String, ResolveCacheHit> resolveCache = new ConcurrentHashMap<>();
+
+    private record ResolveCacheHit(long cachedAt, Set<String> ordered) {
+    }
 
     // 开发者/调试工具类模组黑名单 — 它们会严重修改游戏本体，不适合玩家整合包
     private static final Set<String> BLOCKED_DEV_MODS = Set.of(
@@ -41,7 +48,17 @@ public class DependencyEngine {
      * 深度依赖穿透 — 返回扁平 slug 集合 (保持向后兼容)
      */
     public Set<String> resolveFullDependencies(Set<String> initialSlugs, String loader, String mcVersion) {
-        return resolveFullDependenciesWithGraph(initialSlugs, loader, mcVersion).getOrderedSlugs();
+        String key = loader + "|" + mcVersion + "|"
+                + new java.util.TreeSet<>(initialSlugs);
+        ResolveCacheHit hit = resolveCache.get(key);
+        long now = System.currentTimeMillis();
+        if (hit != null && now - hit.cachedAt < RESOLVE_CACHE_TTL_MS) {
+            return new LinkedHashSet<>(hit.ordered);
+        }
+        Set<String> ordered = resolveFullDependenciesWithGraph(initialSlugs, loader, mcVersion).getOrderedSlugs();
+        if (resolveCache.size() > 50) resolveCache.clear();
+        resolveCache.put(key, new ResolveCacheHit(now, new LinkedHashSet<>(ordered)));
+        return new LinkedHashSet<>(ordered);
     }
 
     /**
@@ -61,6 +78,7 @@ public class DependencyEngine {
                 + ", loader=" + loader + ", mc=" + mcVersion);
 
         Map<String, String> idToSlugCache = new ConcurrentHashMap<>();
+        String ctxKey = MaaLog.userKey();
         int bfsLevel = 0;
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -78,7 +96,7 @@ public class DependencyEngine {
                 for (String slugOrId : queue) {
                     if (slugOrId == null || slugOrId.trim().isEmpty()) continue;
 
-                    futures.add(CompletableFuture.runAsync(() -> {
+                    futures.add(CompletableFuture.runAsync(() -> MaaLog.runWithUser(ctxKey, () -> {
                         try {
                             rateLimiter.acquire();
 
@@ -165,7 +183,7 @@ public class DependencyEngine {
                                 System.out.printf("    进度: %d/%d (失败:%d)%n", done, currentQueueSize, failed.get());
                             }
                         }
-                    }, executor));
+                    }), executor));
                 }
                 CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
                 long levelMs = System.currentTimeMillis() - levelStart;

@@ -33,14 +33,18 @@ public class ModpackController {
     private final ObjectMapper objectMapper;
     private final KnowledgeDb knowledgeDb;
     private final MrpackParser mrpackParser;
+    private final LoaderVersionService loaderVersionService;
 
-    public ModpackController(DependencyEngine dependencyEngine, ModrinthApiClient apiClient, ObjectMapper objectMapper, KnowledgeDb knowledgeDb, RestClient restClient, MrpackParser mrpackParser) {
+    public ModpackController(DependencyEngine dependencyEngine, ModrinthApiClient apiClient, ObjectMapper objectMapper,
+                             KnowledgeDb knowledgeDb, RestClient restClient, MrpackParser mrpackParser,
+                             LoaderVersionService loaderVersionService) {
         this.dependencyEngine = dependencyEngine;
         this.apiClient = apiClient;
         this.restClient = restClient;
         this.objectMapper = objectMapper;
         this.knowledgeDb = knowledgeDb;
         this.mrpackParser = mrpackParser;
+        this.loaderVersionService = loaderVersionService;
     }
 
     public static class ModpackRequest {
@@ -183,9 +187,14 @@ public class ModpackController {
 
             ObjectNode dependencies = indexJson.putObject("dependencies");
             dependencies.put("minecraft", request.mcVersion);
-            if ("neoforge".equalsIgnoreCase(request.loader)) dependencies.put("neoforge", "21.1.231");
-            else if ("fabric".equalsIgnoreCase(request.loader)) dependencies.put("fabric-loader", "0.16.9");
-            else if ("forge".equalsIgnoreCase(request.loader)) dependencies.put("forge", "51.0.32");
+            try {
+                dependencies.put(
+                        loaderVersionService.dependencyKey(request.loader),
+                        loaderVersionService.resolve(request.loader, request.mcVersion));
+            } catch (IllegalArgumentException e) {
+                System.err.println("buildPack: " + e.getMessage());
+                return ResponseEntity.badRequest().build();
+            }
 
             ArrayNode filesArray = indexJson.putArray("files");
 

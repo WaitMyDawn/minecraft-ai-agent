@@ -30,6 +30,7 @@ desktop.ini
 maa_db/*.mv.db
 maa_db/*.trace.db
 maa_db/*.lock.db
+logs/
 
 # ===== 日志 =====
 *.log
@@ -48,6 +49,7 @@ InsForAdmin.md
 RAG-project.md
 MAA-QA.md
 workflow.md
+TODO.md
 
 # ===== 底座服务器 =====
 maa-base-server/

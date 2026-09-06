@@ -4,6 +4,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import yagen.waitmydawn.maa.logging.MaaLog;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -17,6 +18,7 @@ public class MinecraftAiAgentApplication {
 
     public static void main(String[] args) {
         loadEnvFile();
+        MaaLog.install();
         SpringApplication.run(MinecraftAiAgentApplication.class, args);
     }
 

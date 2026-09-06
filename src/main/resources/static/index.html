@@ -5,6 +5,7 @@
     <title>MAA 整合包构筑台</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
     <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <style>
         ::-webkit-scrollbar {
@@ -58,6 +59,51 @@
 
         details > summary::-webkit-details-marker {
             display: none;
+        }
+
+        .chat-markdown {
+            word-break: break-word;
+        }
+        .chat-markdown h1, .chat-markdown h2, .chat-markdown h3, .chat-markdown h4 {
+            font-weight: bold;
+            margin: 0.6em 0 0.25em;
+        }
+        .chat-markdown h1 { font-size: 1.25em; }
+        .chat-markdown h2 { font-size: 1.15em; }
+        .chat-markdown h3 { font-size: 1.05em; }
+        .chat-markdown p {
+            margin: 0.35em 0;
+        }
+        .chat-markdown ul, .chat-markdown ol {
+            margin: 0.35em 0;
+            padding-left: 1.3em;
+        }
+        .chat-markdown li {
+            margin: 0.1em 0;
+        }
+        .chat-markdown code {
+            background: #f1f5f9;
+            padding: 0.1em 0.3em;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+        .chat-markdown pre {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 0.6em 0.75em;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 0.85em;
+            margin: 0.4em 0;
+        }
+        .chat-markdown pre code {
+            background: transparent;
+            padding: 0;
+        }
+        .chat-markdown hr {
+            border: none;
+            border-top: 1px solid #e2e8f0;
+            margin: 0.6em 0;
         }
 
     </style>
@@ -114,7 +160,9 @@
                     </div>
                 </details>
 
-                {{ msg.content }}
+                <!-- AI 消息走安全 Markdown 渲染；用户消息保持纯文本 -->
+                <div v-if="msg.role === 'ai'" class="chat-markdown" v-html="renderMarkdownSafe(msg.content)"></div>
+                <span v-else class="whitespace-pre-wrap">{{ msg.content }}</span>
                 <div v-if="msg.role === 'ai' && msg.hasData" class="mt-3">
                     <button @click="openLab"
                             class="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-6 rounded-lg shadow transition flex items-center gap-2">
@@ -1213,7 +1261,7 @@
                         packData.loader = (aiReply.match(/<loader>(.*?)<\/loader>/s) || [])[1] || packData.loader;
                         hasData = true;
                     }
-                    const cleanReply = aiReply.replace(/<name>.*?<\/name>|<mc>.*?<\/mc>|<loader>.*?<\/loader>|<mods>.*?<\/mods>/gs, '').trim();
+                    const cleanReply = aiReply.replace(/<name>.*?<\/name>|<mc>.*?<\/mc>|<loader>.*?<\/loader>|<ops_summary>.*?<\/ops_summary>|<mods>.*?<\/mods>/gs, '').trim();
                     const finalTime = thinkTime.value;
                     stopThinking();
                     chatHistory.value.push({
@@ -1439,7 +1487,7 @@
             // 完整的官方可用分类池
             const availableCategories = ['technology', 'magic', 'adventure', 'worldgen', 'food',
                 'storage', 'optimization', 'equipment', 'utility', 'decoration',
-                'mobs', 'cursed', 'economy', 'game-mechanics', 'management',
+                'mobs', 'cursed', 'economy', 'game-mechanics', 'library', 'management',
                 'minigame', 'social', 'transportation'];
             const suggestForm = reactive({ categories: [], minDownloads: 0, maxDownloads: 2100000000, sortType: 'downloads', page: 0 });
 
@@ -2350,6 +2398,24 @@
                 }
             };
 
+            // 🔥 AI 消息安全 Markdown 渲染：先转义 HTML（防 XSS），再 marked 渲染；
+            // 连续空行折叠为一段间距，缓解"大段空白"问题
+            const escapeHtml = (s) => String(s ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+            const renderMarkdownSafe = (content) => {
+                if (!content) return '';
+                const text = String(content).replace(/\n{3,}/g, '\n\n').trim();
+                try {
+                    if (typeof marked !== 'undefined' && marked.parse) {
+                        return marked.parse(escapeHtml(text), {gfm: true, breaks: false});
+                    }
+                } catch (e) { /* fallthrough */ }
+                return escapeHtml(text).replace(/\n/g, '<br>');
+            };
+
             return {
                 currentView, chatHistory, userInput, isLoading, thinkTime, currentThought,
                 isResolving, isBuilding,
@@ -2363,6 +2429,7 @@
                 // 🔐 auth
                 showAuthModal, authMode, authForm, authError, authSuccess, authLoading, authUser, showSidebar,
                 doAuth, logout,
+                renderMarkdownSafe,
                 // 📂 conversations
                 conversationList, currentConvId, loadConversation, deleteConversation, newConversation,
                 // 👤 profile

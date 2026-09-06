@@ -10,4 +10,5 @@ services:
     volumes:
       - ./maa-app.jar:/app/app.jar
       - ./maa_db:/app/maa_db
+      - ./maa_logs:/app/logs
       - ./maa-base-server:/app/maa-base-server

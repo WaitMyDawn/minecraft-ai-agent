@@ -1,14 +1,14 @@
 package yagen.waitmydawn.maa;
 
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-import yagen.waitmydawn.maa.service.ModrinthTool;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import yagen.waitmydawn.maa.service.LoaderVersionService;
 
 import java.util.*;
 
@@ -17,14 +17,14 @@ public class ModDependencyResolver {
 
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final ModrinthTool modrinthTool;
+    private final LoaderVersionService loaderVersionService;
 
     // 缓存，避免重复请求
     private final Map<String, JsonNode> projectCache = new HashMap<>();
     private final Map<String, List<JsonNode>> versionCache = new HashMap<>();
 
-    public ModDependencyResolver(ModrinthTool modrinthTool) {
-        this.modrinthTool = modrinthTool;
+    public ModDependencyResolver(LoaderVersionService loaderVersionService) {
+        this.loaderVersionService = loaderVersionService;
     }
 
     public static class ModVersionInfo {
@@ -49,7 +49,7 @@ public class ModDependencyResolver {
     }
 
     /**
-     * 解析模组的所有依赖（使用BFS算法深度解析）
+     * 解析模组的所有依赖（使用BFS算法深度解析）。
      */
     public Map<String, ModVersionInfo> resolveAllDependencies(
             List<String> coreModSlugs,
@@ -81,13 +81,13 @@ public class ModDependencyResolver {
             if (processed.contains(key)) continue;
             processed.add(key);
 
-            System.out.println("🔍 处理模组: " + slugOrId);
+            System.out.println("处理模组: " + slugOrId);
 
             try {
-                // 1. 获取项目信息（如果还没有）
+                // 1. 获取项目信息
                 JsonNode projectInfo = getProjectInfo(slugOrId);
                 if (projectInfo == null) {
-                    System.out.println("   ❌ 无法获取项目信息: " + slugOrId);
+                    System.out.println("无法获取项目信息: " + slugOrId);
                     continue;
                 }
 
@@ -103,7 +103,7 @@ public class ModDependencyResolver {
                     // 尝试备用加载器
                     String altLoader = getAlternativeLoader(loader);
                     if (altLoader != null) {
-                        System.out.println("   🔄 尝试备用加载器: " + altLoader);
+                        System.out.println("尝试备用加载器: " + altLoader);
                         versionInfo = findBestVersion(
                                 projectId, slug, gameVersion, altLoader, entity
                         );
@@ -115,7 +115,7 @@ public class ModDependencyResolver {
 
                 if (versionInfo != null) {
                     resolvedMods.put(slug, versionInfo);
-                    System.out.println("   ✅ 找到版本: " + versionInfo.filename);
+                    System.out.println("找到版本: " + versionInfo.filename);
 
                     // 3. 处理依赖
                     for (ModVersionInfo.Dependency dep : versionInfo.dependencies) {
@@ -123,26 +123,26 @@ public class ModDependencyResolver {
                             // 获取依赖的slug
                             String depSlug = getSlugFromProjectId(dep.projectId, entity);
                             if (depSlug != null && !resolvedMods.containsKey(depSlug) && !toProcess.contains(depSlug)) {
-                                System.out.println("   🔗 添加依赖: " + depSlug + " (来自 " + slug + ")");
+                                System.out.println("添加依赖: " + depSlug + " (来自 " + slug + ")");
                                 toProcess.add(depSlug);
                             }
                         } else if ("incompatible".equals(dep.dependencyType)) {
-                            System.out.println("   ⚠️  发现冲突: " + slug + " 与 " + dep.projectId + " 不兼容");
+                            System.out.println("发现冲突: " + slug + " 与 " + dep.projectId + " 不兼容");
                         }
                     }
                 } else {
-                    System.out.println("   ⚠️  未找到 " + slugOrId + " 适配 " + gameVersion + " " + loader + " 的版本");
+                    System.out.println("未找到 " + slugOrId + " 适配 " + gameVersion + " " + loader + " 的版本");
 
                     // 尝试搜索相似的模组
                     String similarMod = searchSimilarMod(slugOrId, gameVersion, loader);
                     if (similarMod != null && !processed.contains(similarMod)) {
-                        System.out.println("   💡 找到相似模组: " + similarMod);
+                        System.out.println("找到相似模组: " + similarMod);
                         toProcess.add(similarMod);
                     }
                 }
 
             } catch (Exception e) {
-                System.out.println("   ❌ 处理失败: " + e.getMessage());
+                System.out.println("处理失败: " + e.getMessage());
                 e.printStackTrace();
             }
         }
@@ -206,7 +206,7 @@ public class ModDependencyResolver {
                 }
                 if (!loaderMatch) continue;
 
-                // 计算总分
+                // 计算总得分
                 int totalScore = loaderScore;
 
                 // 优先选择稳定版（非alpha/beta）
@@ -345,17 +345,9 @@ public class ModDependencyResolver {
     }
 
     /**
-     * 获取最新版本的加载器
+     * 获取最新版本的加载器（版本数据由 LoaderVersionService 统一在线维护）。
      */
     public String getLatestLoaderVersion(String loader, String gameVersion) {
-        // 简化版本，实际应该从API获取
-        if ("neoforge".equalsIgnoreCase(loader)) {
-            return "21.1.218";
-        } else if ("fabric".equalsIgnoreCase(loader)) {
-            return "0.16.5";
-        } else if ("forge".equalsIgnoreCase(loader)) {
-            return "51.0.30";
-        }
-        return "latest";
+        return loaderVersionService.resolve(loader, gameVersion);
     }
 }

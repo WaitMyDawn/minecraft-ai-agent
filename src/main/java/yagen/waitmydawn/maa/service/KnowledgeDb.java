@@ -1,11 +1,17 @@
 package yagen.waitmydawn.maa.service;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import yagen.waitmydawn.maa.model.KnowledgeRule;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.Optional;
 
@@ -13,85 +19,96 @@ import java.util.Optional;
 interface KnowledgeRuleRepo extends JpaRepository<KnowledgeRule, Long> {
     List<KnowledgeRule> findByEnvironment(String environment);
 
-    // 用于爬虫去重检查
+    // 用于爬虫去重检测
     boolean existsByEnvironmentAndModAAndModB(String environment, String modA, String modB);
 
-    // 🔥 修复：必须给删除操作显式打上 @Transactional 注解，让它在独立事务中安全执行
+    // 修复：必须给删除操作显式打上 @Transactional 注解，让它在独立事务中安全执行
     @Transactional
     void deleteBySourceType(KnowledgeRule.SourceType sourceType);
 }
 
+/**
+ * ADMIN 知识规则完全由外部 JSON 文件管理：maa_db/rules.json。
+ * 直接修改该文件后重启即可生效，无需重新编译；
+ * 每次启动都会先清空 ADMIN 规则再从 JSON 重新导入，
+ * USER_FEEDBACK 与 MODRINTH 来源的规则不受影响。
+ */
 @Service
-// 🔥 修复：实现 CommandLineRunner 接口，确保在 Spring 完全启动后再执行数据库覆盖
 public class KnowledgeDb implements CommandLineRunner {
     private final KnowledgeRuleRepo repo;
+    private final ObjectMapper objectMapper;
 
-    public KnowledgeDb(KnowledgeRuleRepo repo) {
+    @Value("${maa.rules.path:maa_db/rules.json}")
+    private String rulesPath;
+
+    public KnowledgeDb(KnowledgeRuleRepo repo, ObjectMapper objectMapper) {
         this.repo = repo;
+        this.objectMapper = objectMapper;
     }
 
-    // 实现了 CommandLineRunner 的 run 方法，项目启动成功后会自动调用此方法
+    // 实现 CommandLineRunner 的 run 方法，项目启动成功后会自动调用
     @Override
     public void run(String... args) {
         initAdminRules();
     }
 
-    // 去掉了 @PostConstruct，避免过早执行
     public void initAdminRules() {
-        // 🔥 仅覆盖 ADMIN 来源的规则，USER_FEEDBACK 和 MODRINTH 来源不受影响
+        // 仅清空 ADMIN 来源的规则，USER_FEEDBACK 和 MODRINTH 来源不受影响
         long beforeCount = repo.count();
         repo.deleteBySourceType(KnowledgeRule.SourceType.ADMIN);
         long afterCount = repo.count();
-        System.out.println("🧹 已清理 ADMIN 规则 (清除 " + (beforeCount - afterCount) + " 条), 保留非 ADMIN 规则 " + afterCount + " 条");
+        System.out.println("已清理 ADMIN 规则 (清除 " + (beforeCount - afterCount)
+                + " 条, 保留非 ADMIN 规则 " + afterCount + " 条)");
 
-        // 2. 重新载入最新的管理员代码配置
-        String env = "neoforge-1.21.1";
-        repo.save(new KnowledgeRule(env, "irons-spells-n-spellbooks", "geckolib", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "irons-spells-n-spellbooks", "curios", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "irons-spells-n-spellbooks", "playeranimator", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "irons-spells-n-spellbooks", "irons-lib", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "regions-unexplored", "lithostitched", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "regions-unexplored", "biolith", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "l_enders-cataclysm", "lionfish-api", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "malum", "lodestonelib", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "quark", "zeta", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "supplementaries", "moonlight", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "fzzy-config", "kotlin-for-forge", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "item-highlighter", "iceberg", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "relics-mod", "octo-lib", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "vanillabackport", "platform", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "numismatic-bounties", "bountiful", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "esf", "entity-model-features", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "esf", "entitytexturefeatures", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "tensura-reincarnated", "manascore", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "tensura-reincarnated", "geckolib", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "tensura-reincarnated", "terrablender", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "twilight-delight", "twilightforest", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "expanded-delight", "farmers-delight", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "alshanexs-familiars", "familiarslib", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "bountiful", "kambrik", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "sodium-options-api", "reeses-sodium-options", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "dungeons-content-plus", "dungeons-content", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "pastel-mod", "databank", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "pastel-mod", "exclusions-lib", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "spells-gone-wrong", "jinxedlib", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "claim-my-land", "gottschcore", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "deeper-and-darker-spellbooks", "deeperdarker", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "deeper-and-darker-spellbooks", "irons-spells-n-spellbooks", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "compat-structure", "compat-api", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "epic-samurais", "terrablender", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "epic-samurais", "oh-the-trees-youll-grow", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "tensura-not-enough-bosses", "tensura-reincarnated", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "tensura-compat-open-parties-and-claims", "tensura-reincarnated", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "tr-addon", "tensura-reincarnated", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "tensura-better-subordinates", "tensura-reincarnated", "DEPENDS_ON", KnowledgeRule.SourceType.ADMIN, 999));
+        JsonNode root = readRulesFile();
+        int imported = importAdminRules(root);
+        System.out.println("ADMIN 知识库已从 " + rulesPath + " 重新导入 " + imported + " 条规则并覆盖写入");
+    }
 
-        repo.save(new KnowledgeRule(env, "optifine", "embeddium", "CONFLICTS_WITH", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "sodium", "embeddium", "CONFLICTS_WITH", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "sodium", "supplementaries", "CONFLICTS_WITH", KnowledgeRule.SourceType.ADMIN, 999));
-        repo.save(new KnowledgeRule(env, "shoulder-surfing-reloaded", "better-third-person", "CONFLICTS_WITH", KnowledgeRule.SourceType.ADMIN, 999));
+    private JsonNode readRulesFile() {
+        Path file = Paths.get(rulesPath);
+        try {
+            if (!Files.exists(file)) {
+                throw new IllegalStateException("缺少 ADMIN 规则文件: " + file.toAbsolutePath()
+                        + "（请创建该文件或检查 maa.rules.path 配置）");
+            }
+            System.out.println("使用规则文件: " + file.toAbsolutePath());
+            return objectMapper.readTree(Files.readAllBytes(file));
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("读取规则文件失败: " + file.toAbsolutePath(), e);
+        }
+    }
 
-        System.out.println("💾 管理员硬编码知识库已在系统就绪后重新加载并覆盖写入！");
+    private int importAdminRules(JsonNode root) {
+        int imported = 0;
+        if (root == null || !root.isObject()) {
+            return 0;
+        }
+        for (String environment : root.propertyNames()) {
+            if (environment.startsWith("_")) {
+                continue; // 允许存放 _comment 等说明字段
+            }
+            JsonNode rules = root.get(environment);
+            if (rules == null || !rules.isArray()) {
+                continue;
+            }
+            for (JsonNode rule : rules) {
+                String modA = rule.path("modA").asText("");
+                String modB = rule.path("modB").asText("");
+                String relationType = rule.path("relationType").asText("");
+                if (modA.isBlank() || modB.isBlank() || relationType.isBlank()) {
+                    throw new IllegalStateException(
+                            "rules.json 规则缺少 modA/modB/relationType: " + environment);
+                }
+                int confirmCount = rule.path("confirmCount").asInt(999);
+                repo.save(new KnowledgeRule(environment, modA, modB, relationType,
+                        KnowledgeRule.SourceType.ADMIN, confirmCount));
+                imported++;
+            }
+        }
+        return imported;
     }
 
     // 获取当前环境下所有生效的规则
@@ -119,7 +136,7 @@ public class KnowledgeDb implements CommandLineRunner {
         repo.save(rule);
     }
 
-    /** 获取活跃规则，可按 sourceType 过滤 (null=全部, 用于排除某类来源) */
+    /** 获取活跃规则，可按 sourceType 过滤 (null=全部) */
     public List<KnowledgeRule> getActiveRules(String environment, KnowledgeRule.SourceType excludeSource) {
         return repo.findByEnvironment(environment).stream()
                 .filter(r -> r.confirmCount >= 3 || r.sourceType == KnowledgeRule.SourceType.ADMIN

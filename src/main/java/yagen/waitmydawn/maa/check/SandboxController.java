@@ -20,6 +20,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import yagen.waitmydawn.maa.service.ModrinthApiClient;
 import yagen.waitmydawn.maa.service.MrpackParser;
+import yagen.waitmydawn.maa.service.LoaderVersionService;
 import yagen.waitmydawn.maa.controller.UserController;
 
 import java.io.ByteArrayOutputStream;
@@ -56,6 +57,7 @@ public class SandboxController {
     private final ModrinthApiClient apiClient;
     private final ObjectMapper objectMapper;
     private final UserController userController;
+    private final LoaderVersionService loaderVersionService;
 
     @Value("${ai.api.key:}")
     private String systemDefaultApiKey;
@@ -63,7 +65,7 @@ public class SandboxController {
     public SandboxController(SandboxTesterService testerService, CrashLogParser crashLogParser,
                              SelfHealingEngine selfHealingEngine, MrpackParser mrpackParser,
                              ModrinthApiClient apiClient, ObjectMapper objectMapper,
-                             UserController userController) {
+                             UserController userController, LoaderVersionService loaderVersionService) {
         this.testerService = testerService;
         this.crashLogParser = crashLogParser;
         this.selfHealingEngine = selfHealingEngine;
@@ -71,6 +73,7 @@ public class SandboxController {
         this.apiClient = apiClient;
         this.objectMapper = objectMapper;
         this.userController = userController;
+        this.loaderVersionService = loaderVersionService;
     }
 
     @GetMapping("/test")
@@ -342,9 +345,14 @@ public class SandboxController {
 
             ObjectNode deps = indexJson.putObject("dependencies");
             deps.put("minecraft", mcVersion);
-            if ("neoforge".equalsIgnoreCase(loader)) deps.put("neoforge", "21.1.231");
-            else if ("fabric".equalsIgnoreCase(loader)) deps.put("fabric-loader", "0.16.9");
-            else if ("forge".equalsIgnoreCase(loader)) deps.put("forge", "51.0.32");
+            try {
+                deps.put(
+                        loaderVersionService.dependencyKey(loader),
+                        loaderVersionService.resolve(loader, mcVersion));
+            } catch (IllegalArgumentException e) {
+                System.err.println("buildValidatedPack: " + e.getMessage());
+                return ResponseEntity.badRequest().build();
+            }
 
             ArrayNode filesArray = indexJson.putArray("files");
 
