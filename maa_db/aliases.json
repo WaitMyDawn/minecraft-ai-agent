@@ -1,0 +1,14 @@
+{
+  "_comment": "模组别名词典：中文黑话/常用说法 -> Modrinth slug。与 rules.json 同样的运维方式，改完重启即可生效。键不区分大小写，多个说法可以指向同一个 slug。",
+  "aliases": {
+    "铁魔法": "irons-spells-n-spellbooks",
+    "灾变": "l_enders-cataclysm",
+    "冰火传说社区版": "iceandfire-ce",
+    "地牢浮现之时": "when-dungeons-arise",
+    "农夫乐事": "farmers-delight",
+    "机械动力": "create",
+    "rs存储": "refined-storage",
+    "应用能源2": "ae2",
+    "ae2": "ae2"
+  }
+}

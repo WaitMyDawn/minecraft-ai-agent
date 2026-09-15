@@ -34,10 +34,12 @@ public class ModpackController {
     private final KnowledgeDb knowledgeDb;
     private final MrpackParser mrpackParser;
     private final LoaderVersionService loaderVersionService;
+    /** P6-C：preview 与 build 之间的包清单快照 */
+    private final PackManifestService manifestService;
 
     public ModpackController(DependencyEngine dependencyEngine, ModrinthApiClient apiClient, ObjectMapper objectMapper,
                              KnowledgeDb knowledgeDb, RestClient restClient, MrpackParser mrpackParser,
-                             LoaderVersionService loaderVersionService) {
+                             LoaderVersionService loaderVersionService, PackManifestService manifestService) {
         this.dependencyEngine = dependencyEngine;
         this.apiClient = apiClient;
         this.restClient = restClient;
@@ -45,6 +47,7 @@ public class ModpackController {
         this.knowledgeDb = knowledgeDb;
         this.mrpackParser = mrpackParser;
         this.loaderVersionService = loaderVersionService;
+        this.manifestService = manifestService;
     }
 
     public static class ModpackRequest {
@@ -52,6 +55,8 @@ public class ModpackController {
         public String mcVersion;
         public String loader;
         public List<String> modSlugs;
+        /** 用户在图谱里显式删除的模组（P2）：解析后一律剔除，并报告由此产生的断链 */
+        public List<String> excludedSlugs;
         public boolean excludeUserFeedbackRules;
     }
 
@@ -59,6 +64,11 @@ public class ModpackController {
         public String name;
         public String mcVersion;
         public String loader;
+        /** P6-C：preview 返回的清单快照 id（推荐路径，保证导出 = 用户看到的那一份） */
+        public String manifestId;
+        /** 勾选的节点 id（= projectId）；为空表示全选 */
+        public List<String> selectedIds;
+        /** 兼容旧前端的直传路径（无 manifestId 时才使用） */
         public List<JsonNode> selectedFiles;
     }
 
@@ -122,8 +132,11 @@ public class ModpackController {
                                 .put("title", projectInfo.path("title").asText())
                                 .put("icon", projectInfo.path("icon_url").asText())
                                 .put("description", projectInfo.path("description").asText())
-                                .put("versionId", latestVersion.path("version_number").asText())
-                                .set("fileInfo", latestVersion.path("files").get(0));
+                                // P6-C：versionId 必须是 Modrinth 的唯一版本 id（以前填的是 version_number 展示号，
+                                // 两者语义不同：同一个展示号在不同 loader 下会有多个版本 id）
+                                .put("versionId", latestVersion.path("id").asText())
+                                .put("versionNumber", latestVersion.path("version_number").asText())
+                                .set("fileInfo", pickPrimaryFile(latestVersion.path("files")));
                         synchronized (nodesArray) {
                             nodesArray.add(node);
                         }
@@ -167,13 +180,129 @@ public class ModpackController {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         }
 
+        // 🗑️ 应用用户在图谱里的显式删除，并回填断链诊断（P2）
+        ArrayNode conflictsArray = responseJson.putArray("conflicts");
+        int conflictCount = applyExcludedSlugs(nodesArray, edgesArray, conflictsArray, request.excludedSlugs);
+        responseJson.put("excludedCount", request.excludedSlugs == null ? 0 : request.excludedSlugs.size());
+        if (conflictCount > 0) {
+            System.out.println("🗑️ 删除诊断: " + conflictCount + " 项保留模组缺少必需前置（已被用户删除）");
+        }
+
         responseJson.put("timeMs", System.currentTimeMillis() - startTime);
+        // P6-C：登记本次解析的快照，build 只按 manifestId 取件 → 导出与预览必然是同一份
+        List<String> nodeIds = new ArrayList<>();
+        List<JsonNode> nodeFiles = new ArrayList<>();
+        for (JsonNode n : nodesArray) {
+            nodeIds.add(n.path("id").asText());
+            nodeFiles.add(n.path("fileInfo"));
+        }
+        String manifestId = manifestService.register(nodeIds, nodeFiles,
+                request.loader.toLowerCase(), request.mcVersion);
+        responseJson.put("manifestId", manifestId);
+        responseJson.put("manifestSize", manifestService.sizeOf(manifestId));
         return ResponseEntity.ok(responseJson);
+    }
+
+    /**
+     * 应用用户的显式删除（P2）。
+     *
+     * <p>删除语义：勾选 = 本次导出是否包含（前端临时状态）；删除 = 从整合包清单移除（持久）。
+     * 被删模组可能仍被依赖引擎当作"必需前置"重新解析出来，因此必须在解析结果上再剔除一次。
+     *
+     * <p>剔除时同步维护边：被删节点作为依赖方(to) → 直接丢弃；作为前置(from) → 丢弃并记一条断链诊断，
+     * 让前端明确知道"保留的模组缺了哪个前置"，而不是静默导出一个会崩的包。
+     *
+     * @return 断链诊断条数
+     */
+    /**
+     * 取要导出的文件（P6-C）：优先标了 {@code primary:true} 的主文件。
+     *
+     * <p>旧实现直接取 {@code files[0]}，当版本里同时有主文件与 sources/javadoc 等附加文件时，
+     * 可能选中非主文件导致导出错件。没有 primary 标记时按 Modrinth 约定回退首个。
+     */
+    private JsonNode pickPrimaryFile(JsonNode files) {
+        if (files == null || !files.isArray() || files.isEmpty()) return null;
+        for (JsonNode f : files) {
+            if (f.path("primary").asBoolean(false)) return f;
+        }
+        return files.get(0);
+    }
+
+    private int applyExcludedSlugs(ArrayNode nodesArray, ArrayNode edgesArray, ArrayNode conflictsArray,
+                                   List<String> excludedSlugs) {
+        if (excludedSlugs == null || excludedSlugs.isEmpty()) return 0;
+        Set<String> excluded = new LinkedHashSet<>();
+        for (String s : excludedSlugs) {
+            if (s != null && !s.isBlank()) excluded.add(s.trim());
+        }
+        if (excluded.isEmpty()) return 0;
+
+        Map<String, String> idToSlug = new HashMap<>();
+        Map<String, String> slugToId = new HashMap<>();
+        for (JsonNode n : nodesArray) {
+            String id = n.path("id").asText();
+            String slug = n.path("slug").asText();
+            idToSlug.put(id, slug);
+            slugToId.put(slug, id);
+        }
+        // 前端传的是 slug；同时兼容直接传 projectId 的情况
+        Set<String> excludedIds = new HashSet<>();
+        for (String slug : excluded) {
+            String bySlug = slugToId.get(slug);
+            excludedIds.add(bySlug != null ? bySlug : slug);
+        }
+
+        // 1) 剔除被排除的节点
+        for (int i = nodesArray.size() - 1; i >= 0; i--) {
+            if (excludedIds.contains(nodesArray.get(i).path("id").asText())) {
+                nodesArray.remove(i);
+            }
+        }
+        // 2) 维护边 + 记录断链（倒序遍历，删除安全）
+        int conflictCount = 0;
+        Set<String> seenConflicts = new HashSet<>();
+        for (int i = edgesArray.size() - 1; i >= 0; i--) {
+            JsonNode edge = edgesArray.get(i);
+            String from = edge.path("from").asText();
+            String to = edge.path("to").asText();
+            if (excludedIds.contains(to)) {
+                edgesArray.remove(i);
+                continue;
+            }
+            if (excludedIds.contains(from)) {
+                String requiredBy = idToSlug.getOrDefault(to, to);
+                String missing = idToSlug.getOrDefault(from, from);
+                if (seenConflicts.add(requiredBy + "|" + missing)) {
+                    ObjectNode conflict = objectMapper.createObjectNode();
+                    conflict.put("requiredBy", requiredBy);
+                    conflict.put("missing", missing);
+                    conflict.put("reason", "USER_EXCLUDED");
+                    conflictsArray.add(conflict);
+                    conflictCount++;
+                }
+                edgesArray.remove(i);
+            }
+        }
+        return conflictCount;
     }
 
     @PostMapping("/build")
     public ResponseEntity<byte[]> buildPack(@RequestBody BuildRequest request) {
         try {
+            // P6-C：优先按服务端快照取件；快照不存在/过期时才回退到前端直传（兼容旧前端）
+            List<JsonNode> files;
+            if (request.manifestId != null && !request.manifestId.isBlank()) {
+                files = manifestService.filesFor(request.manifestId, request.selectedIds);
+                if (files == null) {
+                    System.err.println("buildPack: 清单快照已过期或不存在 -> " + request.manifestId);
+                    return ResponseEntity.badRequest().build();
+                }
+                System.out.println("📦 buildPack 使用服务端快照 " + request.manifestId
+                        + "，取件 " + files.size() + " 个");
+            } else {
+                files = request.selectedFiles == null ? List.of() : request.selectedFiles;
+                System.out.println("📦 buildPack 使用前端直传文件（兼容路径），共 " + files.size() + " 个");
+            }
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             ZipOutputStream zos = new ZipOutputStream(baos);
 
@@ -198,7 +327,7 @@ public class ModpackController {
 
             ArrayNode filesArray = indexJson.putArray("files");
 
-            for (JsonNode fileInfo : request.selectedFiles) {
+            for (JsonNode fileInfo : files) {
                 ObjectNode fileNode = objectMapper.createObjectNode();
                 fileNode.put("path", "mods/" + fileInfo.path("filename").asText());
                 fileNode.put("fileSize", fileInfo.path("size").asLong());

@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.regex.Pattern;
 
 /**
  * ModrinthCache 全量抓取脚本（独立入口，不依赖 Spring 容器）。
@@ -51,6 +52,15 @@ public class ModrinthCacheBuilder {
     /** 需要从 categories 中剥离并单独存为 loaders 的加载器标签 */
     private static final Set<String> LOADER_TAGS = Set.of(
             "fabric", "forge", "neoforge", "quilt", "liteloader", "rift");
+
+    /**
+     * 正式版 MC 版本号（1.20 / 1.21.1 这种），用于过滤掉快照与预发布：
+     * 24w14a、1.21.5-rc1、26.1-snapshot-3 等一律不落库。
+     *
+     * <p>只留正式版是因为 game_versions 只用于"本地否定"（列表里没有目标版本 → 一定不兼容），
+     * 而目标版本本身也只会是正式版。
+     */
+    private static final Pattern RELEASE_VERSION = Pattern.compile("^\\d+\\.\\d+(\\.\\d+)?$");
 
     private static final String SEARCH_URL =
             "https://api.modrinth.com/v2/search?query=&limit=100&offset=%d&facets=%s";
@@ -116,7 +126,7 @@ public class ModrinthCacheBuilder {
                   --db <path>      H2 数据库文件路径 (默认: maa_db/modrinth_cache.mv.db)
                   --qps <num>      每秒最大请求数, 范围 (0,4], 默认 2
                   --dry-run        只请求第一页打印 total_hits, 不写数据库
-                  --ensure-schema  独立命令: 校验/补齐表结构与 versions 列(不抓取,不删数据)
+                  --ensure-schema  独立命令: 校验/补齐表结构与 versions/game_versions 列(不抓取,不删数据)
                   --compact-only   压缩并关闭数据库
                   --reset-versions <all|slug,slug,...>
                                    独立命令: 清空指定 slug 或全部模组的 versions 字段(不抓取)
@@ -167,6 +177,7 @@ public class ModrinthCacheBuilder {
         try (Connection conn = openConnection()) {
             createTableIfMissing(conn);
             ensureVersionsColumn(conn);
+            ensureGameVersionsColumn(conn);
             conn.setAutoCommit(false);
             long t0 = System.currentTimeMillis();
             try {
@@ -253,6 +264,7 @@ public class ModrinthCacheBuilder {
                         downloads   BIGINT       NOT NULL,
                         loaders     VARCHAR(512) NOT NULL,
                         versions    VARCHAR,
+                        game_versions VARCHAR,
                         updated_at  TIMESTAMP    NOT NULL
                     )
                     """);
@@ -275,6 +287,26 @@ public class ModrinthCacheBuilder {
         }
     }
 
+    /**
+     * 老库升级：补 game_versions 列（JSON 数组，如 ["1.20.1","1.21.1"]）。
+     *
+     * <p>与 versions 列的区别：versions 是"运行时惰性探测"到的 loader 级精确结论，
+     * game_versions 是建库时从 search 响应直接拿到的"项目级支持版本"，两者语义不同，必须分开存。
+     */
+    private static void ensureGameVersionsColumn(Connection conn) throws SQLException {
+        boolean hasColumn = false;
+        try (java.sql.ResultSet cols = conn.getMetaData()
+                .getColumns(null, null, "MODRINTH_CACHE", "GAME_VERSIONS")) {
+            hasColumn = cols.next();
+        }
+        if (!hasColumn) {
+            try (Statement st = conn.createStatement()) {
+                st.execute("ALTER TABLE modrinth_cache ADD COLUMN game_versions VARCHAR");
+            }
+            log("已为旧库补充 game_versions 列");
+        }
+    }
+
     /** 独立命令：确认表存在、versions 列存在，随后压缩关闭（不动任何数据） */
     private void ensureSchema() throws Exception {
         ensureDriver();
@@ -285,6 +317,7 @@ public class ModrinthCacheBuilder {
         try (Connection conn = openConnection()) {
             createTableIfMissing(conn);
             ensureVersionsColumn(conn);
+            ensureGameVersionsColumn(conn);
             StringBuilder cols = new StringBuilder();
             try (java.sql.ResultSet rs = conn.getMetaData()
                     .getColumns(null, null, "MODRINTH_CACHE", null)) {
@@ -367,8 +400,8 @@ public class ModrinthCacheBuilder {
         JsonNode hits = page.path("hits");
         if (!hits.isArray()) return;
         // 分页过程中 Modrinth 索引可能变化导致同一 slug 重复出现，用 MERGE 按主键覆盖即可幂等
-        String sql = "MERGE INTO modrinth_cache(slug,title,categories,description,downloads,loaders,updated_at)"
-                + " KEY(slug) VALUES(?,?,?,?,?,?,?)";
+        String sql = "MERGE INTO modrinth_cache(slug,title,categories,description,downloads,loaders,game_versions,updated_at)"
+                + " KEY(slug) VALUES(?,?,?,?,?,?,?,?)";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             Timestamp now = Timestamp.from(Instant.now());
             for (JsonNode hit : hits) {
@@ -396,7 +429,8 @@ public class ModrinthCacheBuilder {
                 ps.setString(4, hit.path("description").asText(""));
                 ps.setLong(5, hit.path("downloads").asLong(0));
                 ps.setString(6, mapper.writeValueAsString(new TreeSet<>(loaders)));
-                ps.setTimestamp(7, now);
+                ps.setString(7, collectReleaseVersions(hit));
+                ps.setTimestamp(8, now);
                 ps.addBatch();
                 insertedRows++;
             }
@@ -404,6 +438,22 @@ public class ModrinthCacheBuilder {
         } catch (Exception e) {
             throw new SQLException("写库失败: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 从 search 响应里读出该项目支持的游戏版本（search hit 自带 versions 字段，不产生额外请求），
+     * 过滤掉快照/预发布后以 JSON 数组形式落库；无可用数据时返回 null。
+     */
+    private String collectReleaseVersions(JsonNode hit) throws Exception {
+        JsonNode arr = hit.path("versions");
+        if (!arr.isArray()) return null;
+        // LinkedHashSet 去重并保留 API 返回的先后顺序（大致按时间递增），便于人工排查
+        java.util.LinkedHashSet<String> releases = new java.util.LinkedHashSet<>();
+        for (JsonNode v : arr) {
+            String s = v.asText("").trim();
+            if (!s.isEmpty() && RELEASE_VERSION.matcher(s).matches()) releases.add(s);
+        }
+        return releases.isEmpty() ? null : mapper.writeValueAsString(releases);
     }
 
     /**

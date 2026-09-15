@@ -16,6 +16,19 @@ public class ModrinthApiClient {
         this.restClient = restClient;
     }
 
+    /**
+     * 「无法确定」异常 —— 限流 429 / 5xx / 超时重试耗尽。
+     *
+     * <p>语义上必须与「确定查不到」(方法返回 null) 严格区分：
+     * 前者是网络故障，后者是 Modrinth 明确告诉你没有这个版本。
+     * 把前者当成后者会写出错误的"该模组不支持此版本"结论。
+     */
+    public static class UnavailableException extends RuntimeException {
+        public UnavailableException(String message) {
+            super(message);
+        }
+    }
+
     // 🔥 严格的防击穿缓存锁
     @Cacheable(value = "modVersions", key = "#projectId + '_' + #mcVersion + '_' + #loaders", sync = true)
     public JsonNode getLatestVersion(String projectId, String mcVersion, String loaders) {
@@ -48,6 +61,19 @@ public class ModrinthApiClient {
         return executeWithSmartRetry("https://api.modrinth.com/v2/project/{id}", slugOrId);
     }
 
+    /**
+     * 按 Modrinth 版本 id 精确取版本（P6：处理「只给 version_id 的必需依赖」）。
+     *
+     * <p>Modrinth 的依赖有两种形态：只给 project_id（不限版本）或给 version_id（锁定到具体版本）。
+     * 旧实现只读 project_id，导致 version_id 型依赖被整条跳过。
+     *
+     * @return 版本 JSON；查不到返回 null
+     */
+    @Cacheable(value = "versionById", key = "#versionId", sync = true)
+    public JsonNode getVersionById(String versionId) {
+        return executeForPlainObject("https://api.modrinth.com/v2/version/{id}", versionId);
+    }
+
     @Cacheable(value = "modSearch", key = "#query + '_' + #limit", sync = true)
     public JsonNode searchProjects(String query, int limit) {
         return restClient.get()
@@ -57,6 +83,19 @@ public class ModrinthApiClient {
 
     // 🔥 终极防爆网关：引入动态指数退避算法 (Exponential Backoff)
     private JsonNode executeWithSmartRetry(String urlTemplate, Object... uriVariables) {
+        return executeWithSmartRetry(urlTemplate, false, uriVariables);
+    }
+
+    /** 取"既不是数组、也不带 slug 字段"的普通对象（如 /version/{id}） */
+    private JsonNode executeForPlainObject(String urlTemplate, Object... uriVariables) {
+        return executeWithSmartRetry(urlTemplate, true, uriVariables);
+    }
+
+    /**
+     * @param acceptPlainObject 是否接受"既不是数组、也不带 slug 字段"的普通对象
+     *                          （/version/{id} 这类接口返回的对象没有 slug，只有 id/project_id）
+     */
+    private JsonNode executeWithSmartRetry(String urlTemplate, boolean acceptPlainObject, Object... uriVariables) {
         int baseWaitSeconds = 2; // 基础等待时间
 
         for (int i = 0; i < 5; i++) {
@@ -67,6 +106,7 @@ public class ModrinthApiClient {
 
                 if (result != null && result.isArray() && !result.isEmpty()) return result.get(0);
                 if (result != null && result.has("slug")) return result;
+                if (acceptPlainObject && result != null && result.isObject()) return result;
 
                 return null;
             } catch (HttpClientErrorException.TooManyRequests e) {
@@ -93,6 +133,7 @@ public class ModrinthApiClient {
                 try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
             }
         }
-        throw new RuntimeException("达到最大重试次数，获取数据失败！");
+        // 重试耗尽 = 无法确定结果，绝不能当成"该模组没有兼容版本"
+        throw new UnavailableException("Modrinth 重试耗尽，无法确定结果: " + urlTemplate);
     }
 }

@@ -48,6 +48,24 @@
             transform: translateX(5px);
         }
 
+        /* 🗑️ 批量删除模式：卡片整体转为红色语义，与"导出勾选"区分 */
+        .delete-mode-card {
+            border-color: #fecaca !important;
+            background-color: #fff7f7;
+        }
+
+        .delete-mode-card.delete-marked {
+            border-color: #dc2626 !important;
+            background-color: #fee2e2 !important;
+            box-shadow: 0 0 8px rgba(220, 38, 38, 0.25);
+        }
+
+        /* 缺少必需前置的模组：黄色警示描边 */
+        .conflict-mod {
+            border-color: #f59e0b !important;
+            box-shadow: 0 0 8px rgba(245, 158, 11, 0.35);
+        }
+
         .disabled-mod {
             opacity: 0.45;
             filter: grayscale(100%);
@@ -163,6 +181,19 @@
                 <!-- AI 消息走安全 Markdown 渲染；用户消息保持纯文本 -->
                 <div v-if="msg.role === 'ai'" class="chat-markdown" v-html="renderMarkdownSafe(msg.content)"></div>
                 <span v-else class="whitespace-pre-wrap">{{ msg.content }}</span>
+
+                <!-- 🔧 本轮变更卡片：内容来自后端 Java 状态（<ops_summary>），不依赖模型措辞 -->
+                <div v-if="msg.ops && opsRows(msg.ops).length"
+                     class="mt-3 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-600">
+                    <div class="font-bold text-slate-700 mb-1">🔧 本轮变更</div>
+                    <ul class="space-y-0.5">
+                        <li v-for="row in opsRows(msg.ops)" :key="row.label">
+                            <span class="text-slate-500">{{ row.label }}：</span>{{ row.value }}
+                            <span v-if="row.hint" class="text-slate-400">（{{ row.hint }}）</span>
+                        </li>
+                    </ul>
+                </div>
+
                 <div v-if="msg.role === 'ai' && msg.hasData" class="mt-3">
                     <button @click="openLab"
                             class="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-6 rounded-lg shadow transition flex items-center gap-2">
@@ -239,12 +270,28 @@
             <div class="flex items-center gap-4">
                 <span class="text-slate-400 font-mono text-sm"
                       v-if="previewData">耗时: {{ (previewData.timeMs / 1000).toFixed(2) }}s</span>
+                <span v-if="isRefreshing" class="text-amber-300 font-mono text-xs flex items-center gap-1.5">
+                    <span class="w-3 h-3 border-2 border-amber-300 border-t-transparent rounded-full animate-spin inline-block"></span>
+                    后台校验依赖…
+                </span>
                 <button @click="buildPack" :disabled="isBuilding"
                         class="bg-green-500 hover:bg-green-600 px-6 py-1.5 rounded-md font-bold text-sm">
                     {{ isBuilding ? '打包中...' : '确认打包下载 (.mrpack)' }}
                 </button>
             </div>
         </header>
+
+        <!-- ⚠️ 删除后断链诊断（后端异步回填 + 本地即时提示） -->
+        <div v-if="deleteConflicts.length > 0"
+             class="bg-amber-50 border-b border-amber-200 px-4 py-2 text-xs text-amber-800 shrink-0 flex items-start gap-2">
+            <span class="text-base leading-none">⚠️</span>
+            <div class="flex-1 leading-relaxed">
+                <b>{{ deleteConflicts.length }} 项模组缺少必需前置</b>（保留的模组依赖了你已删除的项）：
+                <span class="font-mono">{{ conflictSummary }}</span>
+                <div class="text-amber-600 mt-0.5">可继续对话让 AI 补回替代方案，或撤销删除后重新选择。</div>
+            </div>
+            <button @click="deleteConflicts = []" class="text-amber-600 hover:text-amber-900 font-bold">✕</button>
+        </div>
 
         <div class="flex-1 flex overflow-hidden bg-slate-50 relative">
             <div v-if="isResolving" class="absolute inset-0 bg-white/90 z-20 flex flex-col items-center justify-center">
@@ -257,8 +304,32 @@
                 <div class="p-3 border-b bg-slate-50 font-bold text-slate-700 shadow-sm flex flex-col gap-2">
                     <div class="flex justify-between items-center">
                         <span>📋 A-Z 依赖树</span>
-                        <span class="text-indigo-600 bg-indigo-100 px-2 py-0.5 rounded-full text-xs">已选 {{ selectedMods.size
-                            }} / {{ previewData?.nodes.length || 0 }}</span>
+                        <div class="flex items-center gap-1.5">
+                            <span class="px-2 py-0.5 rounded-full text-xs"
+                                  :class="deleteMode ? 'text-red-600 bg-red-100' : 'text-indigo-600 bg-indigo-100'">
+                                {{ deleteMode ? '待删 ' + deleteMarked.size : '已选 ' + selectedMods.size }} / {{ previewData?.nodes.length || 0 }}
+                            </span>
+                            <!-- 🗑️ 批量删除入口（打开后进入标记模式，再点确认才真正删除） -->
+                            <button v-if="!deleteMode" @click="enterDeleteMode" title="批量删除：勾选要删除的模组"
+                                    class="text-red-400 hover:text-red-600 hover:bg-red-50 px-1.5 py-0.5 rounded text-sm transition">
+                                🗑️
+                            </button>
+                        </div>
+                    </div>
+                    <!-- 🗑️ 批量删除模式操作条 -->
+                    <div v-if="deleteMode" class="flex items-center gap-2 bg-red-50 border border-red-200 rounded p-2">
+                        <span class="text-[11px] text-red-600 font-bold flex-1 leading-snug">
+                            勾选 = 删除，取消勾选 = 保留<br>
+                            <span class="font-normal text-red-400">（默认已勾选"当前未导出"的模组）</span>
+                        </span>
+                        <button @click="confirmBatchDelete" :disabled="deleteMarked.size === 0 || deleteBusy"
+                                class="bg-red-600 hover:bg-red-700 disabled:bg-slate-300 text-white px-3 py-1 rounded text-xs font-bold whitespace-nowrap transition">
+                            {{ deleteBusy ? '删除中…' : '确认删除 (' + deleteMarked.size + ')' }}
+                        </button>
+                        <button @click="exitDeleteMode"
+                                class="bg-white hover:bg-slate-100 border border-slate-300 px-2 py-1 rounded text-xs font-bold whitespace-nowrap transition">
+                            取消
+                        </button>
                     </div>
                     <!-- 🔥 搜索框 -->
                     <input type="text" v-model="searchQuery" placeholder="输入名称或 slug 快速定位模组..."
@@ -279,6 +350,80 @@
             <!-- 右侧：DAG 图谱 -->
             <div class="flex-1 relative bg-[#f8fafc]">
                 <div id="network-canvas" class="absolute inset-0 outline-none"></div>
+                <!-- 🖱️ 右键菜单（在 DAG 节点上右键弹出） -->
+                <div v-if="ctxMenu.visible"
+                     :style="{left: ctxMenu.x + 'px', top: ctxMenu.y + 'px'}"
+                     class="absolute z-30 bg-white border border-slate-200 rounded-lg shadow-xl py-1 w-48 text-sm"
+                     @click.stop>
+                    <div class="px-3 py-1 text-[11px] text-slate-400 font-mono truncate border-b border-slate-100 mb-1">
+                        {{ ctxMenuLabel }}
+                    </div>
+                    <button @click="ctxLocate"
+                            class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 text-slate-700">🎯 定位到左侧</button>
+                    <button @click="ctxOpenModrinth"
+                            class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 text-slate-700">🔗 打开 Modrinth 页面</button>
+                    <button @click="ctxDelete"
+                            class="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 font-bold border-t border-slate-100 mt-1">🗑️ 删除该模组</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🗑️ 删除确认弹窗（两段式：级联确认 → 前置确认） -->
+    <div v-if="deleteDialog.visible"
+         class="fixed inset-0 bg-black/40 z-[80] flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6">
+            <h3 class="text-lg font-bold mb-3 flex items-center gap-2"
+                :class="deleteDialog.stage === 'cascade' ? 'text-red-600' : 'text-amber-600'">
+                <span>{{ deleteDialog.stage === 'cascade' ? '⚠️ 必需前置关系' : 'ℹ️ 该模组有前置依赖' }}</span>
+            </h3>
+
+            <!-- 阶段 1：被删项是别人的必需前置 -->
+            <div v-if="deleteDialog.stage === 'cascade'" class="text-sm text-slate-600 space-y-2">
+                <p>
+                    <span class="font-mono font-bold text-slate-800">{{ seedLabels }}</span>
+                    是下列 {{ deleteDialog.dependents.length }} 个模组的<b class="text-red-600">必需前置</b>：
+                </p>
+                <div class="bg-red-50 border border-red-200 rounded-lg p-3 max-h-40 overflow-y-auto font-mono text-xs text-red-700">
+                    <div v-for="id in deleteDialog.dependents" :key="id">{{ idLabel(id) }}</div>
+                </div>
+                <p class="text-xs text-slate-500">删除它们会直接破坏依赖链，游戏内可能崩溃。</p>
+            </div>
+
+            <!-- 阶段 2：被删项自身有前置 -->
+            <div v-else class="text-sm text-slate-600 space-y-2">
+                <p>
+                    <span class="font-mono font-bold text-slate-800">{{ seedLabels }}</span>
+                    自身依赖下列 {{ deleteDialog.prerequisites.length }} 个前置模组：
+                </p>
+                <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 max-h-40 overflow-y-auto font-mono text-xs text-amber-700">
+                    <div v-for="id in deleteDialog.prerequisites" :key="id">
+                        {{ idLabel(id) }}
+                        <span v-if="stillNeeded(id)" class="text-red-500 font-sans font-bold">← 仍被其它保留模组需要</span>
+                    </div>
+                </div>
+                <p class="text-xs text-slate-500">不勾选一并删除时，这些前置会保留在包里。</p>
+            </div>
+
+            <div class="flex justify-end gap-3 mt-6">
+                <button @click="closeDeleteDialog"
+                        class="px-5 py-2 rounded-lg font-bold text-slate-600 hover:bg-slate-100 transition">取消</button>
+
+                <button v-if="deleteDialog.stage === 'cascade'" @click="acceptCascade"
+                        class="px-5 py-2 rounded-lg font-bold bg-red-600 hover:bg-red-700 text-white shadow-md transition">
+                    删除 {{ seedLabels }} 及依赖它的 {{ deleteDialog.dependents.length }} 个模组
+                </button>
+
+                <template v-else>
+                    <button @click="acceptSeedOnly"
+                            class="px-5 py-2 rounded-lg font-bold bg-slate-600 hover:bg-slate-700 text-white shadow-md transition">
+                        只删除 {{ seedLabels }}
+                    </button>
+                    <button @click="acceptPrerequisites"
+                            class="px-5 py-2 rounded-lg font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-md transition">
+                        同时删除这 {{ deleteDialog.prerequisites.length }} 个前置
+                    </button>
+                </template>
             </div>
         </div>
     </div>
@@ -880,6 +1025,7 @@
                     <div class="flex flex-wrap gap-2">
                         <span v-for="cat in availableCategories" :key="cat"
                               @click="toggleSuggestCategory(cat)"
+                              :title="categoryGloss[cat] || cat"
                               class="px-3 py-1 rounded-full text-xs font-bold cursor-pointer transition-colors border"
                               :class="suggestForm.categories.includes(cat) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-300 hover:border-indigo-400'">
                             {{ cat }}
@@ -969,9 +1115,17 @@
     <div class="tree-node mt-2">
         <div :id="'tree-node-' + node.id"
              class="mod-card border border-slate-200 rounded-lg p-2 flex items-center gap-3 bg-white"
-             :class="{ 'disabled-mod': !isSelected, 'highlight': globalHighlightId === node.id }">
-            <input type="checkbox" :checked="isSelected" @change="toggle"
-                   class="w-4 h-4 text-indigo-600 rounded cursor-pointer shrink-0">
+             :class="{
+                 'disabled-mod': !isChecked && !deleteMode,
+                 'highlight': globalHighlightId === node.id,
+                 'delete-mode-card': deleteMode,
+                 'delete-marked': deleteMode && isDeleteMarked,
+                 'conflict-mod': isConflict
+             }">
+            <!-- 🔥 同一个勾选框双语义：普通模式=是否导出；删除模式=是否删除 -->
+            <input type="checkbox" :checked="isChecked" @change="onToggle"
+                   class="w-4 h-4 rounded cursor-pointer shrink-0"
+                   :class="deleteMode ? 'accent-red-600' : 'text-indigo-600'">
             <img :src="node.icon || 'https://docs.modrinth.com/img/logo.svg'"
                  class="w-7 h-7 rounded bg-slate-100 object-cover shrink-0">
             <div class="flex-1 overflow-hidden">
@@ -983,8 +1137,9 @@
                         #{{ node.slug }}
                     </a>
                 </div>
-                <div class="text-[10px] bg-slate-100 text-slate-500 px-1 rounded inline-block mt-1">{{ node.versionId
-                    }}
+                <div class="text-[10px] px-1 rounded inline-block mt-1"
+                     :class="deleteMode && isDeleteMarked ? 'bg-red-100 text-red-600 font-bold' : 'bg-slate-100 text-slate-500'">
+                    {{ deleteMode && isDeleteMarked ? '🗑️ 待删除 · ' : '' }}{{ node.versionNumber || node.versionId }}
                 </div>
             </div>
         </div>
@@ -1010,9 +1165,22 @@
             const childrenMap = inject('childrenMap');
             const nodesMap = inject('nodesMap');
             const globalHighlightId = inject('globalHighlightId');
+            // 🗑️ 批量删除模式：复用同一勾选框，但语义切换为"标记删除"
+            const deleteMode = inject('deleteMode');
+            const deleteMarked = inject('deleteMarked');
+            const toggleDeleteMark = inject('toggleDeleteMark');
+            const conflictIds = inject('conflictIds');
 
             const isSelected = computed(() => selectedMods.value.has(props.node.id));
             const toggle = () => toggleMod(props.node.id);
+            const isDeleteMarked = computed(() => deleteMarked.value.has(props.node.id));
+            const isConflict = computed(() => conflictIds.value.has(props.node.id));
+            // 勾选框显示状态：删除模式下显示"待删除标记"，否则显示"是否导出"
+            const isChecked = computed(() => deleteMode.value ? isDeleteMarked.value : isSelected.value);
+            const onToggle = () => {
+                if (deleteMode.value) toggleDeleteMark(props.node.id);
+                else toggle();
+            };
 
             const childrenIds = computed(() => childrenMap.value[props.node.id] || []);
             const children = computed(() => {
@@ -1023,7 +1191,10 @@
             const isCycle = computed(() => props.visited.includes(props.node.id));
             const currentVisited = computed(() => [...props.visited, props.node.id]);
 
-            return {isSelected, toggle, children, isCycle, currentVisited, globalHighlightId};
+            return {
+                isSelected, toggle, children, isCycle, currentVisited, globalHighlightId,
+                deleteMode, isDeleteMarked, isChecked, onToggle, isConflict
+            };
         }
     };
 
@@ -1050,7 +1221,10 @@
                 name: "MAA-Pack",
                 mcVersion: "1.21.1",
                 loader: "neoforge",
-                modSlugs: []
+                modSlugs: [],
+                // 🗑️ 用户在图谱里显式删除的模组：随 preview/chat 一起下发，
+                // 防止被 Architect 复述或依赖引擎当作前置重新补回来（P2）
+                excludedSlugs: []
             });
             const previewData = ref(null);
 
@@ -1083,11 +1257,312 @@
 
             let networkGraph = null;
 
+            // ==========================================
+            // 🗑️ 删除能力状态（P1/P2）
+            // 设计原则：勾选 = 本次导出是否包含（临时，会话内）；删除 = 从整合包清单移除（持久，写入 packData.excludedSlugs）
+            // ==========================================
+            const deleteMode = ref(false);            // 左侧树是否处于"批量删除"标记模式
+            const deleteMarked = ref(new Set());      // 标记模式下待删除的节点 id
+            const deleteBusy = ref(false);            // 删除执行中
+            const isRefreshing = ref(false);          // 后台异步重跑 preview 中
+            const deleteConflicts = ref([]);          // 断链诊断 [{requiredBy, missing}]
+            const conflictIds = ref(new Set());       // 断链受影响的节点 id（用于树/图描边）
+
+            const ctxMenu = reactive({visible: false, x: 0, y: 0, nodeId: null});
+
+            // 两段式删除确认弹窗状态
+            const deleteDialog = reactive({
+                visible: false,
+                stage: '',        // 'cascade' = 被删项是别人的前置；'prereq' = 被删项自己有前置
+                seed: [],
+                dependents: [],
+                prerequisites: []
+            });
+            const closeDeleteDialog = () => {
+                deleteDialog.visible = false;
+                deleteDialog.stage = '';
+                deleteDialog.seed = [];
+                deleteDialog.dependents = [];
+                deleteDialog.prerequisites = [];
+            };
+
             provide('selectedMods', selectedMods);
             provide('nodesMap', nodesMap);
             provide('childrenMap', childrenMap);
             provide('globalHighlightId', globalHighlightId);
             provide('toggleMod', (id) => toggleModState(id));
+            provide('deleteMode', deleteMode);
+            provide('deleteMarked', deleteMarked);
+            provide('toggleDeleteMark', (id) => toggleDeleteMark(id));
+            provide('conflictIds', conflictIds);
+
+            // ---------- 删除相关的展示辅助 ----------
+            // 节点 id -> 可读名（优先 slug，便于和 Modrinth 对照）
+            const idLabel = (id) => {
+                const n = nodesMap.value[id];
+                return n ? (n.slug || n.title || id) : id;
+            };
+            const conflictSummary = computed(() =>
+                deleteConflicts.value.map(c => `${c.requiredBy} ← 缺失 ${c.missing}`).join('  |  '));
+            // 弹窗标题里展示"本次要删除的种子模组"可读名
+            const seedLabels = computed(() => deleteDialog.seed.map(idLabel).join('、'));
+
+            // ---------- DAG 邻接关系 ----------
+            // 注意 preview 返回的边方向：from = 前置(被依赖方)，to = 依赖方
+            const buildAdjacency = () => {
+                const dependentsOf = {};     // X -> 依赖 X 的模组（删 X 会波及它们）
+                const prerequisitesOf = {};  // Y -> Y 依赖的模组（删 Y 时可顺带删它们）
+                for (const e of ((previewData.value && previewData.value.edges) || [])) {
+                    (dependentsOf[e.from] || (dependentsOf[e.from] = [])).push(e.to);
+                    (prerequisitesOf[e.to] || (prerequisitesOf[e.to] = [])).push(e.from);
+                }
+                return {dependentsOf, prerequisitesOf};
+            };
+
+            // 求传递闭包（BFS），排除起点自身
+            const closure = (seedIds, nextMap) => {
+                const seedSet = new Set(seedIds);
+                const result = new Set();
+                const queue = [...seedIds];
+                while (queue.length > 0) {
+                    const cur = queue.shift();
+                    for (const nxt of (nextMap[cur] || [])) {
+                        if (seedSet.has(nxt) || result.has(nxt)) continue;
+                        result.add(nxt);
+                        queue.push(nxt);
+                    }
+                }
+                return [...result];
+            };
+
+            // ---------- 两段式删除流程 ----------
+            // 第 1 段：被删项若是别人的必需前置 → 提示"删除 X 和依赖 X 的所有模组 / 不删除"
+            const startDeleteFlow = (ids) => {
+                const seed = [...new Set(ids)].filter(id => nodesMap.value[id]);
+                if (seed.length === 0) return;
+                const {dependentsOf} = buildAdjacency();
+                const cascade = closure(seed, dependentsOf);
+                if (cascade.length > 0) {
+                    Object.assign(deleteDialog, {
+                        visible: true, stage: 'cascade', seed, dependents: cascade, prerequisites: []
+                    });
+                    return;
+                }
+                askDeletePrerequisites(seed);
+            };
+
+            // 第 2 段：被删项自身有前置 → 提示"是否顺带删除所有前置"
+            const askDeletePrerequisites = (ids) => {
+                const {prerequisitesOf} = buildAdjacency();
+                const prereqs = closure(ids, prerequisitesOf);
+                if (prereqs.length > 0) {
+                    Object.assign(deleteDialog, {
+                        visible: true, stage: 'prereq', seed: ids, dependents: [], prerequisites: prereqs
+                    });
+                    return;
+                }
+                closeDeleteDialog();
+                performDelete(ids);
+            };
+
+            // 用户选择「删除 X 及依赖它的模组」→ 合并后继续询问前置
+            const acceptCascade = () => {
+                const merged = [...new Set([...deleteDialog.seed, ...deleteDialog.dependents])];
+                askDeletePrerequisites(merged);
+            };
+
+            // 用户选择「只删除选中的」→ 直接执行
+            const acceptSeedOnly = () => {
+                const seed = [...deleteDialog.seed];
+                closeDeleteDialog();
+                performDelete(seed);
+            };
+
+            // 用户选择「同时删除前置」→ 新增的前置可能又被别的模组依赖，需要再确认一轮
+            // （每轮集合严格增长，图有限，必定收敛）
+            const acceptPrerequisites = () => {
+                const merged = [...new Set([...deleteDialog.seed, ...deleteDialog.prerequisites])];
+                const {dependentsOf} = buildAdjacency();
+                const cascade = closure(merged, dependentsOf);
+                if (cascade.length > 0) {
+                    Object.assign(deleteDialog, {
+                        visible: true, stage: 'cascade', seed: merged, dependents: cascade, prerequisites: []
+                    });
+                    return;
+                }
+                closeDeleteDialog();
+                performDelete(merged);
+            };
+
+            // 该前置是否仍被"不在删除集里"的模组需要（用于弹窗内的红色提示）
+            const stillNeeded = (prereqId) => {
+                const {dependentsOf} = buildAdjacency();
+                const inDelete = new Set([...deleteDialog.seed, ...deleteDialog.prerequisites]);
+                return (dependentsOf[prereqId] || []).some(d => !inDelete.has(d));
+            };
+
+            // ---------- 批量删除模式（左侧 🗑️） ----------
+            const enterDeleteMode = () => {
+                const all = ((previewData.value && previewData.value.nodes) || []).map(n => n.id);
+                // 规则：进入删除模式后，"已勾选(要导出)"→未勾选，"未勾选(不导出)"→已勾选
+                deleteMarked.value = new Set(all.filter(id => !selectedMods.value.has(id)));
+                deleteMode.value = true;
+                repaintAllGraphNodes();
+            };
+            const exitDeleteMode = () => {
+                const wasDeleteMode = deleteMode.value;
+                deleteMode.value = false;
+                deleteMarked.value = new Set();
+                if (wasDeleteMode) repaintAllGraphNodes();
+            };
+            const toggleDeleteMark = (id) => {
+                const s = new Set(deleteMarked.value);
+                if (s.has(id)) s.delete(id); else s.add(id);
+                deleteMarked.value = s;
+                paintGraphNode(id);
+            };
+            const confirmBatchDelete = () => {
+                if (deleteMarked.value.size === 0) return;
+                startDeleteFlow([...deleteMarked.value]);
+            };
+
+            // ---------- 右键菜单 ----------
+            const ctxMenuLabel = computed(() => idLabel(ctxMenu.nodeId));
+            const ctxLocate = () => {
+                const id = ctxMenu.nodeId;
+                ctxMenu.visible = false;
+                if (!id) return;
+                globalHighlightId.value = id;
+                locateTreeNode(id);
+            };
+            const ctxOpenModrinth = () => {
+                const node = nodesMap.value[ctxMenu.nodeId];
+                ctxMenu.visible = false;
+                if (node && node.slug) window.open('https://modrinth.com/mod/' + node.slug, '_blank');
+            };
+            const ctxDelete = () => {
+                const id = ctxMenu.nodeId;
+                ctxMenu.visible = false;
+                if (id) startDeleteFlow([id]);
+            };
+
+            // 定位左侧树节点（被搜索过滤隐藏时先清空过滤再定位）
+            const locateTreeNode = (id) => {
+                nextTick(() => {
+                    const el = document.getElementById('tree-node-' + id);
+                    if (el) {
+                        el.scrollIntoView({behavior: 'smooth', block: 'center'});
+                        return;
+                    }
+                    if (searchQuery.value) {
+                        searchQuery.value = '';
+                        nextTick(() => {
+                            const el2 = document.getElementById('tree-node-' + id);
+                            if (el2) el2.scrollIntoView({behavior: 'smooth', block: 'center'});
+                        });
+                    }
+                });
+            };
+
+            // ---------- 执行删除：本地立即移除 + 后台异步重跑回填 ----------
+            const performDelete = async (ids) => {
+                if (!previewData.value || ids.length === 0) return;
+                const idSet = new Set(ids);
+                const removedNodes = previewData.value.nodes.filter(n => idSet.has(n.id));
+                if (removedNodes.length === 0) return;
+                deleteBusy.value = true;
+                const removedSlugs = removedNodes.map(n => n.slug).filter(Boolean);
+
+                // 1) 本地即时移除节点与相关边，立刻给用户反馈
+                const localConflicts = [];
+                for (const e of (previewData.value.edges || [])) {
+                    if (idSet.has(e.from) && !idSet.has(e.to)) {
+                        localConflicts.push({requiredBy: idLabel(e.to), missing: idLabel(e.from)});
+                    }
+                }
+                const remainNodes = previewData.value.nodes.filter(n => !idSet.has(n.id));
+                const remainEdges = previewData.value.edges.filter(e => !idSet.has(e.from) && !idSet.has(e.to));
+                deleteConflicts.value = localConflicts;
+
+                previewData.value = {...previewData.value, nodes: remainNodes, edges: remainEdges};
+                // 同步整合包清单 + 记入排除名单（后续 preview/chat 都不会把它补回来）
+                packData.modSlugs = packData.modSlugs.filter(s => !removedSlugs.includes(s));
+                packData.excludedSlugs = [...new Set([...(packData.excludedSlugs || []), ...removedSlugs])];
+
+                const newSelected = new Set(selectedMods.value);
+                ids.forEach(id => newSelected.delete(id));
+                selectedMods.value = newSelected;
+                if (idSet.has(globalHighlightId.value)) globalHighlightId.value = null;
+                exitDeleteMode();
+
+                buildTreeData(previewData.value);
+                nextTick(() => renderGraph(networkGraph ? networkGraph.getPositions() : null));
+                deleteBusy.value = false;
+
+                // 2) 后台异步重跑 preview，用权威解析结果回填（不阻塞界面）
+                refreshPreviewInBackground();
+            };
+
+            // 后台重跑：保持用户勾选状态，仅用服务端结果校正图谱与断链诊断
+            const refreshPreviewInBackground = async () => {
+                if (isRefreshing.value) return;
+                isRefreshing.value = true;
+                try {
+                    const res = await fetch('/api/modpack/preview', {
+                        method: 'POST', headers: {'Content-Type': 'application/json', ...authHeader()},
+                        body: JSON.stringify({...packData, excludeUserFeedbackRules: !enableUserFeedbackRules.value})
+                    });
+                    const data = await res.json();
+                    if (!data || !data.nodes) return;
+
+                    // 勾选状态继承：原有节点沿用，新增节点默认勾选，已消失的忽略
+                    const oldNodes = nodesMap.value;
+                    const oldSel = selectedMods.value;
+                    const nextSel = new Set();
+                    data.nodes.forEach(n => {
+                        if (!oldNodes[n.id] || oldSel.has(n.id)) nextSel.add(n.id);
+                    });
+
+                    // 服务端诊断优先（它基于权威解析结果；为空则清空本地推断）
+                    deleteConflicts.value = Array.isArray(data.conflicts) ? data.conflicts : [];
+                    conflictIds.value = new Set(
+                        data.nodes.filter(n => deleteConflicts.value.some(c => c.requiredBy === n.slug))
+                                  .map(n => n.id)
+                    );
+
+                    const positions = networkGraph ? networkGraph.getPositions() : null;
+                    previewData.value = data;
+                    selectedMods.value = nextSel;
+                    buildTreeData(data);
+                    nextTick(() => renderGraph(positions));
+                } catch (e) {
+                    console.warn('后台依赖校验失败，保留本地结果', e);
+                } finally {
+                    isRefreshing.value = false;
+                }
+            };
+
+            // ---------- 全局键盘：Delete 删除选中节点 / Esc 关闭浮层 ----------
+            const isTypingTarget = (el) => {
+                if (!el) return false;
+                const tag = (el.tagName || '').toUpperCase();
+                return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true;
+            };
+            const onGlobalKeyDown = (e) => {
+                if (e.key === 'Escape') {
+                    if (ctxMenu.visible) { ctxMenu.visible = false; return; }
+                    if (deleteDialog.visible) { closeDeleteDialog(); return; }
+                    if (deleteMode.value) { exitDeleteMode(); return; }
+                    return;
+                }
+                if (currentView.value !== 'lab' || deleteDialog.visible) return;
+                if (isTypingTarget(document.activeElement)) return;
+                if ((e.key === 'Delete' || e.key === 'Backspace') && globalHighlightId.value) {
+                    e.preventDefault();
+                    startDeleteFlow([globalHighlightId.value]);
+                }
+            };
+            window.addEventListener('keydown', onGlobalKeyDown);
 
             // 🔥 深度搜索算法 (DFS)：判断一个节点及其所有子孙节点是否包含关键词
             const doesNodeOrChildrenMatch = (nodeId, kw) => {
@@ -1213,7 +1688,9 @@
 
                     if (!msg) {
                         // 只有附件无文字 → 直接渲染图谱 (大包需要等待 Modrinth API 逐个拉取图标, 可能较慢)
+                        // 导入 = 换了一个包，删除排除名单必须重置
                         packData.modSlugs = baseSlugs;
+                        packData.excludedSlugs = [];
                         chatHistory.value.push({
                             role: 'ai',
                             content: '已解析 ' + fileToParse.name + '，共 ' + baseSlugs.length + ' 个模组。正在展开构筑图谱 (加载模组图标和依赖关系)...',
@@ -1247,7 +1724,16 @@
                     const res = await fetch('/api/chat', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json', ...authHeader()},
-                        body: JSON.stringify({ prompt: msg, currentMods: baseSlugs.join(','), uuid: sessionUuid.value })
+                        body: JSON.stringify({
+                            prompt: msg,
+                            currentMods: baseSlugs.join(','),
+                            uuid: sessionUuid.value,
+                            // 🌍 F01：把包环境一起发给后端，续聊时才不会漂移到默认 neoforge/1.21.1
+                            mcVersion: packData.mcVersion,
+                            loader: packData.loader,
+                            // 🗑️ 图谱里删掉的模组：后端不得再召回/补回（P2）
+                            excludedSlugs: (packData.excludedSlugs || []).join(',')
+                        })
                     });
                     const aiReply = await res.text();
                     if (aiReply.includes("⛔ 思考已手动终止")) return;
@@ -1261,11 +1747,21 @@
                         packData.loader = (aiReply.match(/<loader>(.*?)<\/loader>/s) || [])[1] || packData.loader;
                         hasData = true;
                     }
-                    const cleanReply = aiReply.replace(/<name>.*?<\/name>|<mc>.*?<\/mc>|<loader>.*?<\/loader>|<ops_summary>.*?<\/ops_summary>|<mods>.*?<\/mods>/gs, '').trim();
+                    const cleanReply = aiReply.replace(/<name>.*?<\/name>|<mc>.*?<\/mc>|<loader>.*?<\/loader>|<ops_summary>.*?<\/ops_summary>|<trace>.*?<\/trace>|<mods>.*?<\/mods>/gs, '').trim();
+                    // 🔧 本轮变更（后端 Java 状态生成的结构化摘要）：解析失败就当没有，绝不打断对话
+                    const opsMatch = aiReply.match(/<ops_summary>([\s\S]*?)<\/ops_summary>/);
+                    let ops = null;
+                    if (opsMatch) {
+                        try {
+                            ops = JSON.parse(opsMatch[1]);
+                        } catch (e) {
+                            console.warn('ops_summary 解析失败，已跳过变更卡片', e);
+                        }
+                    }
                     const finalTime = thinkTime.value;
                     stopThinking();
                     chatHistory.value.push({
-                        role: 'ai', content: cleanReply, hasData, thinkTime: finalTime
+                        role: 'ai', content: cleanReply, hasData, ops, thinkTime: finalTime
                     });
                 } catch (e) {
                     stopThinking();
@@ -1291,6 +1787,10 @@
             const openLab = async () => {
                 currentView.value = 'lab';
                 isResolving.value = true;
+                // 重新进入图谱：退出删除模式并清掉上一轮的断链提示
+                exitDeleteMode();
+                deleteConflicts.value = [];
+                conflictIds.value = new Set();
                 try {
                     const res = await fetch('/api/modpack/preview', {
                         method: 'POST', headers: {'Content-Type': 'application/json', ...authHeader()},
@@ -1326,33 +1826,58 @@
                 const newSet = new Set(selectedMods.value);
                 if (newSet.has(id)) newSet.delete(id); else newSet.add(id);
                 selectedMods.value = newSet;
-
-                if (networkGraph) {
-                    networkGraph.body.data.nodes.update({
-                        id: id,
-                        color: newSet.has(id) ? {border: '#4f46e5', background: '#fff'} : {
-                            border: '#cbd5e1',
-                            background: '#f1f5f9'
-                        },
-                        font: {color: newSet.has(id) ? '#1e293b' : '#94a3b8'}
-                    });
-                }
+                paintGraphNode(id);
             };
 
-            const renderGraph = () => {
+            /**
+             * 重绘单个 DAG 节点的"激活"配色。
+             * 配色语义随模式切换：普通模式=是否导出(靛蓝)，删除模式=是否待删(红色)。
+             */
+            const paintGraphNode = (id) => {
+                if (!networkGraph) return;
+                const active = deleteMode.value
+                    ? deleteMarked.value.has(id)
+                    : selectedMods.value.has(id);
+                const idle = deleteMode.value
+                    ? {border: '#fca5a5', background: '#fff'}
+                    : {border: '#cbd5e1', background: '#f1f5f9'};
+                networkGraph.body.data.nodes.update({
+                    id: id,
+                    color: active
+                        ? (deleteMode.value ? {border: '#dc2626', background: '#fee2e2'}
+                                            : {border: '#4f46e5', background: '#fff'})
+                        : idle,
+                    font: {color: active ? '#1e293b' : '#94a3b8'}
+                });
+            };
+
+            const repaintAllGraphNodes = () => {
+                if (!networkGraph || !previewData.value) return;
+                previewData.value.nodes.forEach(n => paintGraphNode(n.id));
+            };
+
+            const renderGraph = (fixedPositions) => {
                 const container = document.getElementById('network-canvas');
                 if (!container) return;
-                const visNodes = new vis.DataSet(previewData.value.nodes.map(n => ({
-                    id: n.id,
-                    label: n.title,
-                    title: n.description,
-                    shape: 'circularImage',
-                    image: n.icon || 'https://docs.modrinth.com/img/logo.svg',
-                    size: 24,
-                    font: {size: 12, face: 'sans-serif'},
-                    color: {border: '#4f46e5', background: '#fff'},
-                    borderWidth: 3
-                })));
+                const visNodes = new vis.DataSet(previewData.value.nodes.map(n => {
+                    // 缺少必需前置的节点用琥珀色描边警示
+                    const conflicted = conflictIds.value.has(n.id);
+                    const item = {
+                        id: n.id,
+                        label: n.title,
+                        title: n.description,
+                        shape: 'circularImage',
+                        image: n.icon || 'https://docs.modrinth.com/img/logo.svg',
+                        size: 24,
+                        font: {size: 12, face: 'sans-serif'},
+                        color: {border: conflicted ? '#f59e0b' : '#4f46e5', background: '#fff'},
+                        borderWidth: 3
+                    };
+                    // 复用旧坐标，避免删除后重绘导致整图重新布局跳动
+                    const p = fixedPositions && fixedPositions[n.id];
+                    if (p) { item.x = p.x; item.y = p.y; }
+                    return item;
+                }));
                 const visEdges = new vis.DataSet(previewData.value.edges.map(e => ({
                     from: e.from,
                     to: e.to,
@@ -1409,6 +1934,7 @@
                 });
 
                 networkGraph.on("dragStart", function () {
+                    ctxMenu.visible = false;
                     // 拖动时完全启用物理 (低阻尼, 长迭代, 让节点自由运动)
                     enablePhysics(0.15, 1000);
                 });
@@ -1423,29 +1949,64 @@
                     }, 2000);
                 });
 
+                // 🎯 点击语义：第一次点击 = 定位 + 高亮（不改勾选）；对同一节点再点一次才切换勾选
                 networkGraph.on("click", (params) => {
-                    if (params.nodes.length > 0) {
-                        const nodeId = params.nodes[0];
-                        toggleModState(nodeId);
-                        globalHighlightId.value = nodeId;
-                        setTimeout(() => {
-                            if (globalHighlightId.value === nodeId) globalHighlightId.value = null;
-                        }, 1200);
-                        const el = document.getElementById('tree-node-' + nodeId);
-                        if (el) el.scrollIntoView({behavior: 'smooth', block: 'center'});
+                    ctxMenu.visible = false;
+                    if (params.nodes.length === 0) {
+                        globalHighlightId.value = null;   // 点空白 = 取消选中
+                        return;
                     }
+                    const nodeId = params.nodes[0];
+                    if (globalHighlightId.value === nodeId) {
+                        // 第二次点击：按当前模式切换状态（普通=是否导出，删除模式=是否待删）
+                        if (deleteMode.value) toggleDeleteMark(nodeId);
+                        else toggleModState(nodeId);
+                    } else {
+                        globalHighlightId.value = nodeId; // 第一次点击：仅定位（勾选保持不变）
+                    }
+                    locateTreeNode(nodeId);
                 });
+
+                // 🖱️ 右键菜单：在节点上右键弹出删除/定位/打开 Modrinth
+                networkGraph.on("oncontext", (params) => {
+                    const evt = params.event;
+                    if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
+                    if (evt && evt.srcEvent && typeof evt.srcEvent.preventDefault === 'function') {
+                        evt.srcEvent.preventDefault();
+                    }
+                    if (params.nodes.length === 0) {
+                        ctxMenu.visible = false;
+                        return;
+                    }
+                    const dom = (params.pointer && params.pointer.DOM) || {x: 20, y: 20};
+                    ctxMenu.nodeId = params.nodes[0];
+                    ctxMenu.x = dom.x;
+                    ctxMenu.y = dom.y;
+                    ctxMenu.visible = true;
+                    globalHighlightId.value = params.nodes[0];
+                });
+
+                networkGraph.on("zoom", () => { ctxMenu.visible = false; });
             };
 
             const buildPack = async () => {
                 if (selectedMods.value.size === 0) return alert("请至少选中一个模组！");
                 isBuilding.value = true;
-                const selectedFiles = previewData.value.nodes.filter(n => selectedMods.value.has(n.id)).map(n => n.fileInfo);
+                // P6-C：只回传 manifestId + 勾选的节点 id，文件由服务端按快照取
+                // （这样导出的一定是预览时那一份，且客户端无法塞入任意文件对象）
+                const selectedIds = previewData.value.nodes
+                    .filter(n => selectedMods.value.has(n.id)).map(n => n.id);
                 try {
                     const res = await fetch('/api/modpack/build', {
                         method: 'POST', headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({...packData, selectedFiles})
+                        body: JSON.stringify({...packData, manifestId: previewData.value.manifestId, selectedIds})
                     });
+                    if (!res.ok) {
+                        alert(res.status === 400
+                            ? "清单快照已过期，请重新打开构筑台再打包。"
+                            : "打包失败（HTTP " + res.status + "），请重试。");
+                        return;
+                    }
                     const blob = await res.blob();
                     const a = document.createElement('a');
                     a.href = window.URL.createObjectURL(blob);
@@ -1484,11 +2045,26 @@
             const suggestedMods = ref([]);
             const selectedSuggests = ref(new Set());
 
-            // 完整的官方可用分类池
-            const availableCategories = ['technology', 'magic', 'adventure', 'worldgen', 'food',
+            // 🏷️ 类别清单以 /api/meta/categories 为权威源（后端 CategoryRegistry）；
+            // 这里只保留一份兜底副本，接口不可用时界面仍能正常工作。
+            const availableCategories = ref(['technology', 'magic', 'adventure', 'worldgen', 'food',
                 'storage', 'optimization', 'equipment', 'utility', 'decoration',
                 'mobs', 'cursed', 'economy', 'game-mechanics', 'library', 'management',
-                'minigame', 'social', 'transportation'];
+                'minigame', 'social', 'transportation']);
+            const categoryGloss = ref({});   // category -> 中文释义（用于按钮 tooltip）
+            const loadCategories = async () => {
+                try {
+                    const res = await fetch('/api/meta/categories');
+                    const data = await res.json();
+                    if (data && Array.isArray(data.categories) && data.categories.length > 0) {
+                        availableCategories.value = data.categories;
+                        categoryGloss.value = data.gloss || {};
+                    }
+                } catch (e) {
+                    console.warn('获取类别清单失败，使用内置兜底列表', e);
+                }
+            };
+            loadCategories();
             const suggestForm = reactive({ categories: [], minDownloads: 0, maxDownloads: 2100000000, sortType: 'downloads', page: 0 });
 
             // 🔥 新增快速跳转相关状态
@@ -1519,6 +2095,8 @@
             const directAddMod = () => {
                 const slug = manualAddSlug.value.trim().toLowerCase();
                 if (!slug) return;
+                // 用户手动加回 → 撤销该 slug 的删除排除
+                packData.excludedSlugs = (packData.excludedSlugs || []).filter(s => s !== slug);
                 if (!packData.modSlugs.includes(slug)) {
                     packData.modSlugs.push(slug);
                     openLab(); // 重新触发全量图谱绘制
@@ -1598,6 +2176,9 @@
                     selectedSuggests.value.forEach(slug => {
                         if (!packData.modSlugs.includes(slug)) packData.modSlugs.push(slug);
                     });
+                    // 用户主动加回 → 撤销这些 slug 的删除排除
+                    const added = new Set(selectedSuggests.value);
+                    packData.excludedSlugs = (packData.excludedSlugs || []).filter(s => !added.has(s));
                     openLab();
                 }
                 showSuggestBoard.value = false;
@@ -1955,7 +2536,8 @@
                     });
                     const d = await r.json();
                     currentConvId.value = d.id;
-                    chatHistory.value = []; packData.modSlugs = [];
+                    // 新对话 = 新包：清空清单与删除排除名单
+                    chatHistory.value = []; packData.modSlugs = []; packData.excludedSlugs = [];
                     await loadConversations();
                 } catch(e) {}
             };
@@ -1970,6 +2552,8 @@
                     if (msgs.length > 0 && msgs[msgs.length-1].modSlugs) {
                         packData.modSlugs = msgs[msgs.length-1].modSlugs.split(',');
                     }
+                    // 切换历史对话 = 切换包：不继承上一个包的删除排除名单
+                    packData.excludedSlugs = [];
                     currentConvId.value = id;
                 } catch(e) {}
             };
@@ -2416,12 +3000,52 @@
                 return escapeHtml(text).replace(/\n/g, '<br>');
             };
 
+            // 🔧 把后端 <ops_summary> 的结构化变更转成可读行（无变更时返回空数组）。
+            // 用 Vue 插值渲染（非 v-html），所以包名/模组名里的特殊字符不会变成注入点。
+            const opsRows = (ops) => {
+                if (!ops) return [];
+                const rows = [];
+                if (Array.isArray(ops.removed) && ops.removed.length) {
+                    rows.push({label: '移除模组', value: ops.removed.join('、')});
+                }
+                const entries = Object.entries(ops.categoryTargets || {});
+                if (entries.length) {
+                    rows.push({
+                        label: '类别配比',
+                        value: entries.map(([cat, delta]) => {
+                            const gloss = String(categoryGloss.value[cat] || '').split('/')[0];
+                            return cat + (gloss ? `（${gloss}）` : '') + (delta >= 0 ? ` +${delta}` : ` ${delta}`);
+                        }).join('、'),
+                        hint: '已并入本轮配额，最终配比见回复说明'
+                    });
+                }
+                if (typeof ops.targetCount === 'number') {
+                    rows.push({label: '目标数量', value: ops.targetCount + ' 个'});
+                }
+                if (typeof ops.maxDownloads === 'number') {
+                    rows.push({
+                        label: '热度上限',
+                        value: ops.maxDownloads.toLocaleString('en-US'),
+                        hint: ops.maxDownloads <= 500000 ? '冷门模式' : ''
+                    });
+                }
+                if (ops.name) rows.push({label: '包名', value: ops.name});
+                return rows;
+            };
+
             return {
                 currentView, chatHistory, userInput, isLoading, thinkTime, currentThought,
                 isResolving, isBuilding,
                 previewData, selectedMods, rootTreeNodes, dbRules, groupedDbData,
                 searchQuery, filteredRootNodes,
-                manualAddSlug, showSuggestBoard, isSuggesting, suggestedMods, selectedSuggests, suggestForm,availableCategories,
+                // 🗑️ 删除能力（P1/P2）
+                deleteMode, deleteMarked, deleteBusy, isRefreshing, deleteConflicts, conflictSummary,
+                ctxMenu, ctxMenuLabel, deleteDialog, seedLabels,
+                enterDeleteMode, exitDeleteMode, confirmBatchDelete,
+                ctxLocate, ctxOpenModrinth, ctxDelete, idLabel,
+                acceptCascade, acceptSeedOnly, acceptPrerequisites, closeDeleteDialog, stillNeeded,
+                manualAddSlug, showSuggestBoard, isSuggesting, suggestedMods, selectedSuggests, suggestForm,
+                availableCategories, categoryGloss,
                 pageJumpInput,
                 sendMessage: sendMessageWithHistory, openLab, buildPack: buildPackWithPref, openDbView, abortThinking, onMrpackUpload, pendingMrpack,
                 directAddMod, openSuggestBoard, openSuggestBoardForPref, suggestMode, toggleSuggestSelection, fetchSuggestions, confirmAddSuggestedMods,
@@ -2429,7 +3053,7 @@
                 // 🔐 auth
                 showAuthModal, authMode, authForm, authError, authSuccess, authLoading, authUser, showSidebar,
                 doAuth, logout,
-                renderMarkdownSafe,
+                renderMarkdownSafe, opsRows,
                 // 📂 conversations
                 conversationList, currentConvId, loadConversation, deleteConversation, newConversation,
                 // 👤 profile
