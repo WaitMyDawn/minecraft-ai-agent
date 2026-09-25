@@ -4,6 +4,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import yagen.waitmydawn.maa.model.*;
 import yagen.waitmydawn.maa.service.*;
+import yagen.waitmydawn.maa.runtime.ScopedExecutors;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -310,23 +311,18 @@ public class PreferencesController {
                 ? slugs.subList(0, 200)
                 : new ArrayList<>(slugs);
 
-        // 🔥 并发获取类别信息 (虚拟线程批量调用 Modrinth API)
+        // 🚀 批量获取类别信息：一次请求拿 100 个（旧实现是 200 个虚拟线程各发一条请求，
+        // 撞上 300/分钟的限额几乎是必然）。查不到的会退回逐条查询，行为与旧实现一致。
         Map<String, String> slugCategories = new ConcurrentHashMap<>();
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            var futures = sample.stream()
-                    .map(slug -> CompletableFuture.runAsync(() -> {
-                        try {
-                            var info = apiClient.getProjectInfo(slug);
-                            if (info != null && info.has("categories")) {
-                                var cats = info.path("categories");
-                                if (cats.isArray() && cats.size() > 0) {
-                                    slugCategories.put(slug, cats.get(0).asText());
-                                }
-                            }
-                        } catch (Exception ignored) {}
-                    }, executor))
-                    .toList();
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        var batch = apiClient.getProjectsBatch(sample);
+        for (String slug : sample) {
+            var info = batch.get(slug);
+            if (info != null && info.has("categories")) {
+                var cats = info.path("categories");
+                if (cats.isArray() && cats.size() > 0) {
+                    slugCategories.put(slug, cats.get(0).asText());
+                }
+            }
         }
 
         // 更新类别偏好: 统计各类别模组数量, 取 top 5

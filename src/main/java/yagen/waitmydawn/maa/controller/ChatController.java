@@ -2,12 +2,18 @@ package yagen.waitmydawn.maa.controller;
 
 import tools.jackson.databind.JsonNode;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestClient;
 import yagen.waitmydawn.maa.model.*;
 import yagen.waitmydawn.maa.cache.ModrinthCacheService;
 import yagen.waitmydawn.maa.cache.ModrinthCacheService.ModEntry;
 import yagen.waitmydawn.maa.logging.MaaLog;
+import yagen.waitmydawn.maa.runtime.DelegationContext;
+import yagen.waitmydawn.maa.runtime.DelegationContext.Outcome;
+import yagen.waitmydawn.maa.runtime.RequestScope;
+import yagen.waitmydawn.maa.runtime.ScopedExecutors;
 import yagen.waitmydawn.maa.service.*;
 
 import java.net.URLEncoder;
@@ -45,6 +51,8 @@ public class ChatController {
     private final ModAliasRegistry aliasRegistry;
     /** 依赖膨胀系数跟踪器：把"最终目标数"折算成"根模组预算"（P3-6） */
     private final ExpansionTracker expansionTracker;
+    /** 委派任务表：把"发请求"交给用户浏览器做（详见 DelegationContext 类注释） */
+    private final DelegationTasks delegationTasks;
 
     /**
      * 系统默认 API Key（来自配置 {@code ai.api.key}，通常由环境变量 DEEPSEEK_API_KEY 注入）。
@@ -225,7 +233,8 @@ public class ChatController {
                           ModrinthApiClient apiClient, ConversationRepository convRepo, ChatMessageRepository msgRepo,
                           UserController userController, UserRepository userRepo,
                           CategoryPreferenceRepository catRepo, ModPreferenceRepository modRepo,
-                          ModAliasRegistry aliasRegistry, ExpansionTracker expansionTracker) {
+                          ModAliasRegistry aliasRegistry, ExpansionTracker expansionTracker,
+                          DelegationTasks delegationTasks) {
         this.aiAgentService = aiAgentService;
         this.modrinthCacheService = modrinthCacheService;
         this.restClient = restClient;
@@ -239,13 +248,18 @@ public class ChatController {
         this.modRepo = modRepo;
         this.aliasRegistry = aliasRegistry;
         this.expansionTracker = expansionTracker;
+        this.delegationTasks = delegationTasks;
     }
 
-    @PostMapping
-    public String chat(@RequestBody Map<String, String> payload,
-                       @RequestHeader(value = "X-Auth-Token", required = false) String authToken,
-                       @RequestHeader(value = "X-LLM-Api-Key", required = false) String apiKeyOverride,
-                       @RequestHeader(value = "X-Conversation-Id", required = false) Long convId) {
+    /**
+     * 原始构筑流程本体（四阶段串起来的那一大段）。
+     *
+     * <p>从 {@code @PostMapping} 上摘下来了，因为现在有两条路进来：委派关闭时由下面的
+     * {@link #chat} 直接调用（同步、老行为），开启时由 {@link DelegationTasks} 提交到虚拟线程跑——
+     * 因为挂起等浏览器的线程必须活得比这次 HTTP 请求长。方法体一行没动。
+     */
+    private String doChat(Map<String, String> payload, String authToken,
+                          String apiKeyOverride, Long convId) {
         String prompt = payload.get("prompt");
         String currentMods = payload.get("currentMods");
         String uuid = payload.getOrDefault("uuid", "default-user");
@@ -455,12 +469,212 @@ public class ChatController {
         return criticReply.indexOf("</approved_mods>", open) < 0;
     }
 
+    // ==========================================
+    // 🚀 取数委派：把"向 Modrinth 发请求"交给用户浏览器
+    //
+    // 响应形态自己描述自己，前端只看 Content-Type 分流：
+    //   text/plain  → 就是最终回复（含 <mods>/<trace> 那套 XML），前端解析逻辑一行不用改
+    //   application/json → {taskId, stage:"need-data", wanted:[...]}，前端取完数据再 POST 回来
+    //
+    // 开关关掉时永远不会出现第二种响应，前端自然走老路径，一次往返，与改造前完全一致。
+    // ==========================================
+
+    /** 一次请求最多接收多少条回执：挡掉"塞一大堆垃圾让服务器慢慢校验"的玩法 */
+    private static final int MAX_FACT_RECORDS = 2_000;
+    /** 等任务出结果/出需求的上限。任务本身没有硬超时，这里只是别把 HTTP 线程无限期挂住 */
+    private static final long TASK_WAIT_LIMIT_MS = 20 * 60 * 1000L;
+
+    @PostMapping
+    public ResponseEntity<Object> chat(@RequestBody Map<String, String> payload,
+                                       @RequestHeader(value = "X-Auth-Token", required = false) String authToken,
+                                       @RequestHeader(value = "X-LLM-Api-Key", required = false) String apiKeyOverride,
+                                       @RequestHeader(value = "X-Conversation-Id", required = false) Long convId) {
+        if (!delegationTasks.isEnabled()) {
+            // 老路径：同步跑完再返回，与改造前逐字节一致
+            return textResponse(doChat(payload, authToken, apiKeyOverride, convId));
+        }
+        // 委派开启：整个流程挪到长生命周期的虚拟线程上——挂起等浏览器的线程必须活得比这次请求长。
+        // RequestScope 在这里（提交时）捕获，否则任务里发出的服务器请求统计不到本轮 <trace>。
+        String userKey = sanitizeUuid(payload.getOrDefault("uuid", "default-user"));
+        DelegationTasks.Task task = delegationTasks.submit(null, userKey, RequestScope.current(),
+                () -> doChat(payload, authToken, apiKeyOverride, convId));
+        return continueOrReturn(task);
+    }
+
+    /**
+     * 浏览器取完数据回传。返回的仍是"下一份需求清单或最终回复"，所以前端不需要轮询。
+     *
+     * <p>校验三件事：键必须是服务器<b>此刻真的在等</b>的、结构必须自洽（id/slug 对得上、
+     * 版本的环境要匹配请求的环境）、条数有上限。过了这几关才唤醒挂起的线程。
+     */
+    @PostMapping("/task/{taskId}/facts")
+    public ResponseEntity<Object> submitFacts(@PathVariable String taskId, @RequestBody JsonNode body) {
+        DelegationTasks.Task task = delegationTasks.find(taskId);
+        if (task == null) {
+            return ResponseEntity.status(404).contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("error", "任务不存在或已过期", "taskId", taskId));
+        }
+        if (task.isDone()) {
+            return continueOrReturn(task);
+        }
+        int accepted = applyFacts(task.context(), body);
+        MaaLog.app("委派回执 task=" + taskId + " 采纳 " + accepted + " 条");
+        return continueOrReturn(task);
+    }
+
     @PostMapping("/abort")
     public String abortChat(@RequestBody Map<String, String> payload) {
         String uuid = payload.getOrDefault("uuid", "default-user");
         abortedSessions.put(uuid, true);
-        System.out.println("🛑 收到用户终止指令 (volatile flag) — uuid=" + uuid);
+        // 挂起的线程最多要等 5 秒才自己醒来，用户点了终止不该再等——直接放行
+        int woken = delegationTasks.cancelByUser(sanitizeUuid(uuid));
+        System.out.println("🛑 收到用户终止指令 (volatile flag) — uuid=" + uuid
+                + (woken > 0 ? "，已唤醒 " + woken + " 个等数据的任务" : ""));
         return "ok";
+    }
+
+    /** 任务跑完 → 返回最终文本；跑到缺口 → 返回需求清单 */
+    private ResponseEntity<Object> continueOrReturn(DelegationTasks.Task task) {
+        if (delegationTasks.awaitFirstDemand(task, TASK_WAIT_LIMIT_MS)) {
+            return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(needDataEnvelope(task));
+        }
+        try {
+            return textResponse(task.result().join());
+        } catch (Exception e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            String msg = cause.getMessage() == null ? cause.toString() : cause.getMessage();
+            MaaLog.error("委派任务异常: " + msg, cause);
+            return textResponse("AI 调用异常: " + msg.substring(0, Math.min(200, msg.length())) + "\n请稍后重试。");
+        }
+    }
+
+    /** 下发给浏览器的需求清单 */
+    private Map<String, Object> needDataEnvelope(DelegationTasks.Task task) {
+        List<Map<String, Object>> wanted = new ArrayList<>();
+        for (DelegationContext.Want want : task.context().pendingWants()) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("ref", want.wantId());
+            item.put("kind", want.kind().name().toLowerCase());
+            item.put("key", want.key());
+            if (want.kind() == DelegationContext.Kind.ENV_VERSION) {
+                // 把环境拆出来给前端，免得它去猜服务器内部键格式；key 仍然原样带回用于配对
+                String[] parts = want.key().split("\\|", 3);
+                if (parts.length == 3) {
+                    item.put("project", parts[0]);
+                    item.put("mc", parts[1]);
+                    item.put("loader", stripLoaderParam(parts[2]));
+                }
+            }
+            wanted.add(item);
+        }
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("taskId", task.taskId());
+        envelope.put("stage", "need-data");
+        envelope.put("perCallBudgetMs", delegationTasks.callBudgetMs());
+        envelope.put("wanted", wanted);
+        return envelope;
+    }
+
+    /**
+     * 把回执喂进上下文。
+     *
+     * @return 采纳的条数（用于观测：这个数越大，说明搬走的服务器请求越多）
+     */
+    private int applyFacts(DelegationContext ctx, JsonNode body) {
+        int accepted = acceptFactList(ctx, body.path("answered"), Outcome.GOT);
+        accepted += acceptFactList(ctx, body.path("missing"), Outcome.ABSENT);
+        // 第三类：客户端没抓到（网络不通/被拦/批量端点整批失败）。
+        // 这一类和 missing 必须分开——当成"上游确实没有"会让服务器得出"该模组不存在"的错误结论。
+        accepted += acceptFactList(ctx, body.path("unavailable"), Outcome.TIMEOUT);
+        return accepted;
+    }
+
+    /**
+     * @param mode GOT = 带数据的采纳；ABSENT = 上游明确没有；TIMEOUT = 没抓到，服务器自己抓
+     */
+    private int acceptFactList(DelegationContext ctx, JsonNode list, Outcome mode) {
+        if (!list.isArray()) return 0;
+        int accepted = 0;
+        for (JsonNode fact : list) {
+            if (accepted >= MAX_FACT_RECORDS) break;
+            DelegationContext.Kind kind = parseKind(fact.path("kind").asText(""));
+            String key = fact.path("key").asText("");
+            if (kind == null || key.isBlank() || key.length() > 512) continue;
+            // 只收"此刻真的有人在等"的键。客户端没法往上下文里塞服务器没要过的数据，
+            // 晚到的回执（等待线程已超时自抓）也在这里被丢掉——那份数据已经没有消费者了。
+            if (!ctx.isPending(kind, key)) continue;
+            if (mode == Outcome.GOT) {
+                JsonNode data = fact.path("data");
+                if (!data.isObject() || !selfConsistent(kind, key, data)) continue;
+                ctx.deliver(kind, key, data);
+            } else if (mode == Outcome.ABSENT) {
+                ctx.deliver(kind, key, null);
+            } else {
+                // 立刻放行等待线程让它自己抓，而不是干等到 5 秒预算耗尽
+                ctx.handBack(kind, key);
+            }
+            accepted++;
+        }
+        return accepted;
+    }
+
+    /** 包级可见：评测/单测直接钉住回执解析规则（与 looksLikeCriticDegeneration 同一套做法） */
+    static DelegationContext.Kind parseKind(String raw) {
+        for (DelegationContext.Kind k : DelegationContext.Kind.values()) {
+            if (k.name().equalsIgnoreCase(raw)) return k;
+        }
+        return null;
+    }
+
+    /**
+     * 结构与请求自洽吗。
+     *
+     * <p>注意这不是"验真"——下载地址、依赖列表这类内容客户端都能编。它只是挡住明显不对的东西，
+     * 免得脏数据把流程带偏。真伪这一层我们本来就不防：数据只在本次任务里用，既不进共享缓存
+     * 也不会传播给别人，最坏结果是发起者自己拿到一个错包。
+     */
+    static boolean selfConsistent(DelegationContext.Kind kind, String key, JsonNode data) {
+        return switch (kind) {
+            case PROJECT -> key.equals(data.path("id").asText("")) || key.equals(data.path("slug").asText(""));
+            case VERSION -> key.equals(data.path("id").asText(""));
+            case ENV_VERSION -> matchesEnv(key, data);
+            case SEARCH -> data.path("hits").isArray();
+        };
+    }
+
+    /** 版本对象必须真的声明支持请求里的 mc + loader，否则这次的"这个模组能装"就是空口无凭 */
+    private static boolean matchesEnv(String key, JsonNode version) {
+        String[] parts = key.split("\\|", 3);
+        if (parts.length != 3) return false;
+        if (version.path("id").asText("").isBlank()) return false;
+        String mc = parts[1];
+        String loader = stripLoaderParam(parts[2]);
+        boolean mcOk = false;
+        for (JsonNode gv : version.path("game_versions")) {
+            if (mc.equals(gv.asText())) { mcOk = true; break; }
+        }
+        boolean loaderOk = false;
+        for (JsonNode l : version.path("loaders")) {
+            if (loader.equalsIgnoreCase(l.asText())) { loaderOk = true; break; }
+        }
+        return mcOk && loaderOk;
+    }
+
+    /** {@code ["forge"]} → {@code forge} */
+    private static String stripLoaderParam(String loadersParam) {
+        return loadersParam.replaceAll("[\\[\\]\"]", "").trim();
+    }
+
+    /**
+     * 文本响应必须显式声明 UTF-8。
+     *
+     * <p>直接返回 String 时 Spring 的 StringHttpMessageConverter 默认字符集在有些链路上是
+     * ISO-8859-1，中文会整段变问号——这种问题在本地看不出来、上线才炸，所以写死。
+     */
+    private static ResponseEntity<Object> textResponse(String text) {
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("text/plain;charset=UTF-8"))
+                .body(text);
     }
 
     /** 检查是否已终止 */
@@ -805,24 +1019,17 @@ public class ChatController {
         List<CandidateMod> verified = java.util.Collections.synchronizedList(new ArrayList<>());
         java.util.concurrent.atomic.AtomicInteger unverified = new java.util.concurrent.atomic.AtomicInteger(0);
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            java.util.concurrent.Semaphore gate = new java.util.concurrent.Semaphore(5);
+            // 不用局部信号量卡并发：它保护的"服务器出网速率"现在由全局令牌闸负责，
+            // 而挂着许可去等浏览器会把批量切成一次 5 个，把往返次数放大好几倍
             List<CompletableFuture<Void>> futures = new ArrayList<>();
             for (CandidateMod c : pool) {
-                futures.add(CompletableFuture.runAsync(() -> {
+                futures.add(ScopedExecutors.runAsync(() -> {
                     MaaLog.runWithUser(ctxKey, () -> {
-                        boolean acquired = false;
                         try {
-                            gate.acquire();
-                            acquired = true;
                             Compat compat = probeCompatibility(c.slug, loader, mcVersion);
                             if (compat == Compat.OK) verified.add(c);
                             else if (compat == Compat.UNVERIFIED) unverified.incrementAndGet();
-                        } catch (InterruptedException ignored) {
-                            Thread.currentThread().interrupt();
-                        } finally {
-                            // 只有真正拿到许可才释放，避免中断时多释放导致许可膨胀
-                            if (acquired) gate.release();
-                        }
+                        } catch (Exception ignored) {}
                     });
                 }, executor));
             }
@@ -1301,10 +1508,8 @@ public class ChatController {
         try {
             String facetsRaw = String.format("[[\"project_type:mod\"], [\"loaders:%s\"], [\"versions:%s\"]]",
                     loader, mcVersion);
-            String queryUrl = "https://api.modrinth.com/v2/search?query="
-                    + URLEncoder.encode(name, StandardCharsets.UTF_8)
-                    + "&limit=10&facets=" + URLEncoder.encode(facetsRaw, StandardCharsets.UTF_8);
-            JsonNode res = restClient.get().uri(java.net.URI.create(queryUrl)).retrieve().body(JsonNode.class);
+            // 收口到 ModrinthApiClient：统一走全局令牌闸与 429 退避（原先这里裸发，享受不到任何保护）
+            JsonNode res = apiClient.search(name, 10, facetsRaw);
             if (res != null && res.has("hits")) {
                 for (JsonNode hit : res.path("hits")) {
                     StringBuilder cats = new StringBuilder();
@@ -2113,11 +2318,18 @@ public class ChatController {
         int categoryWeightApplied;
     }
 
-    /** 组装 {@code <trace>} 过程指标：紧凑 JSON，前端隐藏、评测器解析断言 */
+    /**
+     * 组装 {@code <trace>} 过程指标：紧凑 JSON，前端隐藏、评测器解析断言。
+     *
+     * <p>{@code upstream} 是本轮向上游真实发出的请求数与限流情况（见 {@link RequestScope}）。
+     * 加它的动机：此前排查限流只能靠"版本校验用了 8.7 秒"这种耗时反推，说不清是请求多、
+     * 网络慢、还是退避睡掉了时间。本字段纯追加，不影响评测既有断言。
+     */
     private String buildTrace(TraceData d) {
         StringBuilder sb = new StringBuilder("{");
         sb.append("\"branch\":\"").append(d.formatViolation ? "FORMAT_VIOLATION" : "NORMAL").append("\"");
         sb.append(",\"criticDegraded\":").append(d.criticDegraded);
+        sb.append(",\"upstream\":").append(RequestScope.toTraceJson());
         sb.append(",\"architect\":{").append(callStat(d.architect)).append("}");
         sb.append(",\"critic\":").append(d.critic == null ? "null" : "{" + callStat(d.critic) + "}");
         sb.append(",\"dependencyMs\":").append(d.dependencyMs);
@@ -2181,12 +2393,8 @@ public class ChatController {
         List<CandidateMod> pool = new ArrayList<>();
         try {
             String facetsRaw = String.format("[[\"project_type:mod\"], [\"loaders:%s\"], [\"versions:%s\"]]", loader, mcVersion);
-            String encodedFacets = URLEncoder.encode(facetsRaw, StandardCharsets.UTF_8);
             String cleanCoreName = coreSlug.replace("-", " ");
-            String queryUrl = String.format("https://api.modrinth.com/v2/search?query=%s&limit=15&facets=%s",
-                    URLEncoder.encode(cleanCoreName + " addon", StandardCharsets.UTF_8), encodedFacets);
-
-            JsonNode res = restClient.get().uri(java.net.URI.create(queryUrl)).retrieve().body(JsonNode.class);
+            JsonNode res = apiClient.search(cleanCoreName + " addon", 15, facetsRaw);
             if (res != null && res.has("hits")) {
                 int count = 0;
                 for (JsonNode hit : res.path("hits")) {
@@ -2213,7 +2421,6 @@ public class ChatController {
             return buildFillerPoolLocal(intents, budget, loader, mcVersion, existing, maxDownloads);
         }
         String facetsRaw = String.format("[[\"project_type:mod\"], [\"loaders:%s\"], [\"versions:%s\"]]", loader, mcVersion);
-        String encodedFacets = URLEncoder.encode(facetsRaw, StandardCharsets.UTF_8);
         // 在线兜底路径同样"按类别分别召回、分别截断"，并用与本地一致的打分口径
         Map<String, List<CandidateMod>> byCategory = new LinkedHashMap<>();
 
@@ -2227,15 +2434,13 @@ public class ChatController {
                     final String safeKw = kw;
                     final List<String> terms = RetrievalScorer.tokenize(kw);
                     if (terms.isEmpty()) continue;
-                    futures.add(CompletableFuture.runAsync(() -> {
+                    futures.add(ScopedExecutors.runAsync(() -> {
                         if (isAborted(uuid)) return;
                         boolean acquired = false;
                         try {
                             gate.acquire();
                             acquired = true;
-                            String queryUrl = String.format("https://api.modrinth.com/v2/search?query=%s&limit=30&facets=%s",
-                                    URLEncoder.encode(safeKw, StandardCharsets.UTF_8), encodedFacets);
-                            JsonNode res = restClient.get().uri(java.net.URI.create(queryUrl)).retrieve().body(JsonNode.class);
+                            JsonNode res = apiClient.searchPage(safeKw, 30, 0, null, facetsRaw);
 
                             if (res != null && res.has("hits")) {
                                 int hitCount = res.path("hits").size();
@@ -2313,12 +2518,8 @@ public class ChatController {
     private String searchFallbackMod(String originalSlug, String loader, String mcVersion, Set<String> existingMods) {
         try {
             String facetsRaw = String.format("[[\"project_type:mod\"], [\"loaders:%s\"], [\"versions:%s\"]]", loader, mcVersion);
-            String encodedFacets = URLEncoder.encode(facetsRaw, StandardCharsets.UTF_8);
             String cleanName = originalSlug.replace("-", " ");
-            String queryUrl = String.format("https://api.modrinth.com/v2/search?query=%s&limit=5&facets=%s",
-                    URLEncoder.encode(cleanName, StandardCharsets.UTF_8), encodedFacets);
-
-            JsonNode result = restClient.get().uri(java.net.URI.create(queryUrl)).retrieve().body(JsonNode.class);
+            JsonNode result = apiClient.search(cleanName, 5, facetsRaw);
 
             if (result != null && result.has("hits")) {
                 for (JsonNode hit : result.path("hits")) {

@@ -1,19 +1,44 @@
 package yagen.waitmydawn.maa.service;
 
-import tools.jackson.databind.JsonNode;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.RestClient;
+import tools.jackson.databind.JsonNode;
+import yagen.waitmydawn.maa.runtime.DelegationContext;
+import yagen.waitmydawn.maa.runtime.DelegationContext.Kind;
+import yagen.waitmydawn.maa.runtime.DelegationContext.Outcome;
 
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * Modrinth 访问门面：决定这一次取数<b>交给谁做</b>。
+ *
+ * <p>三档优先级，逐层下沉：
+ * <ol>
+ *   <li><b>用户浏览器</b>——当前线程挂着 {@link DelegationContext}（即正在一次委派任务里）时，
+ *       登记需求并挂起，等 /api/chat/task/{id}/facts 把结果送回来。配额算在用户自己的出口 IP 上。</li>
+ *   <li><b>服务器自己抓</b>——委派没开、等超时（单轮 5 秒）、或该键已被判定为"上游没有"时，
+ *       落到 {@link ModrinthFetcher}：令牌闸排队 + 429 指数退避 + Caffeine 缓存。</li>
+ *   <li><b>缓存</b>——第 2 档内部的事，不在这里体现。</li>
+ * </ol>
+ *
+ * <p><b>为什么缓存写在下面那层</b>：{@code @Cacheable} 拦不住——只要方法带注解，Spring 就会把
+ * 返回值塞进共享缓存，而这个返回值可能来自不可信通道（浏览器回传）。一份被改过的 version
+ * 依赖列表足以让<b>别人</b>生成的整合包变成断链包，那是跨用户污染，不是"他改自己的包自伤"。
+ * 所以把带缓存的出网整体下沉到 {@link ModrinthFetcher}，本层在进入它之前就分流。
+ *
+ * <p>委派只在任务上下文内生效：没有 {@link DelegationContext} 的调用（偏好学习、mrpack 解析、
+ * 离线工具）行为与改造前完全一致。
+ */
 @Service
 public class ModrinthApiClient {
 
-    private final RestClient restClient;
+    private final ModrinthFetcher fetcher;
+    private final DelegationTasks delegationTasks;
 
-    public ModrinthApiClient(RestClient restClient) {
-        this.restClient = restClient;
+    public ModrinthApiClient(ModrinthFetcher fetcher, DelegationTasks delegationTasks) {
+        this.fetcher = fetcher;
+        this.delegationTasks = delegationTasks;
     }
 
     /**
@@ -22,6 +47,9 @@ public class ModrinthApiClient {
      * <p>语义上必须与「确定查不到」(方法返回 null) 严格区分：
      * 前者是网络故障，后者是 Modrinth 明确告诉你没有这个版本。
      * 把前者当成后者会写出错误的"该模组不支持此版本"结论。
+     *
+     * <p>位置刻意留在门面上、不跟着出网层走：调用方有一片
+     * {@code catch (ModrinthApiClient.UnavailableException)}，挪走要改一圈 catch 子句，收益为零。
      */
     public static class UnavailableException extends RuntimeException {
         public UnavailableException(String message) {
@@ -29,111 +57,118 @@ public class ModrinthApiClient {
         }
     }
 
-    // 🔥 严格的防击穿缓存锁
-    @Cacheable(value = "modVersions", key = "#projectId + '_' + #mcVersion + '_' + #loaders", sync = true)
-    public JsonNode getLatestVersion(String projectId, String mcVersion, String loaders) {
-        return executeWithSmartRetry("https://api.modrinth.com/v2/project/{id}/version?game_versions=[\"{v}\"]&loaders={l}", projectId, mcVersion, loaders);
-    }
+    // ==========================================
+    // 四类事实：委派优先，落空则自己抓
+    // ==========================================
 
-    /**
-     * 方案 A 优先：直接按 slug 查最新兼容版本；若该 slug 路由 404/无结果，
-     * 走方案 B：projectInfo 解析出稳定 project_id 后用 id 再查一次。
-     * 返回 null 表示该 slug 在当前 loader+mc 下没有可用版本（或项目已不存在）。
-     */
-    @Cacheable(value = "modVersionsBySlug", key = "#slug + '|' + #mcVersion + '|' + #loader", sync = true)
-    public JsonNode getLatestCompatibleVersionBySlug(String slug, String mcVersion, String loader) {
-        String loaders = "[\"" + loader + "\"]";
-        JsonNode version = executeWithSmartRetry(
-                "https://api.modrinth.com/v2/project/{slug}/version?game_versions=[\"{v}\"]&loaders={l}",
-                slug, mcVersion, loaders);
-        if (version != null) {
-            return version;
-        }
-        JsonNode info = getProjectInfo(slug);
-        if (info == null || !info.has("id")) {
-            return null;
-        }
-        return getLatestVersion(info.path("id").asText(), mcVersion, loaders);
-    }
-
-    @Cacheable(value = "projectInfo", key = "#slugOrId", sync = true)
+    /** 项目元数据 */
     public JsonNode getProjectInfo(String slugOrId) {
-        return executeWithSmartRetry("https://api.modrinth.com/v2/project/{id}", slugOrId);
+        DelegationContext.Answer answer = askClient(Kind.PROJECT, slugOrId);
+        if (answeredByClient(answer)) return answer.data();
+        return fetcher.getProjectInfo(slugOrId);
     }
 
-    /**
-     * 按 Modrinth 版本 id 精确取版本（P6：处理「只给 version_id 的必需依赖」）。
-     *
-     * <p>Modrinth 的依赖有两种形态：只给 project_id（不限版本）或给 version_id（锁定到具体版本）。
-     * 旧实现只读 project_id，导致 version_id 型依赖被整条跳过。
-     *
-     * @return 版本 JSON；查不到返回 null
-     */
-    @Cacheable(value = "versionById", key = "#versionId", sync = true)
+    /** 按 version_id 精确取版本 */
     public JsonNode getVersionById(String versionId) {
-        return executeForPlainObject("https://api.modrinth.com/v2/version/{id}", versionId);
-    }
-
-    @Cacheable(value = "modSearch", key = "#query + '_' + #limit", sync = true)
-    public JsonNode searchProjects(String query, int limit) {
-        return restClient.get()
-                .uri("https://api.modrinth.com/v2/search?query={q}&limit={l}", query, limit)
-                .retrieve().body(JsonNode.class);
-    }
-
-    // 🔥 终极防爆网关：引入动态指数退避算法 (Exponential Backoff)
-    private JsonNode executeWithSmartRetry(String urlTemplate, Object... uriVariables) {
-        return executeWithSmartRetry(urlTemplate, false, uriVariables);
-    }
-
-    /** 取"既不是数组、也不带 slug 字段"的普通对象（如 /version/{id}） */
-    private JsonNode executeForPlainObject(String urlTemplate, Object... uriVariables) {
-        return executeWithSmartRetry(urlTemplate, true, uriVariables);
+        DelegationContext.Answer answer = askClient(Kind.VERSION, versionId);
+        if (answeredByClient(answer)) return answer.data();
+        return fetcher.getVersionById(versionId);
     }
 
     /**
-     * @param acceptPlainObject 是否接受"既不是数组、也不带 slug 字段"的普通对象
-     *                          （/version/{id} 这类接口返回的对象没有 slug，只有 id/project_id）
+     * 某项目在某 (mc, loader) 下的最新版本。
+     *
+     * <p>这是 Modrinth 唯一<b>没有批量等价物</b>的查询（实测三种写法都不支持），
+     * 所以一次构筑里它占的请求数最多，也正是最需要搬走的那部分。
      */
-    private JsonNode executeWithSmartRetry(String urlTemplate, boolean acceptPlainObject, Object... uriVariables) {
-        int baseWaitSeconds = 2; // 基础等待时间
+    public JsonNode getLatestVersion(String projectId, String mcVersion, String loaders) {
+        DelegationContext.Answer answer = askClient(Kind.ENV_VERSION, envKey(projectId, mcVersion, loaders));
+        if (answeredByClient(answer)) return answer.data();
+        return fetcher.getLatestVersion(projectId, mcVersion, loaders);
+    }
 
-        for (int i = 0; i < 5; i++) {
-            try {
-                JsonNode result = restClient.get()
-                        .uri(urlTemplate, uriVariables)
-                        .retrieve().body(JsonNode.class);
+    /** 按 slug 查最新兼容版本；slug 路由失败时退回 projectInfo + id 的那一步在出网层内部完成，不再二次委派 */
+    public JsonNode getLatestCompatibleVersionBySlug(String slug, String mcVersion, String loader) {
+        DelegationContext.Answer answer = askClient(Kind.ENV_VERSION,
+                envKey(slug, mcVersion, "[\"" + loader + "\"]"));
+        if (answeredByClient(answer)) return answer.data();
+        return fetcher.getLatestCompatibleVersionBySlug(slug, mcVersion, loader);
+    }
 
-                if (result != null && result.isArray() && !result.isEmpty()) return result.get(0);
-                if (result != null && result.has("slug")) return result;
-                if (acceptPlainObject && result != null && result.isObject()) return result;
+    // ==========================================
+    // 搜索与批量
+    // ==========================================
 
-                return null;
-            } catch (HttpClientErrorException.TooManyRequests e) {
-                HttpHeaders headers = e.getResponseHeaders();
-                int waitSeconds = -1;
+    /** 搜索暂不下放：调用点少、量小，且它的"事实"要带一串查询参数，留给下一轮再收 */
+    public JsonNode search(String query, int limit, String facets) {
+        return fetcher.search(query, limit, facets);
+    }
 
-                if (headers != null && headers.get("X-Ratelimit-Reset") != null) {
-                    try {
-                        String resetValue = headers.getFirst("X-Ratelimit-Reset");
-                        if (resetValue != null) waitSeconds = Integer.parseInt(resetValue) + 1;
-                    } catch (Exception ignored) {}
-                }
+    public JsonNode searchPage(String query, int limit, int offset, String index, String facets) {
+        return fetcher.searchPage(query, limit, offset, index, facets);
+    }
 
-                // 🔥 核心修复：如果官方没给恢复时间，使用指数翻倍退避！(2秒 -> 4秒 -> 8秒 -> 16秒)
-                if (waitSeconds == -1) {
-                    waitSeconds = baseWaitSeconds * (1 << i); // 2 * 2^i
-                }
+    /**
+     * 批量预取项目元数据。
+     *
+     * <p>委派上下文里<b>直接跳过</b>：预取的意义是"一次请求灌一批进缓存"，而委派路径下每个节点
+     * 本来就会各自去问浏览器、由浏览器批量——两条批量机制叠在一起只会白发一次服务器请求。
+     */
+    public void prefetchProjects(Collection<String> idsOrSlugs) {
+        if (DelegationContext.current() != null) return;
+        fetcher.prefetchProjects(idsOrSlugs);
+    }
 
-                System.err.println("⚠️ 触发限流！当前线程智能挂起 " + waitSeconds + " 秒后进行第 " + (i+1) + " 次重试...");
-                try { Thread.sleep(waitSeconds * 1000L); } catch (InterruptedException ignored) {}
+    /** 同上 */
+    public void prefetchVersions(Collection<String> versionIds) {
+        if (DelegationContext.current() != null) return;
+        fetcher.prefetchVersions(versionIds);
+    }
 
-            } catch (Exception e) {
-                if (e.getMessage() != null && e.getMessage().contains("404")) return null;
-                try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
+    /**
+     * 批量取项目元数据。
+     *
+     * <p>委派上下文里退回逐键处理（走委派）：批量端点属于"服务器自己抓"那一档。
+     * 这条路只有偏好学习在用，不在构筑热路径上，逐键的开销可以接受。
+     */
+    public Map<String, JsonNode> getProjectsBatch(Collection<String> idsOrSlugs) {
+        Map<String, JsonNode> out = new LinkedHashMap<>();
+        if (idsOrSlugs == null || idsOrSlugs.isEmpty()) return out;
+        if (DelegationContext.current() != null) {
+            for (String key : idsOrSlugs) {
+                JsonNode v = getProjectInfo(key);
+                if (v != null) out.put(key, v);
             }
+            return out;
         }
-        // 重试耗尽 = 无法确定结果，绝不能当成"该模组没有兼容版本"
-        throw new UnavailableException("Modrinth 重试耗尽，无法确定结果: " + urlTemplate);
+        return fetcher.getProjectsBatch(idsOrSlugs);
+    }
+
+    // ==========================================
+    // 内部
+    // ==========================================
+
+    /**
+     * 问一次浏览器。
+     *
+     * @return null 表示"这次没走委派"（开关关闭 / 不在任务里），调用方应自己抓；非 null 时看
+     *         {@link Outcome}：GOT 用它的数据，ABSENT 就是"上游确实没有"，
+     *         TIMEOUT / CANCELLED 仍然要自己抓。
+     */
+    private DelegationContext.Answer askClient(Kind kind, String key) {
+        DelegationContext ctx = DelegationContext.current();
+        if (ctx == null || !delegationTasks.isEnabled()) return null;
+        return ctx.await(kind, key, delegationTasks.callBudgetMs());
+    }
+
+    /** true 表示"这个键的结果已经由浏览器给出"（数据可能为 null = 上游确实没有） */
+    private static boolean answeredByClient(DelegationContext.Answer answer) {
+        return answer != null
+                && (answer.outcome() == Outcome.GOT || answer.outcome() == Outcome.ABSENT);
+    }
+
+    /** ENV_VERSION 的键必须带上环境，否则不同 mc/loader 会互相串味 */
+    private static String envKey(String idOrSlug, String mcVersion, String loaders) {
+        return idOrSlug + "|" + mcVersion + "|" + loaders;
     }
 }

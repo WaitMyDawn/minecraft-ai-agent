@@ -6,6 +6,7 @@ import yagen.waitmydawn.maa.model.DependencyGraph;
 import yagen.waitmydawn.maa.logging.MaaLog;
 import yagen.waitmydawn.maa.model.KnowledgeRule;
 import yagen.waitmydawn.maa.model.ResolutionResult;
+import yagen.waitmydawn.maa.runtime.ScopedExecutors;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -29,7 +30,6 @@ public class DependencyEngine {
     private static final int DEFAULT_NODE_BUDGET = 500;
     private final int nodeBudget;
 
-    private final Semaphore rateLimiter = new Semaphore(5);
     /** 整包解析结果缓存：key=loader|mc|sortedSlugs，TTL 10 分钟（避免 chat→preview 重复 BFS） */
     private static final long RESOLVE_CACHE_TTL_MS = 10 * 60 * 1000L;
     private final ConcurrentHashMap<String, ResolveCacheHit> resolveCache = new ConcurrentHashMap<>();
@@ -113,158 +113,6 @@ public class DependencyEngine {
         return doResolve(initialSlugs, loader, mcVersion).graph();
     }
 
-    /**
-     * 旧实现（保留待删）：只返回图、前置失败静默跳过、8 层截断、跨 loader 回退。
-     * 新逻辑见 {@link #doResolve}；本方法已无调用方，待 P6 验证稳定后删除。
-     */
-    @Deprecated
-    private DependencyGraph legacyResolveUnused(Set<String> initialSlugs, String loader, String mcVersion) {
-        Set<String> processedProjectIds = ConcurrentHashMap.newKeySet();
-        Queue<String> queue = new ConcurrentLinkedQueue<>(initialSlugs);
-        DependencyGraph graph = new DependencyGraph();
-
-        String loadersParam = "[\"" + loader.toLowerCase() + "\"]";
-        String altLoader = getAltLoader(loader.toLowerCase());
-        List<KnowledgeRule> activeRules = knowledgeDb.getActiveRules(loader.toLowerCase() + "-" + mcVersion);
-
-        long startTime = System.currentTimeMillis();
-        System.out.println("🕸️ 深度依赖穿透引擎启动！初始模组数: " + initialSlugs.size()
-                + ", loader=" + loader + ", mc=" + mcVersion);
-
-        Map<String, String> idToSlugCache = new ConcurrentHashMap<>();
-        String ctxKey = MaaLog.userKey();
-        int bfsLevel = 0;
-
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            while (!queue.isEmpty()) {
-                bfsLevel++;
-                int currentQueueSize = queue.size();
-                long levelStart = System.currentTimeMillis();
-                System.out.printf("  🔍 BFS 第 %d 层: %d 个模组待解析...%n", bfsLevel, currentQueueSize);
-
-                List<CompletableFuture<Void>> futures = new ArrayList<>();
-                Queue<String> nextLevelQueue = new ConcurrentLinkedQueue<>();
-                java.util.concurrent.atomic.AtomicInteger completed = new java.util.concurrent.atomic.AtomicInteger(0);
-                java.util.concurrent.atomic.AtomicInteger failed = new java.util.concurrent.atomic.AtomicInteger(0);
-
-                for (String slugOrId : queue) {
-                    if (slugOrId == null || slugOrId.trim().isEmpty()) continue;
-
-                    futures.add(CompletableFuture.runAsync(() -> MaaLog.runWithUser(ctxKey, () -> {
-                        try {
-                            rateLimiter.acquire();
-
-                            JsonNode projectInfo = apiClient.getProjectInfo(slugOrId);
-                            if (projectInfo == null) {
-                                System.err.println("⚠️ 剔除: 找不到基本信息 -> " + slugOrId);
-                                return;
-                            }
-
-                            String projectId = projectInfo.path("id").asText();
-                            String realSlug = projectInfo.path("slug").asText();
-
-                            // === 黑名单检查 ===
-                            if (BLOCKED_DEV_MODS.contains(realSlug)) {
-                                System.err.println("🚫 剔除开发者工具模组: [" + realSlug + "] (会修改游戏本体/不适合玩家整合包)");
-                                return;
-                            }
-
-                            if (!processedProjectIds.add(projectId)) return;
-                            idToSlugCache.put(projectId, realSlug);
-
-                            JsonNode latestVersion = apiClient.getLatestVersion(projectId, mcVersion, loadersParam);
-                            if (latestVersion == null) {
-                                // 尝试替代 loader (neoforge ↔ forge)
-                                if (altLoader != null) {
-                                    String altLoadersParam = "[\"" + altLoader + "\"]";
-                                    latestVersion = apiClient.getLatestVersion(projectId, mcVersion, altLoadersParam);
-                                }
-                                if (latestVersion == null) {
-                                    System.err.println("🛑 剔除: [" + realSlug + "] 缺乏完美匹配 " + mcVersion + " " + loadersParam + " 的官方包！");
-                                    return;
-                                }
-                            }
-
-                            // === 信雅互联检测: 依赖 sinytra-connector 或 forgified-fabric-api ===
-                            if (dependsOnSinytraEcosystem(latestVersion, realSlug)) {
-                                return;
-                            }
-
-                            graph.allSlugs.add(realSlug);
-
-                            // 冲突检查
-                            for (KnowledgeRule rule : activeRules) {
-                                if ("CONFLICTS_WITH".equals(rule.relationType) &&
-                                        ((rule.modA.equals(realSlug) && graph.allSlugs.contains(rule.modB)) ||
-                                                (rule.modB.equals(realSlug) && graph.allSlugs.contains(rule.modA)))) {
-                                    System.out.println("⚔️ 引擎拦截恶性冲突: 剔除 [" + realSlug + "]");
-                                    graph.allSlugs.remove(realSlug);
-                                    return;
-                                }
-                            }
-
-                            // 处理官方声明依赖
-                            JsonNode deps = latestVersion.path("dependencies");
-                            if (deps.isArray()) {
-                                for (JsonNode dep : deps) {
-                                    if ("required".equals(dep.path("dependency_type").asText())) {
-                                        String depId = dep.path("project_id").asText();
-                                        if (depId != null && !depId.isEmpty() && !"null".equals(depId)
-                                                && !SINYTRA_ECOSYSTEM_IDS.contains(depId)) {
-                                            System.out.println("🔗 官方连线: [" + realSlug + "] 要求前置 -> [" + depId + "]");
-                                            graph.addEdge(realSlug, depId);
-                                            nextLevelQueue.add(depId);
-                                        }
-                                    }
-                                }
-                            }
-
-                            // 处理知识库依赖
-                            for (KnowledgeRule rule : activeRules) {
-                                if ("DEPENDS_ON".equals(rule.relationType) && rule.modA.equals(realSlug)) {
-                                    System.out.println("🔗 知识库连线: [" + realSlug + "] 强制要求前置 -> [" + rule.modB + "]");
-                                    graph.addEdge(realSlug, rule.modB);
-                                    nextLevelQueue.add(rule.modB);
-                                }
-                            }
-                        } catch (Exception e) {
-                            failed.incrementAndGet();
-                            System.err.println("依赖解析中断: " + slugOrId + " - " + e.getMessage());
-                        } finally {
-                            rateLimiter.release();
-                            int done = completed.incrementAndGet();
-                            if (done % 10 == 0 || done == currentQueueSize) {
-                                System.out.printf("    进度: %d/%d (失败:%d)%n", done, currentQueueSize, failed.get());
-                            }
-                        }
-                    }), executor));
-                }
-                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-                long levelMs = System.currentTimeMillis() - levelStart;
-                System.out.printf("  ✅ BFS 第 %d 层完成: %d mods, 新增 %d 依赖, 耗时 %.1fs%n",
-                        bfsLevel, currentQueueSize, nextLevelQueue.size(), levelMs / 1000.0);
-                queue = nextLevelQueue;
-
-                // 防止无限递归 — 最多 8 层
-                if (bfsLevel >= 8 && !nextLevelQueue.isEmpty()) {
-                    System.out.printf("  ⚠️ 达到最大 BFS 层数(8), 跳过剩余 %d 个依赖%n", nextLevelQueue.size());
-                    break;
-                }
-            }
-        }
-
-        long totalMs = System.currentTimeMillis() - startTime;
-        System.out.printf("🕸️ 依赖穿透完成: %d 个模组, BFS %d 层, 总耗时 %.1fs%n",
-                graph.allSlugs.size(), bfsLevel, totalMs / 1000.0);
-
-        DependencyGraph resolvedGraph = resolveGraphIds(graph, idToSlugCache);
-
-        System.out.println("✅ 深度依赖穿透完成！最终安全模组数: " + resolvedGraph.allSlugs.size() + "\n");
-        return resolvedGraph;
-    }
-
-    // ===== 信雅互联 (Sinytra Connector) 检测 =====
-
     // ==========================================
     // 🧩 P6：完整依赖解析（替代旧版 BFS）
     //
@@ -305,14 +153,23 @@ public class DependencyEngine {
                 List<CompletableFuture<Void>> futures = new ArrayList<>();
                 Queue<String> nextLevel = new ConcurrentLinkedQueue<>();
 
+                // 🚀 层内批量预取：本层所有节点的项目元数据一次取回（100 个/请求），
+                // 于是下面每个节点各自调 getProjectInfo 时就是缓存命中，不再各发一次请求。
+                // 取不到的那几个会自动退回逐条查询，所以这一步只可能省请求、不会漏数据。
+                List<String> levelKeys = new ArrayList<>(queue);
+                apiClient.prefetchProjects(levelKeys.stream()
+                        .filter(k -> !k.startsWith(VID_PREFIX)).toList());
+                apiClient.prefetchVersions(levelKeys.stream()
+                        .filter(k -> k.startsWith(VID_PREFIX))
+                        .map(k -> k.substring(VID_PREFIX.length())).toList());
+
                 for (String key : queue) {
                     if (key == null || key.trim().isEmpty()) continue;
                     final boolean isRootLevel = firstLevel;
-                    futures.add(CompletableFuture.runAsync(() -> MaaLog.runWithUser(ctxKey, () -> {
-                        boolean acquired = false;
+                    futures.add(ScopedExecutors.runAsync(() -> MaaLog.runWithUser(ctxKey, () -> {
+                        // 不再用局部信号量卡并发：它保护的"服务器出网速率"现在由全局令牌闸负责，
+                        // 而挂着许可去等浏览器会把批量切成一次 5 个，反而把往返次数放大好几倍
                         try {
-                            rateLimiter.acquire();
-                            acquired = true;
                             if (!processedKeys.add(key)) return;   // 环安全：同一节点只解析一次
                             if (graph.allSlugs.size() >= nodeBudget) {
                                 budgetExhausted.set(true);
@@ -409,8 +266,6 @@ public class DependencyEngine {
                         } catch (Exception e) {
                             failed.put(key, ResolutionResult.Reason.UPSTREAM_UNAVAILABLE);
                             failedDetail.put(key, "解析异常：" + e.getMessage());
-                        } finally {
-                            if (acquired) rateLimiter.release();
                         }
                     }), executor));
                 }
@@ -452,7 +307,8 @@ public class DependencyEngine {
         List<ResolutionResult.Unresolved> unresolved = new ArrayList<>();
         List<ResolutionResult.Dropped> dropped = new ArrayList<>();
         Set<String> kept = new LinkedHashSet<>(graph.allSlugs);
-        // 先清空旧的（可能由 legacy 路径残留在图里的）边，重建为"只保留有效边"的图
+        // doResolve 只收集候选关系、不提前建边，边一律在这里按"成败已定"重建，
+        // 所以图里不可能留下指向空气的边。清空是防御性的：防将来有人在 BFS 里提前建边。
         graph.depsOf.clear();
         graph.dependentsOf.clear();
 
@@ -579,30 +435,4 @@ public class DependencyEngine {
         return false;
     }
 
-    /**
-     * 获取替代 loader (neoforge ↔ forge)
-     */
-    private String getAltLoader(String loader) {
-        if ("neoforge".equals(loader)) return "forge";
-        if ("forge".equals(loader)) return "neoforge";
-        return null;
-    }
-
-    /**
-     * 将图边中的 projectId 替换为 slug
-     */
-    private DependencyGraph resolveGraphIds(DependencyGraph raw, Map<String, String> idToSlug) {
-        DependencyGraph resolved = new DependencyGraph();
-        resolved.allSlugs.addAll(raw.allSlugs);
-
-        for (var entry : raw.depsOf.entrySet()) {
-            String srcSlug = idToSlug.getOrDefault(entry.getKey(), entry.getKey());
-            for (String targetId : entry.getValue()) {
-                String targetSlug = idToSlug.getOrDefault(targetId, targetId);
-                resolved.addEdge(srcSlug, targetSlug);
-            }
-        }
-
-        return resolved;
-    }
 }

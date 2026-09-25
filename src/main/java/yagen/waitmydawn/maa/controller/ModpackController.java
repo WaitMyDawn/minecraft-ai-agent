@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import yagen.waitmydawn.maa.service.*;
 import yagen.waitmydawn.maa.model.KnowledgeRule;
+import yagen.waitmydawn.maa.runtime.ScopedExecutors;
 
 import java.io.ByteArrayOutputStream;
 import java.net.URLEncoder;
@@ -101,10 +102,11 @@ public class ModpackController {
         Set<String> initialSlugs = new LinkedHashSet<>(request.modSlugs);
         Set<String> fullResolvedSlugs = dependencyEngine.resolveFullDependencies(initialSlugs, request.loader.toLowerCase(), request.mcVersion);
 
-        Set<String> processedProjectIds = ConcurrentHashMap.newKeySet();
+        // 🚀 批量预取：把整张图的项目元数据一次取回（100 个/请求），下面的逐节点循环随即变成缓存命中。
+        // 依赖引擎 BFS 已经把大部分灌进缓存了，这里只补它没覆盖到的（例如用户手动加的孤立模组）。
+        apiClient.prefetchProjects(new ArrayList<>(fullResolvedSlugs));
 
-        // 🔥 将图谱渲染的并发限流也压低，确保极度稳定
-        Semaphore rateLimiter = new Semaphore(10);
+        Set<String> processedProjectIds = ConcurrentHashMap.newKeySet();
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             List<CompletableFuture<Void>> futures = new ArrayList<>();
@@ -112,10 +114,8 @@ public class ModpackController {
             for (String slug : fullResolvedSlugs) {
                 if (slug == null || slug.trim().isEmpty()) continue;
 
-                futures.add(CompletableFuture.runAsync(() -> {
+                futures.add(ScopedExecutors.runAsync(() -> {
                     try {
-                        rateLimiter.acquire();
-
                         // 这里的 getProjectInfo 已经被重构成了带智能重试的防爆方法
                         JsonNode projectInfo = apiClient.getProjectInfo(slug);
                         if (projectInfo == null || !projectInfo.has("id")) return;
@@ -172,8 +172,6 @@ public class ModpackController {
                         }
                     } catch (Exception e) {
                         System.err.println("❌ 视图渲染最终放弃: " + slug + " | 错误: " + e.getMessage());
-                    } finally {
-                        rateLimiter.release();
                     }
                 }, executor));
             }
@@ -189,6 +187,14 @@ public class ModpackController {
         }
 
         responseJson.put("timeMs", System.currentTimeMillis() - startTime);
+        // 本轮真实发出的上游请求数 / 限流情况：和 <trace>.upstream 同一套埋点，
+        // 让"批量端点到底省了多少请求"可以用同一次调用的前后对比来验，而不是靠感觉
+        var upstream = yagen.waitmydawn.maa.runtime.RequestScope.snapshot();
+        ObjectNode upstreamNode = responseJson.putObject("upstream");
+        upstreamNode.put("http", upstream.http());
+        upstreamNode.put("429", upstream.rateLimited());
+        upstreamNode.put("retry", upstream.retries());
+        upstreamNode.put("throttleMs", upstream.throttleWaitMs());
         // P6-C：登记本次解析的快照，build 只按 manifestId 取件 → 导出与预览必然是同一份
         List<String> nodeIds = new ArrayList<>();
         List<JsonNode> nodeFiles = new ArrayList<>();
@@ -372,7 +378,6 @@ public class ModpackController {
             }
 
             String facetsRaw = "[" + String.join(",", facets) + "]";
-            String encodedFacets = java.net.URLEncoder.encode(facetsRaw, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
 
             boolean isRandom = "random".equals(req.sortMethod);
             // 🔥 强制设为 downloads 排序，这是能够快速跳过/过滤下载量的关键！
@@ -396,13 +401,17 @@ public class ModpackController {
 
             for (int i = 0; i < maxApiRequests; i++) {
                 int currentOffset = i * apiLimit;
-                String urlString = String.format("https://api.modrinth.com/v2/search?limit=%d&offset=%d&index=%s&facets=%s",
-                        apiLimit, currentOffset, index, encodedFacets);
 
-                // 像爬虫一样礼貌休眠，防止触发 429
-                if (i > 0) Thread.sleep(100);
-
-                JsonNode response = restClient.get().uri(java.net.URI.create(urlString)).retrieve().body(JsonNode.class);
+                // 旧实现是 Thread.sleep(100) 的"礼貌休眠"——既挡不住 429，也不能跨调用点生效。
+                // 现在统一交给 ModrinthApiClient 的全局令牌闸（默认 240 次/分钟）。
+                JsonNode response;
+                try {
+                    response = apiClient.searchPage(null, apiLimit, currentOffset, index, facetsRaw);
+                } catch (ModrinthApiClient.UnavailableException e) {
+                    // 令牌闸排队超预算 / 重试耗尽：拿已经建好的池子收工，不把 500 抛给用户
+                    System.out.println("上游不可用，停止抓取：" + e.getMessage());
+                    break;
+                }
 
                 if (response == null || !response.has("hits") || response.path("hits").isEmpty()) {
                     System.out.println("到达 Modrinth 尽头，停止抓取。");

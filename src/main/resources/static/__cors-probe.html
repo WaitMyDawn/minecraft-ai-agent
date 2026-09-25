@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>CORS probe</title></head>
+<body>
+<pre id="out">running</pre>
+<script>
+    // 临时页面：验证真实浏览器能否跨域直连 Modrinth（同源是 http://localhost:8080，
+    // 和真实页面的处境完全一致）。验证完即删。
+    const out = document.getElementById('out');
+    const lines = [];
+    (async () => {
+        try {
+            const r = await fetch('https://api.modrinth.com/v2/projects?ids=%5B%22create%22%5D');
+            const j = await r.json();
+            lines.push('BATCH status=' + r.status + ' slug=' + (j[0] && j[0].slug));
+        } catch (e) {
+            lines.push('BATCH FAILED: ' + e);
+        }
+        try {
+            const r = await fetch('https://api.modrinth.com/v2/project/create/version'
+                + '?game_versions=%5B%221.20.1%22%5D&loaders=%5B%22forge%22%5D');
+            const j = await r.json();
+            lines.push('ENV status=' + r.status + ' versions=' + (Array.isArray(j) ? j.length : 'n/a'));
+        } catch (e) {
+            lines.push('ENV FAILED: ' + e);
+        }
+        out.textContent = lines.join('\n');
+    })();
+</script>
+</body>
+</html>
