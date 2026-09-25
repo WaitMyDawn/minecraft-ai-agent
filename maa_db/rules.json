@@ -5,6 +5,7 @@
     { "modA": "irons-spells-n-spellbooks", "modB": "curios", "relationType": "DEPENDS_ON" },
     { "modA": "irons-spells-n-spellbooks", "modB": "playeranimator", "relationType": "DEPENDS_ON" },
     { "modA": "irons-spells-n-spellbooks", "modB": "irons-lib", "relationType": "DEPENDS_ON" },
+    { "modA": "createaddition", "modB": "create", "relationType": "DEPENDS_ON" },
     { "modA": "regions-unexplored", "modB": "lithostitched", "relationType": "DEPENDS_ON" },
     { "modA": "regions-unexplored", "modB": "biolith", "relationType": "DEPENDS_ON" },
     { "modA": "l_enders-cataclysm", "modB": "lionfish-api", "relationType": "DEPENDS_ON" },

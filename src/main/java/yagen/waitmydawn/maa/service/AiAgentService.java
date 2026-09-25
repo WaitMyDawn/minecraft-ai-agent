@@ -185,58 +185,6 @@ public class AiAgentService {
         String review(String context);
     }
 
-    interface DoctorAgent {
-        @SystemMessage({
-                "你是一个顶级的 Minecraft 崩溃日志诊断专家。",
-                "你的任务只有一个：找到【第一个引发问题的模组】并移除它。只做减法。",
-
-                "【🚨 绝对铁律：只能从提供的 JAR 列表中选择目标 🚨】",
-                "用户输入开头列出【当前沙盒 mods 文件夹中的 JAR 包列表】。",
-                "格式: modid ← 文件名.jar",
-                "你的 <target> 必须是列表中的 modid，一个字母都不能差!",
-                "找不到就输出 ABORT，禁止编造!",
-
-                "【🔍 找第一个根因的方法 —— 最重要】",
-                "崩溃日志中可能有多个模组报错，你的任务是找到【时间上最先发生的、由模组自身代码缺陷引起的错误】。",
-                "",
-                "判断优先级 (从高到低)：",
-                "1. MixinApplyError / Mixin transformation error:",
-                "   → 看 'Mixin [... from mod X] ... FAILED during APPLY'",
-                "   → 移除 X (Mixin 的所属模组), 不是被修改的目标模组!",
-                "   → 例: 'Mixin [mixins.json:xxx from mod jeffsissaddons]' → 移除 jeffsissaddons",
-                "2. NoClassDefFoundError / ClassNotFoundException:",
-                "   → 找堆栈帧中第一个出现此错误的 mod 层调用者",
-                "   → 'at TRANSFORMER/brokenmod@...' → 移除 brokenmod",
-                "3. 'requires xxx but xxx is not installed':",
-                "   → 移除报 requires 的那个模组 (缺少前置的模组), 不是那个前置!",
-                "4. 其他异常 (NPE, IllegalState 等):",
-                "   → 找堆栈帧中第一个非 JDK/NeoForge/Minecraft 框架的 mod 层调用者",
-
-                "【🚨 只移除一个!而且是第一个!🚨】",
-                "你每轮只能输出一个 REMOVE。系统会在下一轮重新测试。",
-                "你必须移除【第一个出错的模组】，而不是列表中间或末尾的模组。",
-                "后面的 Mod loading issue 是级联效应 — 第一个模组崩了导致后面的也出错。",
-
-                "【❌ 严禁\"最后一个加载\"逻辑 ❌】",
-                "日志尾部出现的模组名只是「最后一个开始加载的模组」，不是「第一个出错的模组」!",
-                "它只是因为前面的模组崩溃导致加载流程中断，被迫停在它这里。",
-                "绝对禁止因为某个模组 \"在日志尾部出现\" 或 \"是最后一个加载的\" 就移除它!",
-                "只看错误类型和堆栈帧，不看加载顺序!",
-
-                "## 基础库保护：",
-                "geckolib, curios, cloth-config, architectury, balm, bookshelf, jei, jade 等广泛依赖的库不要移除，",
-                "除非崩溃日志明确说明它是唯一的直接肇事者。",
-
-                "## 输出格式：",
-                "<action>REMOVE</action><target>模组在JAR列表中的modid</target><reason>简要说明</reason>",
-                "或底座问题时:",
-                "<action>ABORT</action><target></target><reason>底座/框架问题</reason>",
-                "",
-                "纯 XML!不要额外文字/空行/markdown!"
-        })
-        String diagnose(String crashLog);
-    }
-
     public AgentCallResult planBlueprint(String prompt, String userApiKey, Object... tools) {
         MaaLog.user("=== Agent: Architect 开始 ===\n【完整输入】\n" + prompt);
         long t0 = System.currentTimeMillis();
@@ -277,20 +225,4 @@ public class AiAgentService {
         }
     }
 
-    public String diagnoseCrash(String log, String userApiKey) {
-        MaaLog.user("=== Agent: Doctor 开始 ===\n【完整输入】\n" + log);
-        long t0 = System.currentTimeMillis();
-        try {
-            var agent = AiServices.builder(DoctorAgent.class)
-                    .chatModel(createModel(userApiKey, new TokenUsageCollector()))
-                    .build();
-            String output = agent.diagnose(log);
-            MaaLog.user("=== Agent: Doctor 结束 (耗时 "
-                    + (System.currentTimeMillis() - t0) + "ms) ===\n【完整输出】\n" + output);
-            return output;
-        } catch (Exception e) {
-            MaaLog.error("Doctor 调用失败", e);
-            throw e;
-        }
-    }
 }

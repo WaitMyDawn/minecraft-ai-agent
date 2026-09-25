@@ -52,7 +52,7 @@ public class ChatController {
      * <p>修复：这里原先读的是 {@code System.getProperty("ai.api.key")}（JVM 系统属性），
      * 而 application.properties 里配的是 Spring 属性 {@code ai.api.key=${DEEPSEEK_API_KEY:}}，
      * 两者不是一回事——按文档用环境变量配置默认 Key 的部署，/api/chat 会一直报"未配置 API Key"。
-     * 与 SandboxController 的取值方式保持一致。
+     * 与启动时注入的其它配置项保持同一套取值方式（Spring 属性优先，环境变量兜底）。
      */
     @Value("${ai.api.key:}")
     private String systemDefaultApiKey;
