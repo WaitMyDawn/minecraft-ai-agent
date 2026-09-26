@@ -64,5 +64,33 @@ for (const spec of imports) {
     }
 }
 
+// ---- 具名 import 与 export 必须对得上 ----
+//
+// 引入一个对方没导出的名字，会在**模块链接阶段**直接失败 → 整页白屏。
+// node --check 只解析语法、看不见这个；路径存在性检查也看不见它。
+// 这是白屏的第三个成因，前两个（重复 module 标签、import 路径写错）已经各发生过一次。
+const namedImports = (src) => [...src.matchAll(
+    new RegExp("import\\s*\\{([^}]*)\\}\\s*from\\s*'(\.[^']+)'", 'g'))]
+    .map(m => ({spec: m[2], names: m[1].split(',').map(s => s.trim()).filter(Boolean)}));
+
+const exportedNames = (src) => [...src.matchAll(new RegExp('^export const (\\w+)', 'gm'))]
+    .map(m => m[1]);
+
+const linked = new Set();
+const checkLinks = (src, label, baseDir) => {
+    for (const {spec, names} of namedImports(src)) {
+        const target = resolve(baseDir, spec);
+        if (!existsSync(target) || linked.has(target)) continue;
+        linked.add(target);
+        const provided = exportedNames(readFileSync(target, 'utf8'));
+        const missing = names.filter(n => !provided.includes(n));
+        check(missing.length === 0,
+            `${label} → ${spec} 引入的 ${names.length} 个名字都有导出`,
+            `${label} → ${spec} 引入了不存在的导出：${missing.join(', ')}（会白屏）`);
+        checkLinks(readFileSync(target, 'utf8'), spec, dirname(target));
+    }
+};
+checkLinks(html, 'index.html', staticDir);
+
 console.log(failed ? '\nSOME CHECKS FAILED' : '\nALL CHECKS PASSED');
 process.exit(failed ? 1 : 0);

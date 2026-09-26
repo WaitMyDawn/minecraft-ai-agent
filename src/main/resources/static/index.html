@@ -995,44 +995,39 @@
     import {escapeHtml, renderMarkdownSafe, opsRows} from './js/utils/format.js';
     import {createApp, ref, reactive, computed, inject, provide, nextTick, watch} from 'vue';
     import TreeNodeComponent from './js/components/TreeNode.js';
+    import {
+        currentView, chatHistory, userInput, sessionUuid, searchQuery, thinkTime,
+        currentThought, isLoading, isResolving, isBuilding, packData, previewData,
+        selectedMods, rootTreeNodes, nodesMap, childrenMap, globalHighlightId, dbRules,
+        deleteMode, deleteMarked, deleteBusy, isRefreshing, deleteConflicts, conflictIds,
+        ctxMenu, deleteDialog, pendingMrpack, manualAddSlug, showSuggestBoard, isSuggesting,
+        suggestedMods, selectedSuggests, availableCategories, categoryGloss, suggestForm, pageJumpInput,
+        suggestMode, showAuthModal, authMode, authForm, authError, authSuccess,
+        authLoading, authUser, showSidebar, currentConvId, conversationList, profileApiKey,
+        profileApiKeyMsg, profileUsername, profileWeight, hasApiKey, pwOld, pwNew,
+        pwMsg, categoryPrefs, modPrefs, modPrefSearch, newCatPref, modPrefPage,
+        modPrefJump, blacklistPage, blacklistJump, modInfoCache, manualSlugInput, addingModBySlug,
+        modSlugAddMsg, editingBuildCountId, editingBuildCountVal, blacklistItems, blacklistSlugInput, blacklistMsg,
+        enableBlacklist, enableUserFeedbackRules, keEnvs, keEnv, keRelation, keModA,
+        keModB, keModAInfo, keModBInfo, keModAError, keModBError, keMsg,
+    } from './js/store.js';
+    import {authHeader, apiFetch} from './js/api.js';
+    import {
+        doAuth, logout, loadConversations, newConversation, loadConversation,
+        deleteConversation, saveMsg
+    } from './js/features/auth.js';
 
     const app = createApp({
         setup() {
-            const currentView = ref('chat');    // 控制当前显示的视图: chat, lab, db, sync
-            const chatHistory = ref([]);        // 存储所有消息 [{role, content, thinkTime}]
-            const userInput = ref('');          // 输入框当前文本
-            const sessionUuid = ref('session-' + Date.now() + '-' + Math.random().toString(36).slice(2,8));
 
             // 🔥 新增：用于左侧树状图过滤的搜索关键词
-            const searchQuery = ref('');
 
             // 🔥 新增：计时器状态
-            const thinkTime = ref('0.0');
-            const currentThought = ref('');     // 当前显示的思考步骤文案
             let timerInterval = null;
 
-            const isLoading = ref(false);
-            const isResolving = ref(false);
-            const isBuilding = ref(false);
 
-            const packData = reactive({
-                name: "MAA-Pack",
-                mcVersion: "1.21.1",
-                loader: "neoforge",
-                modSlugs: [],
-                // 🗑️ 用户在图谱里显式删除的模组：随 preview/chat 一起下发，
-                // 防止被 Architect 复述或依赖引擎当作前置重新补回来（P2）
-                excludedSlugs: []
-            });
-            const previewData = ref(null);
 
-            const selectedMods = ref(new Set());
-            const rootTreeNodes = ref([]);              // 根节点（不被任何模组依赖的模组）
-            const nodesMap = ref({});                   // ID -> 模组对象的映射表
-            const childrenMap = ref({});                // ID -> 依赖它的模组ID数组
-            const globalHighlightId = ref(null);        // 当前高亮的模组ID
 
-            const dbRules = ref([]);                    // 存储从后端获取的所有规则
 
             // Sync Hub State
             let networkGraph = null;
@@ -1041,23 +1036,9 @@
             // 🗑️ 删除能力状态（P1/P2）
             // 设计原则：勾选 = 本次导出是否包含（临时，会话内）；删除 = 从整合包清单移除（持久，写入 packData.excludedSlugs）
             // ==========================================
-            const deleteMode = ref(false);            // 左侧树是否处于"批量删除"标记模式
-            const deleteMarked = ref(new Set());      // 标记模式下待删除的节点 id
-            const deleteBusy = ref(false);            // 删除执行中
-            const isRefreshing = ref(false);          // 后台异步重跑 preview 中
-            const deleteConflicts = ref([]);          // 断链诊断 [{requiredBy, missing}]
-            const conflictIds = ref(new Set());       // 断链受影响的节点 id（用于树/图描边）
 
-            const ctxMenu = reactive({visible: false, x: 0, y: 0, nodeId: null});
 
             // 两段式删除确认弹窗状态
-            const deleteDialog = reactive({
-                visible: false,
-                stage: '',        // 'cascade' = 被删项是别人的前置；'prereq' = 被删项自己有前置
-                seed: [],
-                dependents: [],
-                prerequisites: []
-            });
             const closeDeleteDialog = () => {
                 deleteDialog.visible = false;
                 deleteDialog.stage = '';
@@ -1425,7 +1406,6 @@
             };
 
             // 🔥 待发送的 mrpack 附件
-            const pendingMrpack = ref(null);
 
             const sendMessage = async () => {
                 let msg = userInput.value.trim();
@@ -1841,19 +1821,9 @@
             });
 
             // == 新增智能衍生变量 ==
-            const manualAddSlug = ref('');
-            const showSuggestBoard = ref(false);
-            const isSuggesting = ref(false);
-            const suggestedMods = ref([]);
-            const selectedSuggests = ref(new Set());
 
             // 🏷️ 类别清单以 /api/meta/categories 为权威源（后端 CategoryRegistry）；
             // 这里只保留一份兜底副本，接口不可用时界面仍能正常工作。
-            const availableCategories = ref(['technology', 'magic', 'adventure', 'worldgen', 'food',
-                'storage', 'optimization', 'equipment', 'utility', 'decoration',
-                'mobs', 'cursed', 'economy', 'game-mechanics', 'library', 'management',
-                'minigame', 'social', 'transportation']);
-            const categoryGloss = ref({});   // category -> 中文释义（用于按钮 tooltip）
             const loadCategories = async () => {
                 try {
                     const res = await fetch('/api/meta/categories');
@@ -1867,10 +1837,8 @@
                 }
             };
             loadCategories();
-            const suggestForm = reactive({ categories: [], minDownloads: 0, maxDownloads: 2100000000, sortType: 'downloads', page: 0 });
 
             // 🔥 新增快速跳转相关状态
-            const pageJumpInput = ref('');
 
             const toggleSuggestCategory = (cat) => {
                 const idx = suggestForm.categories.indexOf(cat);
@@ -1913,7 +1881,6 @@
                 suggestedMods.value = [];
                 selectedSuggests.value = new Set();
             };
-            const suggestMode = ref('pack'); // 'pack' = 添加到整合包, 'prefs' = 添加到偏好
 
             // 从偏好页打开: 选中的模组添加到偏好
             const openSuggestBoardForPref = () => {
@@ -1987,180 +1954,9 @@
             };
 
             // ========== 用户认证 ==========
-            const showAuthModal = ref(false);
-            const authMode = ref('login');  // 'login' | 'register'
-            const authForm = reactive({account: '', username: '', password: ''});
-            const authError = ref('');
-            const authSuccess = ref('');
-            const authLoading = ref(false);
-            const authUser = ref(null);  // {token, accountNumber, username}
-            const showSidebar = ref(false);
-            const currentConvId = ref(null);
-            const conversationList = ref([]);
 
-            // 从 localStorage 恢复登录 — 先恢复再异步校验服务端是否有效
-            const savedAuth = localStorage.getItem('maa-auth');
-            if (savedAuth) { try { authUser.value = JSON.parse(savedAuth); } catch(e){} }
-            // 异步校验 token 有效性，同步前后端状态
-            if (authUser.value && authUser.value.token) {
-                fetch('/api/user/check-token', {
-                    headers: {'X-Auth-Token': authUser.value.token}
-                }).then(r => r.json()).then(d => {
-                    if (!d.valid) {
-                        authUser.value = null;
-                        localStorage.removeItem('maa-auth');
-                        console.log('令牌已过期，已清除本地登录状态');
-                    } else {
-                        // 同步服务端最新数据
-                        authUser.value = { ...authUser.value, ...d, token: authUser.value.token };
-                        hasApiKey.value = d.hasApiKey === true;
-                        localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
-                    }
-                }).catch(() => {});
-            }
-
-            const authHeader = () => authUser.value ? {'X-Auth-Token': authUser.value.token} : {};
-
-            // 🔥 全局 fetch 包装: 捕获未登录错误并提示重新登录
-            const apiFetch = async (url, opts = {}) => {
-                const res = await fetch(url, { ...opts, headers: { ...opts.headers, ...authHeader() } });
-                // 401: 服务端明确返回未授权
-                if (res.status === 401) {
-                    authUser.value = null; localStorage.removeItem('maa-auth');
-                    authError.value = '登录已过期，请重新登录';
-                    showAuthModal.value = true;
-                    throw new Error('未登录');
-                }
-                // 500 with 未登录 text
-                if (res.status === 500) {
-                    try {
-                        const text = await res.clone().text();
-                        if (text.includes('未登录') || text.includes('RuntimeException')) {
-                            authUser.value = null; localStorage.removeItem('maa-auth');
-                            authError.value = '登录状态异常，请重新登录';
-                            showAuthModal.value = true;
-                            throw new Error('未登录');
-                        }
-                    } catch(e) { if (e.message === '未登录') throw e; }
-                }
-                // 200 but JSON body contains error field (defense in depth)
-                if (res.status === 200 && res.headers.get('content-type')?.includes('application/json')) {
-                    try {
-                        const cloned = res.clone();
-                        const json = await cloned.json();
-                        if (json.error && (json.error.includes('未登录') || json.error.includes('不存在'))) {
-                            authUser.value = null; localStorage.removeItem('maa-auth');
-                            authError.value = '登录已过期，请重新登录';
-                            showAuthModal.value = true;
-                            throw new Error('未登录');
-                        }
-                        if (json.error) throw new Error(json.error);
-                    } catch(e) { if (e.message === '未登录') throw e; }
-                }
-                return res;
-            };
-
-            const doAuth = async () => {
-                authLoading.value = true; authError.value = ''; authSuccess.value = '';
-                const url = authMode.value === 'login' ? '/api/user/login' : '/api/user/register';
-                const body = authMode.value === 'login'
-                    ? { account: authForm.account, password: authForm.password }
-                    : { username: authForm.username, password: authForm.password };
-                try {
-                    const r = await fetch(url, {  // url 已是 /api/user/login 格式，浏览器自动拼域名
-                        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
-                    });
-                    // 非 JSON 响应 = 后端未启动或用 file:// 打开，给明确提示
-                    const contentType = r.headers.get('content-type') || '';
-                    if (!contentType.includes('application/json')) {
-                        authError.value = '请通过 http://localhost:8080 访问，不要用文件方式打开';
-                        return;
-                    }
-                    const d = await r.json();
-                    if (d.error) { authError.value = d.error; return; }
-                    authUser.value = d;
-                    localStorage.setItem('maa-auth', JSON.stringify(d));
-                    if (authMode.value === 'register') {
-                        authSuccess.value = '✅ 注册成功！你的账号是: ' + d.accountNumber + ' (已自动登录)';
-                        setTimeout(() => { showAuthModal.value = false; authSuccess.value = ''; }, 3000);
-                    } else {
-                        showAuthModal.value = false;
-                    }
-                    await loadConversations();
-                } catch(e) {
-                    console.error('Auth request failed:', e);
-                    authError.value = '网络错误: ' + (e.message || '请检查后端是否启动');
-                } finally { authLoading.value = false; }
-            };
-            const logout = () => {
-                authUser.value = null; localStorage.removeItem('maa-auth');
-                currentView.value = 'chat'; showSidebar.value = false; conversationList.value = [];
-            };
-
-            // ========== 对话历史 ==========
-            const loadConversations = async () => {
-                if (!authUser.value) return;
-                try {
-                    const r = await fetch('/api/prefs/conversations', {headers: authHeader()});
-                    conversationList.value = await r.json();
-                } catch(e) {}
-            };
-            const newConversation = async () => {
-                if (!authUser.value) return;
-                try {
-                    const r = await fetch('/api/prefs/conversations', {
-                        method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
-                        body: JSON.stringify({title: '新对话 ' + new Date().toLocaleDateString()})
-                    });
-                    const d = await r.json();
-                    currentConvId.value = d.id;
-                    // 新对话 = 新包：清空清单与删除排除名单
-                    chatHistory.value = []; packData.modSlugs = []; packData.excludedSlugs = [];
-                    await loadConversations();
-                } catch(e) {}
-            };
-            const loadConversation = async (id) => {
-                try {
-                    const r = await fetch('/api/prefs/conversations/' + id + '/messages', {headers: authHeader()});
-                    const msgs = await r.json();
-                    chatHistory.value = msgs.map(m => ({
-                        role: m.role, content: m.content, hasData: m.hasData,
-                        thinkTime: m.thinkTime || undefined
-                    }));
-                    if (msgs.length > 0 && msgs[msgs.length-1].modSlugs) {
-                        packData.modSlugs = msgs[msgs.length-1].modSlugs.split(',');
-                    }
-                    // 切换历史对话 = 切换包：不继承上一个包的删除排除名单
-                    packData.excludedSlugs = [];
-                    currentConvId.value = id;
-                } catch(e) {}
-            };
-            const deleteConversation = async (id) => {
-                await fetch('/api/prefs/conversations/' + id, {
-                    method: 'DELETE', headers: authHeader()
-                });
-                if (currentConvId.value === id) { currentConvId.value = null; chatHistory.value = []; }
-                await loadConversations();
-            };
-            const saveMsg = async (role, content, hasData, thinkTime, slugs) => {
-                if (!authUser.value || !currentConvId.value) return;
-                try {
-                    const body = {role, content, hasData, thinkTime: thinkTime||'', modSlugs: (slugs||[]).join(',')};
-                    const title = chatHistory.value.length <= 2 && role === 'user' ? content.substring(0, 30) : null;
-                    if (title) body.title = title;
-                    await fetch('/api/prefs/conversations/' + currentConvId.value + '/messages', {
-                        method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
-                        body: JSON.stringify(body)
-                    });
-                } catch(e) {}
-            };
 
             // ========== 设置页 ==========
-            const profileApiKey = ref('');
-            const profileApiKeyMsg = ref('');
-            const profileUsername = ref('');
-            const profileWeight = ref(authUser.value ? authUser.value.preferenceWeight : 0.3);
-            const hasApiKey = ref(false);  // 是否已设置 API Key
             const saveApiKey = async () => {
                 const key = profileApiKey.value.trim();
                 if (!key) return;
@@ -2183,9 +1979,6 @@
                     profileApiKeyMsg.value = '保存失败: ' + e.message;
                 }
             };
-            const pwOld = ref('');
-            const pwNew = ref('');
-            const pwMsg = ref('');
             const changePassword = async () => {
                 if (!pwOld.value || !pwNew.value) return;
                 pwMsg.value = '';
@@ -2224,10 +2017,6 @@
             };
 
             // ========== 偏好 ==========
-            const categoryPrefs = ref([]);
-            const modPrefs = ref([]);
-            const modPrefSearch = ref('');
-            const newCatPref = reactive({category: 'adventure', rank: 5});
             const filteredModPrefs = computed(() => {
                 let arr = modPrefs.value;
                 if (modPrefSearch.value) {
@@ -2239,15 +2028,11 @@
 
             // ========== 分页 ==========
             const pageSize = 10;
-            const modPrefPage = ref(0);
-            const modPrefJump = ref('');
             const modPrefTotalPages = computed(() => Math.max(1, Math.ceil(filteredModPrefs.value.length / pageSize)));
             const pagedModPrefs = computed(() => {
                 const start = modPrefPage.value * pageSize;
                 return filteredModPrefs.value.slice(start, start + pageSize);
             });
-            const blacklistPage = ref(0);
-            const blacklistJump = ref('');
             const filteredBlacklist = computed(() => blacklistItems.value);
             const blacklistTotalPages = computed(() => Math.max(1, Math.ceil(filteredBlacklist.value.length / pageSize)));
             const pagedBlacklist = computed(() => {
@@ -2268,7 +2053,6 @@
             };
 
             // Modrinth 数据缓存 (仅渲染时获取，不存储在导出文件)
-            const modInfoCache = ref({});
             const loadModInfoCache = async (slugs) => {
                 for (const slug of slugs) {
                     if (modInfoCache.value[slug]) continue;
@@ -2281,9 +2065,6 @@
             };
 
             // 手动 slug 输入添加
-            const manualSlugInput = ref('');
-            const addingModBySlug = ref(false);
-            const modSlugAddMsg = ref('');
             const addModBySlug = async () => {
                 const slug = manualSlugInput.value.trim().toLowerCase();
                 if (!slug) return;
@@ -2309,8 +2090,6 @@
             };
 
             // 编辑构建次数
-            const editingBuildCountId = ref(null);
-            const editingBuildCountVal = ref(0);
             const startEditBuildCount = (mp) => {
                 editingBuildCountId.value = mp.id;
                 editingBuildCountVal.value = mp.buildCount;
@@ -2391,11 +2170,6 @@
             };
 
             // ========== 黑名单管理 ==========
-            const blacklistItems = ref([]);
-            const blacklistSlugInput = ref('');
-            const blacklistMsg = ref('');
-            const enableBlacklist = ref(false);
-            const enableUserFeedbackRules = ref(false);
 
             const loadBlacklist = async () => {
                 if (!authUser.value) return;
@@ -2461,16 +2235,6 @@
             };
 
             // ========== 知识规则编辑器 ==========
-            const keEnvs = ref(['neoforge-1.21.1']);
-            const keEnv = ref('neoforge-1.21.1');
-            const keRelation = ref('DEPENDS_ON');
-            const keModA = ref('');
-            const keModB = ref('');
-            const keModAInfo = ref(null);
-            const keModBInfo = ref(null);
-            const keModAError = ref('');
-            const keModBError = ref('');
-            const keMsg = ref('');
 
             const loadKeEnvs = async () => {
                 try {

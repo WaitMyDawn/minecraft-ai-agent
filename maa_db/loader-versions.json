@@ -1,5 +1,5 @@
 {
-  "updatedAt" : "2026-09-26T06:37:11.048623800Z",
+  "updatedAt" : "2026-09-26T07:28:59.626047200Z",
   "loaders" : {
     "neoforge" : {
       "source" : "maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml（取该 MC 版本族内最新正式版，剔除 -beta/-alpha 等预发布）",
