@@ -149,4 +149,34 @@ class DelegationContextTest {
             assertEquals(1, ctx.timedOutCount(), "退回要给兜底次数计数，方便观察客户端网络状况");
         }
     }
+
+    @Test
+    @DisplayName("同一个键问两次：第二次直接命中缓存，不再重新下发")
+    void sameKeyAskedTwiceIsServedFromStash() throws Exception {
+        DelegationContext ctx = new DelegationContext();
+
+        ctx.deliver(Kind.PROJECT, "create", obj());
+
+        // 第一次问：命中
+        assertEquals(Outcome.GOT, ctx.await(Kind.PROJECT, "create", 50).outcome());
+        // 第二次问：必须还命中。以前 await 读表用 remove，第二次会落空 → 重新登记需求
+        // → 再下发一次 → 那份回执到达时没人等、被当作"过期"丢掉（实测白发了 17 次请求）
+        assertEquals(Outcome.GOT, ctx.await(Kind.PROJECT, "create", 50).outcome(),
+                "同一个键第二次必须命中缓存，否则会重复下发给客户端且回执必然被拒");
+        assertFalse(ctx.hasPending(), "第二次不该登记任何新需求");
+        assertEquals(2, ctx.servedCount());
+        assertEquals(0, ctx.timedOutCount());
+    }
+
+    @Test
+    @DisplayName("同一个键的 ABSENT 结论同样只取一次")
+    void absentIsAlsoMemoized() {
+        DelegationContext ctx = new DelegationContext();
+
+        ctx.deliver(Kind.PROJECT, "ghost", null);
+
+        assertEquals(Outcome.ABSENT, ctx.await(Kind.PROJECT, "ghost", 50).outcome());
+        assertEquals(Outcome.ABSENT, ctx.await(Kind.PROJECT, "ghost", 50).outcome());
+        assertFalse(ctx.hasPending());
+    }
 }

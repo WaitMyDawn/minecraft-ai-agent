@@ -284,9 +284,8 @@ public class ChatController {
         }
 
         // 获取用户 ID (用于保存对话历史)
-        Long userId = null;
-        if (authToken != null) userId = userController.validateToken(authToken);
-        String userKey = userId != null ? "user-" + userId : "anon-" + sanitizeUuid(uuid);
+        Long userId = userIdFor(authToken);
+        String userKey = userLogKey(userId, uuid);
         MaaLog.setUserKey(userKey);
         MaaLog.app("请求开始 user=" + userKey
                 + " promptLen=" + (prompt == null ? 0 : prompt.length())
@@ -447,6 +446,21 @@ public class ChatController {
         return s.length() > 24 ? s.substring(0, 24) : s;
     }
 
+    /** 已登录用 userId、匿名用 anon-uuid —— 这是全项目日志归属的唯一口径 */
+    private Long userIdFor(String authToken) {
+        if (authToken == null) return null;
+        try {
+            return userController.validateToken(authToken);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 日志归属键：chat() 与 doChat() 必须用同一套规则，否则同一次请求的日志会劈成两个文件 */
+    private static String userLogKey(Long userId, String uuid) {
+        return userId != null ? "user-" + userId : "anon-" + sanitizeUuid(uuid);
+    }
+
     /** 模型是否完全没输出构筑标签（= 只写了说明文字，属于格式违规，需要纠正重试） */
     private static boolean looksLikeFormatViolation(String blueprint) {
         if (blueprint == null || blueprint.isBlank()) return true;
@@ -495,7 +509,9 @@ public class ChatController {
         }
         // 委派开启：整个流程挪到长生命周期的虚拟线程上——挂起等浏览器的线程必须活得比这次请求长。
         // RequestScope 在这里（提交时）捕获，否则任务里发出的服务器请求统计不到本轮 <trace>。
-        String userKey = sanitizeUuid(payload.getOrDefault("uuid", "default-user"));
+        // 用和 doChat 完全一样的推导规则，否则委派那几行会写进另一个日志文件
+        String userKey = userLogKey(userIdFor(authToken),
+                payload.getOrDefault("uuid", "default-user"));
         DelegationTasks.Task task = delegationTasks.submit(null, userKey, RequestScope.current(),
                 () -> doChat(payload, authToken, apiKeyOverride, convId));
         return continueOrReturn(task);
@@ -517,9 +533,35 @@ public class ChatController {
         if (task.isDone()) {
             return continueOrReturn(task);
         }
-        int accepted = applyFacts(task.context(), body);
-        MaaLog.app("委派回执 task=" + taskId + " 采纳 " + accepted + " 条");
+        logReceipt(task, body, applyFacts(task.context(), body));
         return continueOrReturn(task);
+    }
+
+    /**
+     * 回执日志：要让"用户替我们做了多少、我们自己做多少"一眼看得见。
+     *
+     * <p>走 {@code MaaLog.runWithUser} 而不是直接 {@code MaaLog.user}：这次回调跑在
+     * /facts 的请求线程上，那里没有用户上下文，直接写会落进总日志、丢归属。
+     */
+    private void logReceipt(DelegationTasks.Task task, JsonNode body, FactsTally tally) {
+        int answered = body.path("answered").isArray() ? body.path("answered").size() : 0;
+        int missing = body.path("missing").isArray() ? body.path("missing").size() : 0;
+        int unavailable = body.path("unavailable").isArray() ? body.path("unavailable").size() : 0;
+        JsonNode client = body.path("client");
+        // 拒收明细只在真出现拒收时才拼，平时保持这行简短。
+        // 用三元表达式一次成型：下面的 lambda 要求捕获的局部变量是 final。
+        final String rejected = tally.rejected() > 0
+                ? "，拒收 " + tally.rejected() + " 条（键已过期 " + tally.expired
+                        + " / 结构不自洽 " + tally.shapeRejected + " / 条目非法 " + tally.malformed
+                        + "），例：" + String.join("、", tally.samples)
+                : "";
+        MaaLog.runWithUser(task.userKey(), () -> MaaLog.user(
+                "📥 委派回执 [任务 " + task.taskId() + "] 采纳 " + tally.accepted + " 条"
+                        + "（带回 " + answered + " / 上游没有 " + missing + " / 没取到 " + unavailable + "）"
+                        + rejected
+                        + "；客户端自报发往 Modrinth " + client.path("requests").asInt(0) + " 次"
+                        + "（命中限流 " + client.path("rateLimited").asInt(0) + " 次，耗时 "
+                        + client.path("elapsedMs").asLong(0) + "ms）"));
     }
 
     @PostMapping("/abort")
@@ -539,7 +581,9 @@ public class ChatController {
             return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(needDataEnvelope(task));
         }
         try {
-            return textResponse(task.result().join());
+            String text = task.result().join();
+            logSettlement(task);
+            return textResponse(text);
         } catch (Exception e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
             String msg = cause.getMessage() == null ? cause.toString() : cause.getMessage();
@@ -548,10 +592,38 @@ public class ChatController {
         }
     }
 
+    /**
+     * 结算日志：一轮构筑结束后，把"外包了多少 / 用户完成多少 / 我们自己兜了多少"一次报清。
+     *
+     * <p>这三个数正好对应关心的三件事，而且都能和 {@code <trace>.upstream} 对上：
+     * <ul>
+     *   <li>{@code dispatchedCount} 下发给浏览器的需求总数（= 外包量）</li>
+     *   <li>{@code servedCount} 其中真由浏览器带回结果的数量</li>
+     *   <li>{@code timedOutCount} 用户没赶上的，退回服务器自抓的数量</li>
+     *   <li>{@code upstream.http} 服务器本轮真实发出的请求数</li>
+     * </ul>
+     */
+    private void logSettlement(DelegationTasks.Task task) {
+        DelegationContext ctx = task.context();
+        // 读任务自己的作用域，不是当前这个 /facts 请求线程的（见 RequestScope.snapshotOf 注释）
+        var up = task.scope() == null
+                ? new RequestScope.Snapshot(0, 0, 0, 0)
+                : task.scope().snapshotOf();
+        MaaLog.runWithUser(task.userKey(), () -> MaaLog.user(
+                "📊 委派结算 [任务 " + task.taskId() + "] 共 " + ctx.roundCount() + " 轮：下放 "
+                        + ctx.dispatchedCount() + " 项 / 用户完成 " + ctx.servedCount() + " 项 / 用户没赶上、服务器自抓 "
+                        + ctx.timedOutCount() + " 项；服务器本轮真实发出请求 " + up.http() + " 次"
+                        + "（429 " + up.rateLimited() + " 次，令牌闸排队 " + up.throttleWaitMs() + "ms）"));
+    }
+
     /** 下发给浏览器的需求清单 */
     private Map<String, Object> needDataEnvelope(DelegationTasks.Task task) {
+        List<DelegationContext.Want> pending = task.context().pendingWants();
+        int round = task.context().countDispatched(pending.size());
+        logDispatch(task, pending, round);
+
         List<Map<String, Object>> wanted = new ArrayList<>();
-        for (DelegationContext.Want want : task.context().pendingWants()) {
+        for (DelegationContext.Want want : pending) {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("ref", want.wantId());
             item.put("kind", want.kind().name().toLowerCase());
@@ -575,47 +647,113 @@ public class ChatController {
         return envelope;
     }
 
+    /** 下发日志：按事实种类分组，一眼看清这一轮外包了什么 */
+    private void logDispatch(DelegationTasks.Task task, List<DelegationContext.Want> pending, int round) {
+        Map<String, Integer> byKind = new LinkedHashMap<>();
+        for (DelegationContext.Want w : pending) {
+            byKind.merge(w.kind().name().toLowerCase(), 1, Integer::sum);
+        }
+        StringBuilder detail = new StringBuilder();
+        byKind.forEach((k, n) -> detail.append(detail.length() == 0 ? "" : "、").append(k).append("×").append(n));
+        int roundNo = round;
+        MaaLog.runWithUser(task.userKey(), () -> MaaLog.user(
+                "📤 委派下发 [任务 " + task.taskId() + "] 第 " + roundNo + " 轮："
+                        + pending.size() + " 项（" + detail + "）→ 交给用户浏览器直连 Modrinth，服务器不发"));
+    }
+
     /**
      * 把回执喂进上下文。
      *
      * @return 采纳的条数（用于观测：这个数越大，说明搬走的服务器请求越多）
      */
-    private int applyFacts(DelegationContext ctx, JsonNode body) {
-        int accepted = acceptFactList(ctx, body.path("answered"), Outcome.GOT);
-        accepted += acceptFactList(ctx, body.path("missing"), Outcome.ABSENT);
+    private FactsTally applyFacts(DelegationContext ctx, JsonNode body) {
+        FactsTally tally = new FactsTally();
+        acceptFactList(ctx, body.path("answered"), Outcome.GOT, tally);
+        acceptFactList(ctx, body.path("missing"), Outcome.ABSENT, tally);
         // 第三类：客户端没抓到（网络不通/被拦/批量端点整批失败）。
         // 这一类和 missing 必须分开——当成"上游确实没有"会让服务器得出"该模组不存在"的错误结论。
-        accepted += acceptFactList(ctx, body.path("unavailable"), Outcome.TIMEOUT);
-        return accepted;
+        acceptFactList(ctx, body.path("unavailable"), Outcome.TIMEOUT, tally);
+        return tally;
+    }
+
+    /**
+     * 回执处理的计数：采纳多少、以及<b>被拒的原因分类</b>。
+     *
+     * <p>为什么要分原因：实测出现过"客户端带回 12 条、一条都没采纳"，而当时的日志只有
+     * "采纳 0 条"——三道闸（键过期 / 结构不自洽 / 条目非法）里是哪一道拦的，完全看不出来。
+     * 这几个计数器就是为那一次加的。
+     */
+    private static final class FactsTally {
+        int accepted;
+        /** 键不在等待表里：等待线程已超时自抓、或任务已被取消 */
+        int expired;
+        /** 结构与请求不自洽（id/slug 对不上、版本的 mc/loader 不匹配） */
+        int shapeRejected;
+        /** 条目本身非法（kind 未知、key 为空或超长） */
+        int malformed;
+        /** 留最多 3 条被拒的 key 作样本——只看数字还是不知道拦了什么 */
+        final List<String> samples = new ArrayList<>();
+
+        void malformed(String key) {
+            malformed++;
+            sample(key);
+        }
+
+        void expired(String key) {
+            expired++;
+            sample(key);
+        }
+
+        void shapeRejected(String key) {
+            shapeRejected++;
+            sample(key);
+        }
+
+        int rejected() {
+            return expired + shapeRejected + malformed;
+        }
+
+        private void sample(String key) {
+            if (samples.size() >= 3) return;
+            samples.add(key.length() > 60 ? key.substring(0, 60) + "…" : key);
+        }
     }
 
     /**
      * @param mode GOT = 带数据的采纳；ABSENT = 上游明确没有；TIMEOUT = 没抓到，服务器自己抓
      */
-    private int acceptFactList(DelegationContext ctx, JsonNode list, Outcome mode) {
-        if (!list.isArray()) return 0;
-        int accepted = 0;
+    private void acceptFactList(DelegationContext ctx, JsonNode list, Outcome mode, FactsTally tally) {
+        if (!list.isArray()) return;
         for (JsonNode fact : list) {
-            if (accepted >= MAX_FACT_RECORDS) break;
+            if (tally.accepted >= MAX_FACT_RECORDS) break;
             DelegationContext.Kind kind = parseKind(fact.path("kind").asText(""));
             String key = fact.path("key").asText("");
-            if (kind == null || key.isBlank() || key.length() > 512) continue;
+            // 搜索类需求的 key 是完整 URL，比 slug/version_id 长得多，所以上限定在 1024
+            if (kind == null || key.isBlank() || key.length() > 1024) {
+                tally.malformed(key);
+                continue;
+            }
             // 只收"此刻真的有人在等"的键。客户端没法往上下文里塞服务器没要过的数据，
             // 晚到的回执（等待线程已超时自抓）也在这里被丢掉——那份数据已经没有消费者了。
-            if (!ctx.isPending(kind, key)) continue;
+            if (!ctx.isPending(kind, key)) {
+                tally.expired(key);
+                continue;
+            }
             if (mode == Outcome.GOT) {
                 JsonNode data = fact.path("data");
-                if (!data.isObject() || !selfConsistent(kind, key, data)) continue;
+                if (!data.isObject() || !selfConsistent(kind, key, data)) {
+                    tally.shapeRejected(key);
+                    continue;
+                }
                 ctx.deliver(kind, key, data);
             } else if (mode == Outcome.ABSENT) {
                 ctx.deliver(kind, key, null);
             } else {
-                // 立刻放行等待线程让它自己抓，而不是干等到 5 秒预算耗尽
+                // 立刻放行等待线程让它自己抓，而不是干等到预算耗尽
                 ctx.handBack(kind, key);
             }
-            accepted++;
+            tally.accepted++;
         }
-        return accepted;
     }
 
     /** 包级可见：评测/单测直接钉住回执解析规则（与 looksLikeCriticDegeneration 同一套做法） */

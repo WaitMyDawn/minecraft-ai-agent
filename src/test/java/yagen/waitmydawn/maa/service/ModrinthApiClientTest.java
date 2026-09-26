@@ -149,4 +149,31 @@ class ModrinthApiClientTest {
 
         verify(fetcher, never()).prefetchProjects(org.mockito.ArgumentMatchers.anyCollection());
     }
+
+    @Test
+    @DisplayName("搜索也走委派：key 是完整 URL，服务器一次都不出网")
+    void searchIsDelegatedToo() throws Exception {
+        ModrinthFetcher fetcher = mock(ModrinthFetcher.class);
+        // 门面自己拼 URL，所以这里用真实实现（静态方法），不 mock
+        String expected = ModrinthFetcher.buildSearchUrl("create", 30, 0, null, "[[\"project_type:mod\"]]");
+        DelegationContext ctx = new DelegationContext();
+        ModrinthApiClient api = client(fetcher, true, 3_000);
+        AtomicReference<JsonNode> got = new AtomicReference<>();
+
+        try (ExecutorService ex = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<?> f = ex.submit(() -> DelegationContext.runWith(ctx,
+                    () -> got.set(api.search("create", 30, "[[\"project_type:mod\"]]"))));
+            for (int i = 0; i < 400 && !ctx.hasPending(); i++) {
+                Thread.sleep(5);
+            }
+            assertTrue(ctx.hasPending(), "搜索应先登记需求");
+            assertEquals(expected, ctx.pendingWants().get(0).key(),
+                    "下发的 key 必须是完整 URL，且与自抓路径拼出的完全一致");
+            ctx.deliver(Kind.SEARCH, expected, mapper.readTree("{\"hits\":[]}"));
+            f.get(3, TimeUnit.SECONDS);
+        }
+
+        assertTrue(got.get().path("hits").isArray());
+        verify(fetcher, never()).searchByUrl(anyString());
+    }
 }

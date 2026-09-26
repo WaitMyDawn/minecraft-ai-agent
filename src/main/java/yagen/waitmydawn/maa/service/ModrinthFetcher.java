@@ -125,6 +125,16 @@ public class ModrinthFetcher {
      * @param index 排序方式；为 null/空时省略该参数
      */
     public JsonNode searchPage(String query, int limit, int offset, String index, String facets) {
+        return searchByUrl(buildSearchUrl(query, limit, offset, index, facets));
+    }
+
+    /**
+     * 搜索 URL 的构造。
+     *
+     * <p>公开静态是因为门面层也要用它：委派给浏览器时，"要什么"就是"在哪查"，
+     * 两边必须拼出<b>完全一样</b>的 URL，否则委派回来的结果和服务器自抓的结果对不上号。
+     */
+    public static String buildSearchUrl(String query, int limit, int offset, String index, String facets) {
         StringBuilder url = new StringBuilder("https://api.modrinth.com/v2/search?limit=")
                 .append(limit)
                 .append("&offset=").append(offset);
@@ -138,8 +148,12 @@ public class ModrinthFetcher {
         if (facets != null && !facets.isBlank()) {
             url.append("&facets=").append(encode(facets));
         }
-        String full = url.toString();
-        return withSmartRetry(full, true, () -> fetchByUrl(full));
+        return url.toString();
+    }
+
+    /** 按完整 URL 搜（委派与自抓共用同一条路径，避免两条口径） */
+    public JsonNode searchByUrl(String url) {
+        return withSmartRetry(url, true, () -> fetchByUrl(url));
     }
 
     // ==========================================

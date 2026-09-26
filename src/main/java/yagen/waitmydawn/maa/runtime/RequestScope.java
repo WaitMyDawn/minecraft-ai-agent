@@ -99,9 +99,19 @@ public final class RequestScope {
     /** 取当前请求的计数快照；无作用域时全零 */
     public static Snapshot snapshot() {
         RequestScope s = CURRENT.get();
-        if (s == null) return new Snapshot(0, 0, 0, 0);
-        return new Snapshot(s.upstreamRequests.get(), s.rateLimited.get(),
-                s.retries.get(), s.throttleWaitMs.get());
+        return s == null ? new Snapshot(0, 0, 0, 0) : s.snapshotOf();
+    }
+
+    /**
+     * 取<b>这个</b>作用域的计数快照，与当前线程无关。
+     *
+     * <p>为什么必须区分：一次委派构筑的收口发生在后续某个 /facts 请求线程上，
+     * 而计数记在"提交任务时捕获的那个作用域"里。用 {@link #snapshot()} 读当前线程
+     * 只会读到那个 /facts 请求自己（全是 0），打印出来比不打印更误导。
+     */
+    public Snapshot snapshotOf() {
+        return new Snapshot(upstreamRequests.get(), rateLimited.get(),
+                retries.get(), throttleWaitMs.get());
     }
 
     /**

@@ -1,21 +1,15 @@
 // 前端取数器的回归检查。跑法：node eval/fe-delegation-check.mjs（只要 Node，无 npm 依赖）
 //
-// 做法是从 index.html 里把真实的取数器代码抽出来执行，而不是抄一份到测试里——
-// 抄一份就只测了副本，真正的页面代码照样可以坏掉。Java 那套单测完全覆盖不到这段 JS。
+// 直接 import 页面真正在用的那个模块（static/js/modrinth-client.js）。
+// 不抄一份到测试里——抄一份就只测了副本，真正的页面代码照样可以坏掉。
+// Java 那套单测完全覆盖不到这段 JS。
 //
 // 重点守两件事：
 //   ① 能批量的必须合并（5 个需求只发 4 次请求，而不是 5 次）；
 //   ② "上游确实没有"(missing) 与 "我没抓到"(unavailable) 绝不能混——混了服务器就会把
 //      网络不通读成"这个模组不存在"，产出一个缺模组的包，兜底也失效。
-import {readFileSync, writeFileSync} from 'node:fs';
-
-const htmlPath = new URL('../src/main/resources/static/index.html', import.meta.url);
-const html = readFileSync(htmlPath, 'utf8');
-const lines = html.split('\n');
-const start = lines.findIndex(l => l.includes('const DELEGATION = {'));
-const end = lines.findIndex(l => l.includes('const sendMessage = async'));
-if (start < 0 || end < 0 || end <= start) throw new Error('找不到取数器代码块');
-const helperBlock = lines.slice(start, end).join('\n');
+import {DELEGATION, fulfilWanted, readChatResponse}
+    from '../src/main/resources/static/js/modrinth-client.js';
 
 // ---- mock fetch：记录调用，并按端点返回假数据 ----
 let calls = [];
@@ -46,6 +40,9 @@ globalThis.fetch = async (url) => {
     if (url.includes('/v2/versions?')) {
         return jsonResponse([{id: 'v1', game_versions: ['1.20.1'], loaders: ['forge']}]);
     }
+    if (url.includes('/v2/search?')) {
+        return jsonResponse({hits: [{slug: 'create', title: 'Create'}], total_hits: 1});
+    }
     if (url.includes('/v2/project/')) {
         const slug = url.match(/\/v2\/project\/([^/]+)\/version/)[1];
         if (slug === 'offline') throw new Error('network down');
@@ -55,10 +52,6 @@ globalThis.fetch = async (url) => {
     }
     throw new Error('unexpected url ' + url);
 };
-
-// 取出 helper 块并求值（它只依赖 fetch / Date / JSON / Map / setTimeout）
-const factory = new Function(helperBlock + '\nreturn {fulfilWanted, readChatResponse, DELEGATION};');
-const {fulfilWanted, readChatResponse, DELEGATION} = factory();
 
 const assert = (cond, msg) => {
     if (!cond) {
@@ -132,5 +125,14 @@ const allFailed = await fulfilWanted([{kind: 'project', key: 'create'}, {kind: '
 globalThis.fetch = savedFetch;
 assert(allFailed.unavailable.length === 2 && allFailed.missing.length === 0,
     '整批失败时两个 key 都要进 unavailable，不能让服务器以为它们不存在');
+
+// ---- 用例 6：搜索类需求（key 是完整 URL） ----
+calls = [];
+const searchUrl = 'https://api.modrinth.com/v2/search?limit=30&offset=0&facets=%5B%5D';
+const searched = await fulfilWanted([{kind: 'search', key: searchUrl}]);
+assert(calls.length === 1 && calls[0] === searchUrl, '搜索需求应按原 URL 直接请求');
+assert(searched.answered.length === 1 && Array.isArray(searched.answered[0].data.hits),
+    '搜索响应要整份带回（含 hits），服务器才能当正常结果收下');
+assert(searched.unavailable.length === 0, '成功的搜索不该进 unavailable');
 
 console.log(process.exitCode ? 'SOME CHECKS FAILED' : 'ALL CHECKS PASSED');

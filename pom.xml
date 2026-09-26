@@ -28,6 +28,9 @@
     </scm>
     <properties>
         <java.version>21</java.version>
+        <!-- 前端没有构建步骤：这两个检查靠 Node 跑，绑在 test 阶段免得被忘记。
+             机器上没有 Node 时用 -DskipFrontendChecks=true 跳过（不影响 Java 测试）。 -->
+        <skipFrontendChecks>false</skipFrontendChecks>
     </properties>
     <dependencies>
         <dependency>
@@ -111,9 +114,38 @@
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
+                <version>3.6.3</version>
                 <configuration>
                     <classpathScope>runtime</classpathScope>
                 </configuration>
+                <executions>
+                    <!-- 前端结构检查：module 标签唯一、script 配平、import 目标存在。
+                         真实事故：重复的 script type=module 加上写错的 import 路径导致整页白屏，
+                         而三个 .js 文件的语法检查当时全绿：问题在 HTML 结构里，不在 JS 语法里。 -->
+                    <execution>
+                        <id>frontend-structure-check</id>
+                        <phase>test</phase>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <executable>node</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments><argument>eval/frontend-structure-check.mjs</argument></arguments>
+                            <skip>${skipFrontendChecks}</skip>
+                        </configuration>
+                    </execution>
+                    <!-- 取数器检查：批量合并、missing 与 unavailable 必须分开、429 退避 -->
+                    <execution>
+                        <id>frontend-delegation-check</id>
+                        <phase>test</phase>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <executable>node</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments><argument>eval/fe-delegation-check.mjs</argument></arguments>
+                            <skip>${skipFrontendChecks}</skip>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

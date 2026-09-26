@@ -99,18 +99,25 @@ public final class DelegationContext {
     private final AtomicLong lastWantNanos = new AtomicLong();
     private final AtomicInteger served = new AtomicInteger();
     private final AtomicInteger timedOut = new AtomicInteger();
+    /** 累计下发给浏览器的需求数（每次打包下发时累加，可能重复计入同一 key） */
+    private final AtomicInteger dispatched = new AtomicInteger();
+    /** 下发轮次 */
+    private final AtomicInteger rounds = new AtomicInteger();
     private volatile boolean cancelled;
 
     /** 挂起等待某个事实；超时或取消时返回 TIMEOUT/CANCELLED，由调用方自己出网 */
     public Answer await(Kind kind, String key, long budgetMs) {
         String id = id(kind, key);
 
-        JsonNode ready = satisfied.remove(id);
+        // 读表不删：同一个键在一次任务里可能被问多次（BFS 下一层又碰到同一个前置、
+        // 或两个分支共用一个依赖）。删了就会重新登记 → 再次下发，
+        // 而那份回执到达时必然"没人等"、被当成过期丢弃。
+        JsonNode ready = satisfied.get(id);
         if (ready != null) {
             served.incrementAndGet();
             return new Answer(Outcome.GOT, ready);
         }
-        if (absent.remove(id)) {
+        if (absent.contains(id)) {
             served.incrementAndGet();
             return new Answer(Outcome.ABSENT, null);
         }
@@ -155,16 +162,18 @@ public final class DelegationContext {
      */
     public void deliver(Kind kind, String key, JsonNode data) {
         String id = id(kind, key);
-        CompletableFuture<Answer> future = waiting.get(id);
-        Answer answer = new Answer(data == null ? Outcome.ABSENT : Outcome.GOT, data);
-        if (future != null && future.complete(answer)) {
-            return;
-        }
-        // 没人等着（可能已经超时自抓了）：留着，同一 key 下次再问时直接命中
+        // 先留底、再唤醒。留底是给"以后还会问同一个键"的调用用的：
+        // 只在有人等着的时候交付，后面再问同一个键就会重新登记→再次下发，
+        // 而第二份回执到达时等待者已经被第一份放走了，只能被当成"过期"丢弃
+        // （实测正是这样白发过 17 次请求）。
         if (data == null) {
             absent.add(id);
         } else {
             satisfied.put(id, data);
+        }
+        CompletableFuture<Answer> future = waiting.get(id);
+        if (future != null) {
+            future.complete(new Answer(data == null ? Outcome.ABSENT : Outcome.GOT, data));
         }
     }
 
@@ -228,6 +237,22 @@ public final class DelegationContext {
     /** 等超时、退回服务器自抓的次数（观测用：这个数大说明用户网络/浏览器不给力） */
     public int timedOutCount() {
         return timedOut.get();
+    }
+
+    /** 记一次打包下发，返回本次的轮次（从 1 开始） */
+    public int countDispatched(int wantCount) {
+        dispatched.addAndGet(wantCount);
+        return rounds.incrementAndGet();
+    }
+
+    /** 累计下发给浏览器的需求总数 */
+    public int dispatchedCount() {
+        return dispatched.get();
+    }
+
+    /** 已经下发过几轮 */
+    public int roundCount() {
+        return rounds.get();
     }
 
     private static String id(Kind kind, String key) {

@@ -4,7 +4,28 @@
     <meta charset="UTF-8">
     <title>MAA 整合包构筑台</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+<script type="importmap">
+{"imports": {"vue": "https://cdn.jsdelivr.net/npm/vue@3/dist/vue.esm-browser.prod.js"}}
+</script>
+<!-- 提前把 Vue 取下来：模块脚本是 deferred 的，Vue 要等解析完才开始下载，
+     中间的往返会让内联模板（{{ }}、v-if）先被画出来，肉眼就是"闪一下原始模板"。
+     地址必须和 importmap 里那个完全一致，浏览器按 URL 去重，不会重复下载。 -->
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.esm-browser.prod.js">
+<script>
+    // 兜底：挂了 v-cloak 之后，万一 Vue 没挂载（CDN 不通 / import 路径写错 / 语法错误），
+    // 页面会一直空着——那比"露出原始模板"更糟，因为看不出是哪儿坏了。
+    // 所以超时后强行显示，并在顶部挂一条红条告诉你去看 Console。
+    window.setTimeout(function () {
+        var el = document.getElementById('app');
+        if (!el || !el.hasAttribute('v-cloak')) return;   // 正常挂载了，什么都不做
+        el.removeAttribute('v-cloak');
+        var tip = document.createElement('div');
+        tip.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#dc2626;'
+            + 'color:#fff;padding:8px 12px;font:14px/1.5 sans-serif;text-align:center';
+        tip.textContent = '前端脚本没能挂载（Vue 未初始化）。按 F12 看 Console 的报错，刷新重试。';
+        document.body.appendChild(tip);
+    }, 8000);
+</script>
     <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
     <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <style>
@@ -124,10 +145,17 @@
             margin: 0.6em 0;
         }
 
+        /* Vue 挂载前隐藏整个应用：模板是内联在 HTML 里的，{{ }} 与 v-if 在挂载前是"死"的，
+           浏览器会把原始模板先画一遍（就是"闪一下 {{ cat }}"）。挂载成功后 Vue 自动摘掉 v-cloak。
+           配套兜底见 <head> 里的 setTimeout：8 秒仍未挂载就强行显示并提示看 Console。 */
+        [v-cloak] {
+            display: none !important;
+        }
+
     </style>
 </head>
 <body class="bg-gray-50 h-screen font-sans overflow-hidden">
-<div id="app" class="h-full flex flex-col relative">
+<div id="app" v-cloak class="h-full flex flex-col relative">
 
     <!-- 顶部导航栏 -->
     <header class="bg-slate-900 text-white p-4 shadow-lg flex justify-between items-center shrink-0 z-10 relative">
@@ -179,11 +207,11 @@
                 <span v-else class="whitespace-pre-wrap">{{ msg.content }}</span>
 
                 <!-- 🔧 本轮变更卡片：内容来自后端 Java 状态（<ops_summary>），不依赖模型措辞 -->
-                <div v-if="msg.ops && opsRows(msg.ops).length"
+                <div v-if="msg.ops && opsRows(msg.ops, categoryGloss).length"
                      class="mt-3 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-xs text-slate-600">
                     <div class="font-bold text-slate-700 mb-1">🔧 本轮变更</div>
                     <ul class="space-y-0.5">
-                        <li v-for="row in opsRows(msg.ops)" :key="row.label">
+                        <li v-for="row in opsRows(msg.ops, categoryGloss)" :key="row.label">
                             <span class="text-slate-500">{{ row.label }}：</span>{{ row.value }}
                             <span v-if="row.hint" class="text-slate-400">（{{ row.hint }}）</span>
                         </li>
@@ -962,51 +990,11 @@
     </div>
 </script>
 
-<script>
-    const {createApp, ref, reactive, computed, inject, provide, nextTick, watch} = Vue;
-
-    const TreeNodeComponent = {
-        name: 'TreeNode',
-        template: '#tree-node-template',
-        props: ['node', 'path', 'visited'],
-        setup(props) {
-            const selectedMods = inject('selectedMods');
-            const toggleMod = inject('toggleMod');
-            const childrenMap = inject('childrenMap');
-            const nodesMap = inject('nodesMap');
-            const globalHighlightId = inject('globalHighlightId');
-            // 🗑️ 批量删除模式：复用同一勾选框，但语义切换为"标记删除"
-            const deleteMode = inject('deleteMode');
-            const deleteMarked = inject('deleteMarked');
-            const toggleDeleteMark = inject('toggleDeleteMark');
-            const conflictIds = inject('conflictIds');
-
-            const isSelected = computed(() => selectedMods.value.has(props.node.id));
-            const toggle = () => toggleMod(props.node.id);
-            const isDeleteMarked = computed(() => deleteMarked.value.has(props.node.id));
-            const isConflict = computed(() => conflictIds.value.has(props.node.id));
-            // 勾选框显示状态：删除模式下显示"待删除标记"，否则显示"是否导出"
-            const isChecked = computed(() => deleteMode.value ? isDeleteMarked.value : isSelected.value);
-            const onToggle = () => {
-                if (deleteMode.value) toggleDeleteMark(props.node.id);
-                else toggle();
-            };
-
-            const childrenIds = computed(() => childrenMap.value[props.node.id] || []);
-            const children = computed(() => {
-                let arr = childrenIds.value.map(id => nodesMap.value[id]).filter(Boolean);
-                return arr.sort((a, b) => (a.slug || '').localeCompare(b.slug || ''));
-            });
-
-            const isCycle = computed(() => props.visited.includes(props.node.id));
-            const currentVisited = computed(() => [...props.visited, props.node.id]);
-
-            return {
-                isSelected, toggle, children, isCycle, currentVisited, globalHighlightId,
-                deleteMode, isDeleteMarked, isChecked, onToggle, isConflict
-            };
-        }
-    };
+<script type="module">
+    import {DELEGATION, fulfilWanted, readChatResponse} from './js/modrinth-client.js';
+    import {escapeHtml, renderMarkdownSafe, opsRows} from './js/utils/format.js';
+    import {createApp, ref, reactive, computed, inject, provide, nextTick, watch} from 'vue';
+    import TreeNodeComponent from './js/components/TreeNode.js';
 
     const app = createApp({
         setup() {
@@ -1438,177 +1426,6 @@
 
             // 🔥 待发送的 mrpack 附件
             const pendingMrpack = ref(null);
-
-            // ==========================================
-            // 🚀 取数委派：把 Modrinth 请求交给用户自己的浏览器
-            //
-            // 服务器不再代所有用户发请求（那样必然撞 300 次/分钟/出口 IP 的限额），
-            // 而是下发"要哪些事实"，由这里去取。配额算在用户自己的出口 IP 上。
-            //
-            // 并发和限速不是优化项，是必需品：单次委派只有 5 秒预算，串行取数会让
-            // 一批 70 个事实花掉十几秒，服务器只好兜底自己抓——那就白做了。
-            // ==========================================
-            const DELEGATION = {
-                CONCURRENCY: 6,      // 浏览器单域名本来也就 ~6 条连接
-                PER_MINUTE: 240,     // 比 300 的硬限额留 20% 余量，别把自己打到 429
-                CHUNK: 100,          // 批量端点实测 100 个/请求
-                MAX_ROUNDS: 200      // 防呆：正常一轮构筑的委派轮次远低于这个
-            };
-
-            /** 客户端令牌桶：连续几次构筑时别把自己的出口 IP 打到 429 */
-            const makeTokenBucket = (perMinute) => {
-                let tokens = perMinute;
-                let last = Date.now();
-                return async () => {
-                    for (; ;) {
-                        const now = Date.now();
-                        tokens = Math.min(perMinute, tokens + (now - last) * perMinute / 60000);
-                        last = now;
-                        if (tokens >= 1) {
-                            tokens -= 1;
-                            return;
-                        }
-                        await new Promise(r => setTimeout(r, Math.ceil(60000 / perMinute)));
-                    }
-                };
-            };
-
-            /** 单次取数：与后端同一套 429 语义（优先用官方重置头，其次指数退避） */
-            const fetchModrinth = async (url, bucket, stats, attempt) => {
-                const tries = attempt || 0;
-                await bucket();
-                stats.requests++;
-                // 刻意不设 User-Agent：它属于 Fetch 规范的禁止头，浏览器会静默丢弃，
-                // 写上去只会让人误以为我们报了身份。Modrinth 会看到浏览器自己的 UA。
-                const res = await fetch(url);
-                if (res.status === 429 && tries < 3) {
-                    stats.rateLimited++;
-                    const reset = parseInt(res.headers.get('X-Ratelimit-Reset')
-                        || res.headers.get('Retry-After') || '0', 10);
-                    const waitMs = reset > 0 ? reset * 1000 + 500 : 1000 * Math.pow(2, tries);
-                    await new Promise(r => setTimeout(r, waitMs));
-                    return fetchModrinth(url, bucket, stats, tries + 1);
-                }
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                return res.json();
-            };
-
-            /** 固定并发池：同时最多 limit 个任务在跑 */
-            const runPool = async (items, worker, limit) => {
-                const out = new Array(items.length);
-                let next = 0;
-                const runners = Array.from({length: Math.min(limit, items.length)}, async () => {
-                    for (; ;) {
-                        const i = next++;
-                        if (i >= items.length) return;
-                        out[i] = await worker(items[i]);
-                    }
-                });
-                await Promise.all(runners);
-                return out;
-            };
-
-            /**
-             * 满足一份需求清单。
-             *
-             * <p>project / version 合并成批量端点（一次 100 个）；env_version 没有批量等价物，
-             * 只能并发逐个查。取不到的一律记进 missing —— 必须区分"上游确实没有"和"我没抓到"，
-             * 因为批量端点对无效 id 是静默丢弃的，不做这个区分服务器会把不存在的模组当正常结果收下。
-             *
-             * <p>回执分三类，不能混：
-             *   answered    = 取到了
-             *   missing     = 上游明确没有（批量端点静默丢弃 / 版本列表为空）
-             *   unavailable = 我没抓到（网络不通、被扩展拦了、整批请求失败）
-             * missing 与 unavailable 混在一起是致命的：服务器会把"网络不通"读成
-             * "这个模组不存在"，然后产出一个缺模组的包，而你要的服务器兜底也不会触发。
-             */
-            const fulfilWanted = async (wanted) => {
-                const stats = {requests: 0, rateLimited: 0};
-                const started = Date.now();
-                const answered = [];
-                const missing = [];
-                const unavailable = [];
-                const bucket = makeTokenBucket(DELEGATION.PER_MINUTE);
-                const list = wanted || [];
-
-                // 1) 可批量：合并同类需求，一次请求拿 100 个
-                for (const spec of [{kind: 'project', endpoint: 'projects'}, {kind: 'version', endpoint: 'versions'}]) {
-                    const wants = list.filter(w => w.kind === spec.kind);
-                    for (let i = 0; i < wants.length; i += DELEGATION.CHUNK) {
-                        const chunk = wants.slice(i, i + DELEGATION.CHUNK);
-                        const ids = encodeURIComponent(JSON.stringify(chunk.map(w => w.key)));
-                        let arr = [];
-                        let ok = true;
-                        try {
-                            const got = await fetchModrinth(
-                                `https://api.modrinth.com/v2/${spec.endpoint}?ids=${ids}`, bucket, stats, 0);
-                            arr = Array.isArray(got) ? got : (got ? [got] : []);
-                        } catch (e) {
-                            // 整批失败是"没抓到"，不是"上游没有"——交给服务器兜底
-                            ok = false;
-                            console.warn('批量取数失败，整批退回服务器：', spec.kind, e);
-                        }
-                        const byKey = new Map();
-                        for (const item of arr) {
-                            if (item && item.id) byKey.set(item.id, item);
-                            if (item && item.slug) byKey.set(item.slug, item);
-                        }
-                        for (const w of chunk) {
-                            const hit = byKey.get(w.key);
-                            if (hit) answered.push({kind: spec.kind, key: w.key, data: hit});
-                            else if (ok) missing.push({kind: spec.kind, key: w.key});
-                            else unavailable.push({kind: spec.kind, key: w.key});
-                        }
-                    }
-                }
-
-                // 2) 不可批量：并发逐个查
-                const envWants = list.filter(w => w.kind === 'env_version');
-                if (envWants.length > 0) {
-                    const results = await runPool(envWants, async (w) => {
-                        const gv = encodeURIComponent(JSON.stringify([w.mc]));
-                        const ld = encodeURIComponent(JSON.stringify([w.loader]));
-                        const url = `https://api.modrinth.com/v2/project/${encodeURIComponent(w.project)}`
-                            + `/version?game_versions=${gv}&loaders=${ld}`;
-                        try {
-                            const got = await fetchModrinth(url, bucket, stats, 0);
-                            const arr = Array.isArray(got) ? got : (got ? [got] : []);
-                            // 拿到了但列表为空 = 上游确实没有这个环境的版本（不是没抓到）
-                            return arr.length > 0
-                                ? {found: {kind: 'env_version', key: w.key, data: arr[0]}}
-                                : {absent: {kind: 'env_version', key: w.key}};
-                        } catch (e) {
-                            return {failed: {kind: 'env_version', key: w.key}};
-                        }
-                    }, DELEGATION.CONCURRENCY);
-                    envWants.forEach((w, i) => {
-                        const r = results[i] || {failed: {kind: 'env_version', key: w.key}};
-                        if (r.found) answered.push(r.found);
-                        else if (r.absent) missing.push(r.absent);
-                        else unavailable.push(r.failed);
-                    });
-                }
-
-                return {
-                    answered, missing, unavailable,
-                    client: {
-                        requests: stats.requests, rateLimited: stats.rateLimited,
-                        elapsedMs: Date.now() - started, via: 'browser'
-                    }
-                };
-            };
-
-            /**
-             * 读一次 /api/chat 或 /facts 的响应。
-             * 响应自己描述自己：text/plain 就是最终回复，application/json 就是"还要取数"。
-             */
-            const readChatResponse = async (res) => {
-                const ct = (res.headers.get('content-type') || '');
-                if (!ct.includes('json')) return {kind: 'text', data: await res.text()};
-                const body = await res.json();
-                if (body && body.stage === 'need-data') return {kind: 'need-data', data: body};
-                return {kind: 'text', data: body && body.error ? ('委派失败：' + body.error) : ''};
-            };
 
             const sendMessage = async () => {
                 let msg = userInput.value.trim();
@@ -2743,56 +2560,6 @@
                 }
             };
 
-            // 🔥 AI 消息安全 Markdown 渲染：先转义 HTML（防 XSS），再 marked 渲染；
-            // 连续空行折叠为一段间距，缓解"大段空白"问题
-            const escapeHtml = (s) => String(s ?? '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;');
-            const renderMarkdownSafe = (content) => {
-                if (!content) return '';
-                const text = String(content).replace(/\n{3,}/g, '\n\n').trim();
-                try {
-                    if (typeof marked !== 'undefined' && marked.parse) {
-                        return marked.parse(escapeHtml(text), {gfm: true, breaks: false});
-                    }
-                } catch (e) { /* fallthrough */ }
-                return escapeHtml(text).replace(/\n/g, '<br>');
-            };
-
-            // 🔧 把后端 <ops_summary> 的结构化变更转成可读行（无变更时返回空数组）。
-            // 用 Vue 插值渲染（非 v-html），所以包名/模组名里的特殊字符不会变成注入点。
-            const opsRows = (ops) => {
-                if (!ops) return [];
-                const rows = [];
-                if (Array.isArray(ops.removed) && ops.removed.length) {
-                    rows.push({label: '移除模组', value: ops.removed.join('、')});
-                }
-                const entries = Object.entries(ops.categoryTargets || {});
-                if (entries.length) {
-                    rows.push({
-                        label: '类别配比',
-                        value: entries.map(([cat, delta]) => {
-                            const gloss = String(categoryGloss.value[cat] || '').split('/')[0];
-                            return cat + (gloss ? `（${gloss}）` : '') + (delta >= 0 ? ` +${delta}` : ` ${delta}`);
-                        }).join('、'),
-                        hint: '已并入本轮配额，最终配比见回复说明'
-                    });
-                }
-                if (typeof ops.targetCount === 'number') {
-                    rows.push({label: '目标数量', value: ops.targetCount + ' 个'});
-                }
-                if (typeof ops.maxDownloads === 'number') {
-                    rows.push({
-                        label: '热度上限',
-                        value: ops.maxDownloads.toLocaleString('en-US'),
-                        hint: ops.maxDownloads <= 500000 ? '冷门模式' : ''
-                    });
-                }
-                if (ops.name) rows.push({label: '包名', value: ops.name});
-                return rows;
-            };
 
             return {
                 currentView, chatHistory, userInput, isLoading, thinkTime, currentThought,
@@ -2842,6 +2609,9 @@
 
     app.component('tree-node', TreeNodeComponent);
     app.mount('#app');
+    // 显式摘掉 v-cloak：不依赖"Vue 会不会处理根容器上的这个属性"。
+    // 少这一行的话，万一它不摘，页面就是永久空白——比闪一下糟得多。
+    document.getElementById('app')?.removeAttribute('v-cloak');
 </script>
 
 <!-- 页脚备案信息 — 高 z-index 浮于页面底部 -->

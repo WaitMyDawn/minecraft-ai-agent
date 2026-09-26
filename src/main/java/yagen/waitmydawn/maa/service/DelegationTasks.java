@@ -74,6 +74,8 @@ public class DelegationTasks {
         private final String userKey;
         private final DelegationContext context = new DelegationContext();
         private final CompletableFuture<String> result = new CompletableFuture<>();
+        /** 提交时捕获的请求作用域：任务里的出网计数都记在它上面，收口时要读它而不是当前线程的 */
+        private RequestScope scope;
 
         private Task(String taskId, String userKey) {
             this.taskId = taskId;
@@ -86,6 +88,10 @@ public class DelegationTasks {
 
         public String userKey() {
             return userKey;
+        }
+
+        public RequestScope scope() {
+            return scope;
         }
 
         public DelegationContext context() {
@@ -110,6 +116,7 @@ public class DelegationTasks {
     public Task submit(String taskId, String userKey, RequestScope scope, Callable<String> work) {
         Task task = new Task(taskId == null || taskId.isBlank()
                 ? UUID.randomUUID().toString().substring(0, 8) : taskId, userKey);
+        task.scope = scope;
         tasks.put(task.taskId, task);
         executor.execute(() -> RequestScope.runWith(scope, () -> DelegationContext.runWith(task.context, () -> {
             try {

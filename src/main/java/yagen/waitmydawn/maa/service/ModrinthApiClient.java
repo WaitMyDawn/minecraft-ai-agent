@@ -99,13 +99,24 @@ public class ModrinthApiClient {
     // 搜索与批量
     // ==========================================
 
-    /** 搜索暂不下放：调用点少、量小，且它的"事实"要带一串查询参数，留给下一轮再收 */
+    /**
+     * 关键词搜索。
+     *
+     * <p>搜索的"事实"就是"在哪个 URL 上查"——所以这一类的 key 直接是完整 URL，
+     * 由 {@link ModrinthFetcher#buildSearchUrl} 统一拼装，委派与自抓共用同一条口径。
+     *
+     * <p>之前不下放是因为它参数最多；实测下来它恰恰是服务器侧最后的出网来源
+     * （"加附属"和"平替抢救"路径），不下放就永远做不到服务器零出网。
+     */
     public JsonNode search(String query, int limit, String facets) {
-        return fetcher.search(query, limit, facets);
+        return searchPage(query, limit, 0, null, facets);
     }
 
     public JsonNode searchPage(String query, int limit, int offset, String index, String facets) {
-        return fetcher.searchPage(query, limit, offset, index, facets);
+        String url = ModrinthFetcher.buildSearchUrl(query, limit, offset, index, facets);
+        DelegationContext.Answer answer = askClient(Kind.SEARCH, url);
+        if (answeredByClient(answer)) return answer.data();
+        return fetcher.searchByUrl(url);
     }
 
     /**
