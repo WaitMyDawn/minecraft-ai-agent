@@ -56,5 +56,10 @@ export const opsRows = (ops, gloss) => {
         });
     }
     if (ops.name) rows.push({label: '包名', value: ops.name});
+    // 环境切换（用户点名要换 MC 版本/加载器时，由 setEnvironment 工具写入）：
+    // 这是比"包名变了"更重要的变更，单独一行，避免只写在正文里被长回复淹没。
+    if (ops.env) {
+        rows.push({label: '环境', value: ops.env, hint: '本轮检索已按新环境进行'});
+    }
     return rows;
 };

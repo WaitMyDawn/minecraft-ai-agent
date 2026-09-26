@@ -21,12 +21,16 @@ export const buildPack = async () => {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({...packData, manifestId: previewData.value.manifestId, selectedIds})
             });
-            if (!res.ok) {
-                alert(res.status === 400
-                    ? "清单快照已过期，请重新打开构筑台再打包。"
-                    : "打包失败（HTTP " + res.status + "），请重试。");
-                return;
-            }
+                    if (!res.ok) {
+                        // 服务端现在会把原因放在响应体里（快照过期 / 这个 MC 版本没有维护加载器版本），
+                        // 优先显示它 —— 否则用户只看到"打包失败，请重试"，无从下手。
+                        let detail = '';
+                        try { detail = ((await res.text()) || '').trim(); } catch (e) { /* 读不到就走兜底 */ }
+                        alert(detail || (res.status === 400
+                            ? "清单快照已过期，请重新打开构筑台再打包。"
+                            : "打包失败（HTTP " + res.status + "），请重试。"));
+                        return;
+                    }
             const blob = await res.blob();
             const a = document.createElement('a');
             a.href = window.URL.createObjectURL(blob);

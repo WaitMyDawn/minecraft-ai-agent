@@ -7,6 +7,7 @@ import {authError, authForm, authLoading, authMode, authSuccess, authUser, chatH
     conversationList, currentConvId, currentView, hasApiKey, packData, showAuthModal,
     showSidebar, thinkTime} from '../store.js';
 import {authHeader} from '../api.js';
+import {ref} from 'vue';
 
 // 从 localStorage 恢复登录 — 先恢复再异步校验服务端是否有效
 const savedAuth = localStorage.getItem('maa-auth');
@@ -40,7 +41,9 @@ export const doAuth = async () => {
     const url = authMode.value === 'login' ? '/api/user/login' : '/api/user/register';
     const body = authMode.value === 'login'
         ? { account: authForm.account, password: authForm.password }
-        : { username: authForm.username, password: authForm.password };
+        // acceptedDelegation 现在后端不校验（UserController.register 收的是 Map，多的字段会被忽略），
+        // 但先把口径带出去：将来要在服务端留痕/强制，只需在 register 里加一行判断。
+        : { username: authForm.username, password: authForm.password, acceptedDelegation: 'true' };
     try {
         const r = await fetch(url, {  // url 已是 /api/user/login 格式，浏览器自动拼域名
             method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
@@ -70,6 +73,28 @@ export const doAuth = async () => {
 export const logout = () => {
     authUser.value = null; localStorage.removeItem('maa-auth');
     currentView.value = 'chat'; showSidebar.value = false; conversationList.value = [];
+};
+
+// ---------- 注册前的知情同意：构筑时的 Modrinth 取数由"你的浏览器"直连 ----------
+//
+// 为什么必须有这一步：查模组/版本/前置依赖的请求是**下放给用户浏览器直连 Modrinth** 的
+// （服务器不代劳，见后端 ModrinthApiClient 的委派逻辑）。真实读数：单轮构筑下放 145~200 项，
+// 服务器出网 0 次 —— 也就是用户的网络在承担这部分流量，且 Modrinth 会看到用户 IP。
+// 这属于"必须让用户知情"的事，所以注册前弹一次，勾选后才允许提交。
+//
+// 注意：这只是前端门禁，直接 POST /api/user/register 仍可绕过（见上面的 acceptedDelegation）。
+export const showRegConsent = ref(false);
+export const regConsentAgreed = ref(false);
+export const openRegConsent = () => {
+    authError.value = '';
+    regConsentAgreed.value = false;
+    showRegConsent.value = true;
+};
+export const cancelRegConsent = () => { showRegConsent.value = false; };
+export const acceptRegConsent = async () => {
+    if (!regConsentAgreed.value) return;
+    showRegConsent.value = false;
+    await doAuth();          // 此时 authMode 仍是 'register'，走的还是注册那一支
 };
 
 // ========== 对话历史 ==========

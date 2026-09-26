@@ -24,14 +24,58 @@ public class ArchitectPackTools {
     private final ModrinthApiClient apiClient;
     /** 别名词典（唯一权威源见 ModAliasRegistry，Tool 参数统一先翻译） */
     private final ModAliasRegistry aliasRegistry;
+    /** 加载器版本表：setEnvironment 工具用它校验"用户点名的版本到底存不存在" */
+    private final LoaderVersionService loaderVersionService;
     private int callCount = 0;
 
     public ArchitectPackTools(PackSessionState state, ModrinthCacheService cache,
                               ModrinthApiClient apiClient, ModAliasRegistry aliasRegistry) {
+        this(state, cache, apiClient, aliasRegistry, null);
+    }
+
+    public ArchitectPackTools(PackSessionState state, ModrinthCacheService cache,
+                              ModrinthApiClient apiClient, ModAliasRegistry aliasRegistry,
+                              LoaderVersionService loaderVersionService) {
         this.state = state;
         this.cache = cache;
         this.apiClient = apiClient;
         this.aliasRegistry = aliasRegistry;
+        this.loaderVersionService = loaderVersionService;
+    }
+
+    /**
+     * 切换整合包环境。
+     *
+     * <p>为什么做成工具而不是把版本清单塞进提示词：清单有 100 个左右条目（≈1KB，每次请求都要付），
+     * 而且它是快照、会和表漂移。工具里直接查表，既能省 token，又能让模型**立刻**拿到"这个版本存不存在"
+     * 的权威答案 —— 真实事故就是模型凭记忆判断"Neoforge 26.2 不存在"并拒绝了用户的切换要求。
+     */
+    @Tool("切换整合包环境（Minecraft 版本 + 加载器）。用户点名了某个 MC 版本或加载器时调用。"
+            + "工具会校验该版本是否已维护：不存在会返回可用的版本清单，请如实转述给用户。")
+    public String setEnvironment(
+            @P("Minecraft 版本，如 1.20.1 / 1.21.1 / 26.2 / 26.1.2（新版本是 xx.y.z：年份后缀.季度.补丁）")
+            String mcVersion,
+            @P("加载器：neoforge / forge / fabric，可省略表示沿用当前加载器") String loader) {
+        String denied = guard("setEnvironment", mcVersion + "/" + loader);
+        if (denied != null) return denied;
+        if (loaderVersionService == null) {
+            return "环境服务不可用，无法校验版本是否存在；请保留当前环境并告知用户稍后重试。";
+        }
+        String mc = mcVersion == null ? "" : mcVersion.trim();
+        if (mc.isEmpty()) return "没有收到 MC 版本号，请与用户确认。";
+        String targetLoader = loader == null || loader.isBlank() ? null : loader.trim().toLowerCase();
+        String checkLoader = targetLoader == null ? "neoforge" : targetLoader;
+
+        if (!loaderVersionService.supports(checkLoader, mc)) {
+            List<String> available = loaderVersionService.availableVersions(checkLoader);
+            return "MC " + mc + " 不在已维护清单里，" + checkLoader + " 目前可用的是："
+                    + String.join("、", available) + "。请把这条如实告诉用户，或让他改选其中一个版本。";
+        }
+        state.setEnv(mc, targetLoader);
+        String resolved = loaderVersionService.resolve(checkLoader, mc);
+        String tag = loaderVersionService.prereleaseTag(checkLoader, mc);
+        return "已切换到 MC " + mc + " + " + checkLoader + "（加载器版本 " + resolved + "）"
+                + (tag.isBlank() ? "" : "。注意：该环境目前只有 " + tag + " 版加载器，请一并告知用户");
     }
 
     @Tool("从当前模组清单中移除指定的模组（按 slug）。必须真实存在的模组才能移除；找不到时向用户确认。")

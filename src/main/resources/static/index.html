@@ -580,14 +580,44 @@
                 </div>
                 <p v-if="authError" class="text-red-500 text-sm">{{ authError }}</p>
                 <p v-if="authSuccess" class="text-emerald-600 text-sm font-bold">{{ authSuccess }}</p>
-                <button @click="doAuth" :disabled="authLoading"
+                <!-- 注册走"先看知情同意、勾选后才能提交"这一步；登录直接提交 -->
+                <button @click="authMode === 'login' ? doAuth() : openRegConsent()" :disabled="authLoading"
                         class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg transition">
-                    {{ authLoading ? '处理中...' : (authMode === 'login' ? '登录' : '注册 (账号自动分配)') }}
+                    {{ authLoading ? '处理中...' : (authMode === 'login' ? '登录' : '注册') }}
                 </button>
                 <p class="text-sm text-slate-500 text-center cursor-pointer hover:text-blue-600"
-                   @click="authMode = authMode === 'login' ? 'register' : 'login'; authError = ''; authSuccess = ''">
+                   @click="authMode = authMode === 'login' ? 'register' : 'login'; authError = ''; authSuccess = ''; cancelRegConsent()">
                     {{ authMode === 'login' ? '没有账号？去注册' : '已有账号？去登录' }}
                 </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 📶 注册前的知情同意：构筑时的 Modrinth 取数由你的浏览器直连（勾选后才能注册） -->
+    <div v-if="showRegConsent"
+         class="fixed inset-0 z-[90] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6">
+            <h3 class="text-lg font-bold mb-3 text-slate-800">📶 注册前请先了解：构筑会用你的网络直连 Modrinth</h3>
+            <div class="text-sm text-slate-600 space-y-2 leading-relaxed">
+                <p>为了不让 MAA 的服务器被 Modrinth 限流，<b>「查模组 / 查版本 / 查前置依赖」这类请求会下放给你的浏览器直连</b>
+                    <span class="font-mono">api.modrinth.com</span>。</p>
+                <ul class="list-disc pl-5 space-y-1">
+                    <li>一次构筑可能产生<b>上百次</b>这样的请求（但其实很轻量）；</li>
+                    <li>我们只下发「要去查什么」，不读取你的浏览数据，也不会把你的 API Key 发出去；</li>
+                    <li>构筑过程中随时可以点<b>「终止思考」</b>中断。</li>
+                </ul>
+            </div>
+            <label class="mt-4 flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+                <input type="checkbox" v-model="regConsentAgreed" class="w-4 h-4 mt-0.5 accent-blue-600 shrink-0">
+                <span>我已阅读并同意</span>
+            </label>
+            <div class="flex justify-end gap-3 mt-5">
+                <button @click="cancelRegConsent"
+                        class="px-5 py-2 rounded-lg font-bold text-slate-600 hover:bg-slate-100 transition">取消</button>
+                <button @click="acceptRegConsent" :disabled="!regConsentAgreed || authLoading"
+                        class="px-5 py-2 rounded-lg font-bold bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white shadow-md transition">
+                    {{ authLoading ? '注册中...' : '同意并注册' }}
+                </button>
             </div>
         </div>
     </div>
@@ -1068,7 +1098,7 @@
     } from './js/store.js';
     import {
         doAuth, logout, newConversation, loadConversation,
-        deleteConversation
+        deleteConversation, acceptRegConsent, cancelRegConsent, openRegConsent, regConsentAgreed, showRegConsent,
     } from './js/features/auth.js';
     import {
         addBlacklistBySlug, addCategoryPref, addModBySlug, blacklistTotalPages, changePassword, clearBlacklist,
@@ -1113,6 +1143,7 @@
                 // 🔐 auth
                 showAuthModal, authMode, authForm, authError, authSuccess, authLoading, authUser, showSidebar,
                 doAuth, logout,
+                showRegConsent, regConsentAgreed, openRegConsent, cancelRegConsent, acceptRegConsent,
                 renderMarkdownSafe, opsRows,
                 // 📂 conversations
                 conversationList, currentConvId, loadConversation, deleteConversation, newConversation,
@@ -1121,7 +1152,7 @@
                 pwOld, pwNew, pwMsg, changePassword,
                 // 📊 preferences
                 categoryPrefs, modPrefs, modPrefSearch, modPrefJump, newCatPref, filteredModPrefs,
-                pagedModPrefs, modPrefPage, modPrefTotalPages, modPrefJump,
+                pagedModPrefs, modPrefPage, modPrefTotalPages,
                 pagedBlacklist, blacklistPage, blacklistTotalPages, blacklistJump,
                 pageSize,
                 prevModPrefPage, nextModPrefPage, jumpModPrefPage,

@@ -53,6 +53,8 @@ public class ChatController {
     private final ExpansionTracker expansionTracker;
     /** 委派任务表：把"发请求"交给用户浏览器做（详见 DelegationContext 类注释） */
     private final DelegationTasks delegationTasks;
+    /** 加载器版本表：用于"用户点名的环境我们是否维护"以及给提示词注入支持清单 */
+    private final LoaderVersionService loaderVersionService;
 
     /**
      * 系统默认 API Key（来自配置 {@code ai.api.key}，通常由环境变量 DEEPSEEK_API_KEY 注入）。
@@ -234,7 +236,7 @@ public class ChatController {
                           UserController userController, UserRepository userRepo,
                           CategoryPreferenceRepository catRepo, ModPreferenceRepository modRepo,
                           ModAliasRegistry aliasRegistry, ExpansionTracker expansionTracker,
-                          DelegationTasks delegationTasks) {
+                          DelegationTasks delegationTasks, LoaderVersionService loaderVersionService) {
         this.aiAgentService = aiAgentService;
         this.modrinthCacheService = modrinthCacheService;
         this.restClient = restClient;
@@ -249,6 +251,7 @@ public class ChatController {
         this.aliasRegistry = aliasRegistry;
         this.expansionTracker = expansionTracker;
         this.delegationTasks = delegationTasks;
+        this.loaderVersionService = loaderVersionService;
     }
 
     /**
@@ -371,6 +374,35 @@ public class ChatController {
                     .append("除非用户【明确要求更换环境】，否则你必须保持这个环境，并在 XML 里原样回填")
                     .append("<mc> 和 <loader>。\n\n");
         }
+
+        // 🌍 环境切换：**不给版本清单**（100 个条目 ≈1KB，每次请求都要付，还会和表漂移），
+        // 改为让模型调 setEnvironment 工具、由 Java 查表校验。这里只给命名规则与调用要求。
+        sb.append("【环境与版本号】MC 新版本用 xx.y.z 命名：xx=年份后缀（2026→26）、y=季度、z=补丁；"
+                + "例如 26.2 = 2026 年第 2 季度，26.1.2 = 26.1 的第 2 个补丁。不要把 26.x 当成 1.21.x 的加载器号。\n")
+                .append("用户**点名**了某个 MC 版本或加载器时，调用 setEnvironment 工具，由 Java 校验该版本是否存在；")
+                .append("**不要凭记忆判断某个版本号存不存在**，也不要因为\"当前环境\"不同就拒绝切换。")
+                .append("工具若被拒绝，请把它给的原因与可用清单如实告诉用户。\n\n");
+        yagen.waitmydawn.maa.model.EnvIntent envIntent = yagen.waitmydawn.maa.model.EnvIntent.parse(prompt);
+        if (envIntent != null && !loaderVersionService.supports(
+                envIntent.loader() != null ? envIntent.loader()
+                        : (reqLoader == null || reqLoader.isBlank() ? "neoforge" : reqLoader.trim()),
+                envIntent.mcVersion())) {
+            MaaLog.user("环境意图: 用户点名 MC " + envIntent.mcVersion() + " 不在维护清单里，本轮不切换");
+            envIntent = null;
+        }
+        // 与当前环境一致 = 不是切换诉求（挡掉"句子里顺带提到某版本号"的误报）
+        if (envIntent != null
+                && envIntent.mcVersion().equals(reqMc == null ? "" : reqMc.trim())
+                && (envIntent.loader() == null || envIntent.loader().equals(reqLoader == null ? "" : reqLoader.trim()))) {
+            envIntent = null;
+        }
+        if (envIntent != null) {
+            MaaLog.user("环境意图: 用户点名切换 → mc=" + envIntent.mcVersion()
+                    + (envIntent.loader() == null ? "（加载器沿用当前）" : " loader=" + envIntent.loader()));
+            sb.append("【用户本轮明确点名了环境】Minecraft ").append(envIntent.mcVersion())
+                    .append(envIntent.loader() == null ? "" : " + " + envIntent.loader())
+                    .append("：请按这个环境构筑，并在 XML 里回填对应的 <mc>/<loader>。\n");
+        }
         sb.append("【用户指令】：\n").append(prompt).append("\n");
 
         try {
@@ -378,10 +410,28 @@ public class ChatController {
             System.out.println("🤖 [阶段 1] 呼叫规划师 (Architect Agent) 分析意图与蓝图...");
             // M2: 每回合新建包状态与 Tool 集，Architect 可通过 Tool 下发删除/配额等变更
             PackSessionState state = new PackSessionState();
-            ArchitectPackTools packTools = new ArchitectPackTools(state, modrinthCacheService, apiClient, aliasRegistry);
+            ArchitectPackTools packTools = new ArchitectPackTools(state, modrinthCacheService, apiClient,
+                    aliasRegistry, loaderVersionService);
             AiAgentService.AgentCallResult architectCall =
                     aiAgentService.planBlueprint(sb.toString(), effectiveApiKey, packTools);
             String aiBlueprint = architectCall.text();
+            // 🌍 工具 setEnvironment 的切换**优先于**正则兜底（语义判断更准）：
+            // 模型主动切了就用它；没切则看正则兜底（见上面 envIntent 的解析）。
+            if (state.getEnvMc() != null) {
+                envIntent = new yagen.waitmydawn.maa.model.EnvIntent(state.getEnvMc(), state.getEnvLoader());
+                MaaLog.user("环境切换(工具 setEnvironment): mc=" + state.getEnvMc()
+                        + (state.getEnvLoader() == null ? "（加载器沿用当前）" : " loader=" + state.getEnvLoader()));
+            }
+            // 📋 让"本轮变更"卡片也显示环境切换：用户点名切了环境，是比"包名变了"更重要的变更，
+            // 不能只体现在回复正文里（正文可能很长，用户容易漏看）。
+            if (envIntent != null) {
+                String fromMc = reqMc == null ? "?" : reqMc.trim();
+                String fromLoader = reqLoader == null ? "" : reqLoader.trim();
+                String toLoader = envIntent.loader() != null ? envIntent.loader() : fromLoader;
+                state.setEnvChange((fromLoader.isEmpty() ? fromMc : fromMc + " + " + fromLoader)
+                        + " → " + (toLoader.isEmpty() ? envIntent.mcVersion()
+                                                      : envIntent.mcVersion() + " + " + toLoader));
+            }
             // 🔁 格式纠错重试：模型偶发只写说明文字、完全不输出 XML（实测 A12/A18 都撞过），
             // 只靠提示词压不住。这里补一次强约束重试——注意【不带 tools】，
             // 避免 removeMods/setTargetCount 这类有副作用的工具被重复执行。
@@ -411,7 +461,7 @@ public class ChatController {
             }
 
             return processAndAssembleBlueprint(aiBlueprint, currentMods, prompt, effectiveApiKey, uuid, state,
-                    excludedSlugs, architectCall, payload.get("mcVersion"), payload.get("loader"));
+                    excludedSlugs, architectCall, payload.get("mcVersion"), payload.get("loader"), envIntent);
         } catch (Exception e) {
             String msg = e.getMessage() != null ? e.getMessage() : "";
             System.err.println("AI 调用异常: " + msg);
@@ -1317,6 +1367,46 @@ public class ChatController {
     }
 
     /**
+     * 最终包内各类别的模组数（**用户指标**：他关心"成品包里到底有没有这类东西"）。
+     *
+     * <p>与 {@code approvedPerCat}（本轮类别检索的兑现情况）是两个不同的问题，别混用：
+     * 后者只统计"以 类别(X) 身份入包"的模组。真实事故：一份包里魔法内容有 8 个
+     * （铁魔法本体 + 7 个附属），但它们以"附属(核心)"身份入包，于是配额表显示 magic 0/7，
+     * 还配了句话暗示用户"这类没配上"。
+     *
+     * <p>类别归属离线取：① 调用方传入的本轮候选池标签（slug → categories）
+     * ② 本地 modrinth 缓存的 categories 列。都取不到的归入 {@code 未分类}，**不计入缺口**
+     * —— 不能把"我们查不到"说成"包里没有"。
+     */
+    static Map<String, Integer> inPackCategoryCounts(Collection<String> packSlugs,
+                                                     Map<String, Set<String>> poolCategories,
+                                                     ModrinthCacheService cache) {
+        Map<String, Integer> counts = new TreeMap<>();
+        int unclassified = 0;
+        for (String slug : packSlugs) {
+            Set<String> cats = new LinkedHashSet<>();
+            if (poolCategories != null) {
+                cats.addAll(poolCategories.getOrDefault(slug, Set.of()));
+            }
+            if (cats.isEmpty() && cache != null && cache.isAvailable()) {
+                ModrinthCacheService.ModEntry entry = cache.find(slug);
+                if (entry != null && entry.categories() != null) {
+                    entry.categories().stream()
+                            .filter(yagen.waitmydawn.maa.model.CategoryRegistry.CATEGORY_SET::contains)
+                            .forEach(cats::add);
+                }
+            }
+            if (cats.isEmpty()) {
+                unclassified++;
+                continue;
+            }
+            for (String c : cats) counts.merge(c, 1, Integer::sum);   // 多标签模组在每个类别里都算一个
+        }
+        if (unclassified > 0) counts.put("未分类", unclassified);
+        return counts;
+    }
+
+    /**
      * 跨类合并去重 + 全局排序 + 截断。
      *
      * <p>去重是必需的：一个模组可能同时挂着多个类别标签，会在多个桶里各被召回一次；
@@ -1782,15 +1872,21 @@ public class ChatController {
 
     private String processAndAssembleBlueprint(String aiBlueprint, String currentMods, String prompt,
                                                String effectiveApiKey, String uuid, PackSessionState state,
-                                               Set<String> excludedSlugs,
-                                               AiAgentService.AgentCallResult architectCall,
-                                               String defaultMc, String defaultLoader) {
+                                                Set<String> excludedSlugs,
+                                                AiAgentService.AgentCallResult architectCall,
+                                                String defaultMc, String defaultLoader,
+                                                yagen.waitmydawn.maa.model.EnvIntent envIntent) {
         try {
-            // F01：模型没回填 mc/loader 时，用前端传来的包环境作为默认值，而不是硬编码 neoforge/1.21.1
-            String loader = extractTag(aiBlueprint, "loader",
-                    defaultLoader == null || defaultLoader.isBlank() ? "neoforge" : defaultLoader.trim());
-            String mcVersion = extractTag(aiBlueprint, "mc",
-                    defaultMc == null || defaultMc.isBlank() ? "1.21.1" : defaultMc.trim());
+            // F01：环境优先级 = 用户本轮明确点名 > 模型回填 > 前端当前环境（而不是硬编码 neoforge/1.21.1）。
+            // 用户点名的必须压过模型：否则模型一句"我按现有环境来"就能把用户的切换要求顶掉（真实事故）。
+            String loader = envIntent != null && envIntent.loader() != null
+                    ? envIntent.loader()
+                    : extractTag(aiBlueprint, "loader",
+                        defaultLoader == null || defaultLoader.isBlank() ? "neoforge" : defaultLoader.trim());
+            String mcVersion = envIntent != null
+                    ? envIntent.mcVersion()
+                    : extractTag(aiBlueprint, "mc",
+                        defaultMc == null || defaultMc.isBlank() ? "1.21.1" : defaultMc.trim());
             int targetCount = Integer.parseInt(extractTag(aiBlueprint, "target_count", "100"));
             long maxDownloads = Long.parseLong(extractTag(aiBlueprint, "max_downloads", "2100000000"));
 
@@ -1888,6 +1984,12 @@ public class ChatController {
             }
             // P3-3：类别配比未兑现的项（在 Critic 之后填充，用于结果说明）
             List<String> quotaShortfalls = new ArrayList<>();
+            /**
+             * slug → 本轮候选池给的类别标签（外层持有，供"包内类别构成"统计使用）。
+             * 为什么不能等统计时再查池：{@code poolIndex} 声明在更内层的块里，出了块就拿不到；
+             * 而"包内构成"要在回复拼装阶段（更外层）才算，所以在这里留一份。
+             */
+            Map<String, String> poolCategoryOfSlug = new HashMap<>();
             // 过程指标：Critic 调用结果（可能为 null，例如本轮不需要审核）
             AiAgentService.AgentCallResult criticCall = null;
             /** Critic 输出是否退化（标签缺失/未闭合）：退化时必须由补位兜底 + 如实告知（坏例 B16） */
@@ -2038,6 +2140,7 @@ public class ChatController {
                                 c.finalScore, c.textScore.sum(), c.popNorm,
                                 c.hitTermsText(), c.downloads / 10000, c.desc));
                         poolIndex.putIfAbsent(c.slug, new PoolEntry("类别(" + c.category + ")", c.category));
+                        if (c.category != null) poolCategoryOfSlug.putIfAbsent(c.slug, c.category);
                     }
                     requiresCritic = true;
                 }
@@ -2272,10 +2375,41 @@ public class ChatController {
                 MaaLog.user("模组调整: " + modDeltas.size() + " 项（平替/剔除/去重，已在回复中告知）");
             }
 
-            // 类别配比没兑现时如实说明（不静默裁剪，也不假装配额生效）
+            // 📊 用户指标：**最终包内的类别构成**。
+            //
+            // 为什么不能直接用上面的 quotaShortfalls：它统计的是"本轮**类别检索预算**花得怎么样"
+            // （只算以"类别(X)"身份入包的模组），而用户关心的是"成品包里到底有没有这类东西"。
+            // 真实事故：一份包里魔法内容有 8 个（铁魔法本体 + 7 个附属），但它们是以"附属(核心)"入包的，
+            // 于是显示 magic 0/7 并配上"候选不足或审核员未选中"——对用户说了句不实的话。
+            // 现在两个指标并存：内部口径进日志/trace，用户看到的这句话只报包内实际构成。
+            if (fillerFetched) {
+                // 类别归属的**第一来源是本轮候选池标签**（poolIndex 就是它，2126 行写的那份）：
+                // 以"附属(核心)"身份入包的模组也带着池里的类别，这样它们才不会被算成"未分类"。
+                // 池里没有的（核心模组 / 依赖穿透补进来的前置）再退回本地 modrinth 缓存查。
+                Map<String, Set<String>> poolCategories = new HashMap<>();
+                poolCategoryOfSlug.forEach((slug, cat) -> poolCategories.put(slug, Set.of(cat)));
+                Map<String, Integer> inPack = inPackCategoryCounts(finalPerfectMods, poolCategories, modrinthCacheService);
+                List<String> parts = new ArrayList<>();
+                for (Map.Entry<String, Integer> e : inPack.entrySet()) {
+                    if ("未分类".equals(e.getKey())) continue;
+                    parts.add(e.getKey() + " " + e.getValue() + " 个");
+                }
+                int unclassified = inPack.getOrDefault("未分类", 0);
+                if (!parts.isEmpty() || unclassified > 0) {
+                    cleanReply = cleanReply + "\n\n📊 包内类别构成：" + String.join("、", parts)
+                            + (unclassified > 0
+                                ? "；另有未分类 " + unclassified + " 个（本地查不到类别，不计入缺口）" : "")
+                            + "。";
+                    MaaLog.user("包内类别构成: " + String.join(" ", parts)
+                            + (unclassified > 0 ? "｜未分类 " + unclassified : ""));
+                }
+            }
+            // 📉 内部口径：本轮**类别检索额度**没打满（这是预算监控，不代表包里没有这类内容）
             if (!quotaShortfalls.isEmpty()) {
-                cleanReply = cleanReply + "\n\n📉 类别配比未完全兑现：" + String.join("、", quotaShortfalls)
-                        + "（该类别候选不足或审核员未选中）。可以补充该类别的关键词，或直接点名具体模组。";
+                cleanReply = cleanReply + "\n\n📉 本轮类别检索额度未打满：" + String.join("、", quotaShortfalls)
+                        + "（这是「检索预算」口径：该类词条召回的候选没达到目标数，"
+                        + "不等于包里没有这类模组 —— 请看上面的包内构成）。"
+                        + "可以补充该类别的关键词，或直接点名具体模组。";
                 MaaLog.user("类别配额缺口: " + String.join("、", quotaShortfalls));
             }
 

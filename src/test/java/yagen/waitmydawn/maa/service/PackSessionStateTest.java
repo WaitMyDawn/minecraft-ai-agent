@@ -80,4 +80,18 @@ class PackSessionStateTest {
         assertEquals(1, json.path("categoryTargets").size());
         assertEquals(12, json.path("categoryTargets").path("storage").asInt());
     }
+
+    @Test
+    @DisplayName("环境切换也要进\"本轮变更\"卡片：只切环境时同样有变更、JSON 里带 env")
+    void envChangeShowsUpInOps() throws Exception {
+        PackSessionState state = new PackSessionState();
+        assertFalse(state.hasChanges(), "什么都没发生 → 不该出现空卡片");
+
+        state.setEnvChange("1.21.1 + neoforge → 26.2 + neoforge");
+        assertTrue(state.hasChanges(), "只有环境变化也必须算变更（否则用户看不到切换）");
+
+        JsonNode json = mapper.readTree(state.toOpsJson());
+        assertEquals("1.21.1 + neoforge → 26.2 + neoforge", json.path("env").asText(),
+                "卡片要显示\"从哪个环境切到哪个\"，不能只有一个目标值");
+    }
 }

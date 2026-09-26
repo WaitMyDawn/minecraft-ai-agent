@@ -25,6 +25,10 @@ public class PackSessionState {
     private Integer targetCount;
     private Long maxDownloads;
     private String packName;
+
+    /** setEnvironment 工具切换后的环境（null = 本轮没切换）；由 ChatController 读取并压过模型回填 */
+    private String envMc;
+    private String envLoader;
     /** 本回合 Tool 被调用的次数（过程指标：评测要看的"走了几步、有没有空转"） */
     private int toolCalls;
 
@@ -56,7 +60,8 @@ public class PackSessionState {
     public boolean hasChanges() {
         return !removedSlugs.isEmpty() || !categoryTargets.isEmpty()
                 || targetCount != null || maxDownloads != null
-                || (packName != null && !packName.isBlank());
+                || (packName != null && !packName.isBlank())
+                || (envChange != null && !envChange.isBlank());
     }
 
     /**
@@ -85,6 +90,9 @@ public class PackSessionState {
         if (maxDownloads != null) sb.append(",\"maxDownloads\":").append(maxDownloads);
         if (packName != null && !packName.isBlank()) {
             sb.append(",\"name\":\"").append(jsonEscape(packName)).append('"');
+        }
+        if (envChange != null && !envChange.isBlank()) {
+            sb.append(",\"env\":\"").append(jsonEscape(envChange)).append('"');
         }
         return sb.append('}').toString();
     }
@@ -131,5 +139,37 @@ public class PackSessionState {
 
     public void setPackName(String packName) {
         this.packName = packName;
+    }
+
+    /** setEnvironment 工具切到的 MC 版本（null = 本轮没切换环境） */
+    public String getEnvMc() {
+        return envMc;
+    }
+
+    /** setEnvironment 工具切到的加载器（null = 沿用当前加载器） */
+    public String getEnvLoader() {
+        return envLoader;
+    }
+
+    /** 环境切换的展示文本，例如 "1.21.1 → 26.2"（只在真的切换时写入，供"本轮变更"卡片用） */
+    private String envChange;
+
+    /**
+     * 记录"本轮发生了环境切换"（用户看得到的那种变更：卡片里一行 `环境：旧 → 新`）。
+     *
+     * <p>为什么单独存一份文本，而不在渲染时用 envMc/envLoader 拼：卡片要显示**从哪个环境切过来的**，
+     * 而"旧环境"只存在于请求里，state 自己不知道。切换判定发生在 ChatController，那里两个值都有。
+     */
+    public void setEnvChange(String text) {
+        this.envChange = text;
+    }
+
+    public String getEnvChange() {
+        return envChange;
+    }
+
+    public void setEnv(String mcVersion, String loader) {
+        this.envMc = mcVersion;
+        this.envLoader = loader;
     }
 }

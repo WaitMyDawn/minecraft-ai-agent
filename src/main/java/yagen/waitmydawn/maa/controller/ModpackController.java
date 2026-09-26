@@ -292,6 +292,21 @@ public class ModpackController {
         return conflictCount;
     }
 
+    /** 400 + 纯文本原因（前端会优先展示这段文字，而不是通用的"请重试"）。 */
+    private static ResponseEntity<byte[]> textBadRequest(String message) {
+        byte[] body = message == null ? new byte[0] : message.getBytes(StandardCharsets.UTF_8);
+        return ResponseEntity.badRequest().contentType(MediaType.TEXT_PLAIN).body(body);
+    }
+
+    /**
+     * 只读：当前生效的加载器版本表。
+     * 排查"某个 MC 版本为什么打包失败"时先看这里（表里没有 = 上游没有可用版本，或键名不一致）。
+     */
+    @GetMapping("/loader-versions")
+    public ResponseEntity<JsonNode> loaderVersions() {
+        return ResponseEntity.ok(loaderVersionService.snapshot());
+    }
+
     @PostMapping("/build")
     public ResponseEntity<byte[]> buildPack(@RequestBody BuildRequest request) {
         try {
@@ -301,7 +316,7 @@ public class ModpackController {
                 files = manifestService.filesFor(request.manifestId, request.selectedIds);
                 if (files == null) {
                     System.err.println("buildPack: 清单快照已过期或不存在 -> " + request.manifestId);
-                    return ResponseEntity.badRequest().build();
+                    return textBadRequest("清单快照已过期或不存在，请重新打开构筑台再打包。");
                 }
                 System.out.println("📦 buildPack 使用服务端快照 " + request.manifestId
                         + "，取件 " + files.size() + " 个");
@@ -328,7 +343,9 @@ public class ModpackController {
                         loaderVersionService.resolve(request.loader, request.mcVersion));
             } catch (IllegalArgumentException e) {
                 System.err.println("buildPack: " + e.getMessage());
-                return ResponseEntity.badRequest().build();
+                // 以前是空体 400，前端只能显示"打包失败（HTTP 400），请重试"——用户完全不知道
+                // 是"这个 MC 版本没维护加载器版本"。把原因带回响应体，前端会优先展示它。
+                return textBadRequest(e.getMessage());
             }
 
             ArrayNode filesArray = indexJson.putArray("files");
