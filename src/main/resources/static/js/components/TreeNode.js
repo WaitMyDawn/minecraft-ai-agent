@@ -1,6 +1,6 @@
 // 依赖树节点（递归组件）。
 //
-// 8 个 provide/inject key 与 ChatController 侧的 provide 一一对应，
+// 9 个 provide/inject key 与 index.html 侧的 provideDeleteContract() 一一对应，
 // 改这里就等于改契约：inject 拿不到会静默变成 undefined，报错要等到用户点勾选框才出现。
 import {computed, inject} from 'vue';
 

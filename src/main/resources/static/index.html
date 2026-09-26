@@ -12,18 +12,74 @@
      地址必须和 importmap 里那个完全一致，浏览器按 URL 去重，不会重复下载。 -->
 <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.esm-browser.prod.js">
 <script>
-    // 兜底：挂了 v-cloak 之后，万一 Vue 没挂载（CDN 不通 / import 路径写错 / 语法错误），
-    // 页面会一直空着——那比"露出原始模板"更糟，因为看不出是哪儿坏了。
-    // 所以超时后强行显示，并在顶部挂一条红条告诉你去看 Console。
+    // 前端"失败可见"守卫 —— 被三次白屏逼出来的。
+    //
+    // 三次事故形态完全一样：某个模块在【运行时求值】阶段抛错（名字没定义 / import 漏了 /
+    // export 漏了），Vue 挂载失败，而 #app 上的 v-cloak 把整页藏住 —— 只看到白屏和页脚，
+    // 没有任何线索，只能靠猜。静态检查补一层漏一层，因为它们查的是语法和模块链接，
+    // 而漏的永远在求值阶段。
+    //
+    // 所以改成：任何未捕获的错误都直接画在页面上。
+    // 这段必须是普通脚本、绝不能放进 ES 模块 —— 模块自己加载失败时，
+    // 模块里的代码一行都不会执行，那时能报错的只剩这里。
+    // （这里刻意不写字面量标签：注释里出现脚本标签会让按标签数量做的检查全部失真。）
+    window.__maaFatal = function (title, detail) {
+        var el = document.getElementById('maa-fatal');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'maa-fatal';
+            el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;'
+                + 'background:#b91c1c;color:#fff;padding:10px 14px;font:13px/1.6 ui-monospace,Consolas,monospace;'
+                + 'box-shadow:0 2px 12px rgba(0,0,0,.4);max-height:60vh;overflow:auto';
+            document.body.appendChild(el);
+        }
+        el.innerHTML = '';
+        var h = document.createElement('div');
+        h.style.cssText = 'font-weight:700;font-size:14px;margin-bottom:4px';
+        h.textContent = '⛔ ' + title;
+        var p = document.createElement('pre');
+        p.style.cssText = 'margin:0;white-space:pre-wrap;word-break:break-all';
+        p.textContent = detail || '(无详细信息，按 F12 看 Console)';
+        el.appendChild(h);
+        el.appendChild(p);
+        // 既然错误已经说清了，就别再把页面藏着
+        var app = document.getElementById('app');
+        if (app) app.removeAttribute('v-cloak');
+    };
+
+    window.addEventListener('error', function (e) {
+        var t = e && e.target;
+        var isResource = !!(t && t !== window && t.tagName);
+
+        // 资源类错误：只把「脚本 / 样式加载失败」当致命。
+        // 图片 404 是常态（占位图标、图床被墙、模组图标缺失），全报红条只会淹没真错误
+        // —— 这条就是被 docs.modrinth.com/img/logo.svg 这个 404 占位图打出来的教训。
+        if (isResource) {
+            if (/^(SCRIPT|LINK)$/i.test(t.tagName)) {
+                window.__maaFatal('前端资源加载失败', t.tagName + ': ' + (t.src || t.href || '(未知地址)'));
+            }
+            return;
+        }
+
+        // JS 运行时错误
+        var detail = (e && e.message) ? e.message : '';
+        if (e && e.error && e.error.stack) detail += '\n\n' + e.error.stack;
+        if (!detail) detail = '未知错误 —— 按 F12 看 Console 的第一条红色报错';
+        window.__maaFatal('前端运行出错', detail);
+    }, true);
+
+    window.addEventListener('unhandledrejection', function (e) {
+        var r = e && e.reason;
+        window.__maaFatal('前端异步操作出错', (r && r.stack) || String(r || '未知'));
+    });
+
+    // 最后一道：8 秒还没挂载，说明启动卡住或已经失败，同样报出来而不是干等
     window.setTimeout(function () {
         var el = document.getElementById('app');
-        if (!el || !el.hasAttribute('v-cloak')) return;   // 正常挂载了，什么都不做
-        el.removeAttribute('v-cloak');
-        var tip = document.createElement('div');
-        tip.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#dc2626;'
-            + 'color:#fff;padding:8px 12px;font:14px/1.5 sans-serif;text-align:center';
-        tip.textContent = '前端脚本没能挂载（Vue 未初始化）。按 F12 看 Console 的报错，刷新重试。';
-        document.body.appendChild(tip);
+        if (el && el.hasAttribute('v-cloak')) {
+            window.__maaFatal('前端 8 秒内未完成挂载',
+                'Vue 没有初始化。多半是模块加载失败或求值抛错 —— 按 F12 看 Console 的第一条红色报错。');
+        }
     }, 8000);
 </script>
     <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
@@ -435,13 +491,13 @@
 
                 <button v-if="deleteDialog.stage === 'cascade'" @click="acceptCascade"
                         class="px-5 py-2 rounded-lg font-bold bg-red-600 hover:bg-red-700 text-white shadow-md transition">
-                    删除 {{ seedLabels }} 及依赖它的 {{ deleteDialog.dependents.length }} 个模组
+                    删除选中模组及依赖它的 {{ deleteDialog.dependents.length }} 个模组
                 </button>
 
                 <template v-else>
                     <button @click="acceptSeedOnly"
                             class="px-5 py-2 rounded-lg font-bold bg-slate-600 hover:bg-slate-700 text-white shadow-md transition">
-                        只删除 {{ seedLabels }}
+                        只删除选中模组
                     </button>
                     <button @click="acceptPrerequisites"
                             class="px-5 py-2 rounded-lg font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-md transition">
@@ -662,7 +718,7 @@
                          class="border rounded-lg p-3 flex items-start gap-3 text-sm transition-colors"
                          :class="mp.source === 'user' ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200 hover:bg-indigo-50'">
                         <!-- 图标 -->
-                        <img :src="(modInfoCache[mp.slug]||{}).icon || 'https://docs.modrinth.com/img/logo.svg'"
+                        <img :src="(modInfoCache[mp.slug]||{}).icon || 'https://cdn.modrinth.com/placeholder.svg'"
                              class="w-10 h-10 rounded bg-slate-100 object-cover shrink-0 mt-0.5"
                              :alt="mp.slug">
                         <!-- 信息 -->
@@ -739,7 +795,7 @@
                 <p v-if="blacklistMsg" class="text-xs mb-2" :class="blacklistMsg.includes('错误') ? 'text-red-500' : 'text-emerald-600'">{{ blacklistMsg }}</p>
                 <div class="space-y-2 max-h-[400px] overflow-y-auto">
                     <div v-for="b in pagedBlacklist" :key="b.id" class="border border-red-200 rounded-lg p-3 flex items-start gap-3 text-sm bg-red-50/30">
-                        <img :src="(modInfoCache[b.slug]||{}).icon || 'https://docs.modrinth.com/img/logo.svg'" class="w-10 h-10 rounded bg-slate-100 object-cover shrink-0 mt-0.5">
+                        <img :src="(modInfoCache[b.slug]||{}).icon || 'https://cdn.modrinth.com/placeholder.svg'" class="w-10 h-10 rounded bg-slate-100 object-cover shrink-0 mt-0.5">
                         <div class="flex-1 min-w-0">
                             <div class="flex items-center gap-2 flex-wrap">
                                 <a :href="'https://modrinth.com/mod/' + b.slug" target="_blank" class="font-mono text-xs text-red-600 hover:underline font-bold truncate">{{ b.slug }}</a>
@@ -813,7 +869,7 @@
                             <input v-model="keModA" @input="onKeSlugInput('A')" placeholder="输入 slug..." class="w-full border rounded px-3 py-2 text-sm font-mono outline-none focus:border-purple-500">
                             <p v-if="keModAError" class="text-xs text-red-500 mt-1">{{ keModAError }}</p>
                             <div v-if="keModAInfo" class="mt-2 border rounded-lg p-3 flex gap-3 bg-purple-50">
-                                <img :src="keModAInfo.icon || 'https://docs.modrinth.com/img/logo.svg'" class="w-12 h-12 rounded object-cover shrink-0">
+                                <img :src="keModAInfo.icon || 'https://cdn.modrinth.com/placeholder.svg'" class="w-12 h-12 rounded object-cover shrink-0">
                                 <div class="min-w-0">
                                     <a :href="'https://modrinth.com/mod/' + keModAInfo.slug" target="_blank" class="font-mono text-xs text-indigo-600 hover:underline font-bold">{{ keModAInfo.slug }}</a>
                                     <p class="text-xs font-bold text-purple-700">{{ keModAInfo.title }}</p>
@@ -826,7 +882,7 @@
                             <input v-model="keModB" @input="onKeSlugInput('B')" placeholder="输入 slug..." class="w-full border rounded px-3 py-2 text-sm font-mono outline-none focus:border-purple-500">
                             <p v-if="keModBError" class="text-xs text-red-500 mt-1">{{ keModBError }}</p>
                             <div v-if="keModBInfo" class="mt-2 border rounded-lg p-3 flex gap-3 bg-purple-50">
-                                <img :src="keModBInfo.icon || 'https://docs.modrinth.com/img/logo.svg'" class="w-12 h-12 rounded object-cover shrink-0">
+                                <img :src="keModBInfo.icon || 'https://cdn.modrinth.com/placeholder.svg'" class="w-12 h-12 rounded object-cover shrink-0">
                                 <div class="min-w-0">
                                     <a :href="'https://modrinth.com/mod/' + keModBInfo.slug" target="_blank" class="font-mono text-xs text-indigo-600 hover:underline font-bold">{{ keModBInfo.slug }}</a>
                                     <p class="text-xs font-bold text-purple-700">{{ keModBInfo.title }}</p>
@@ -920,7 +976,7 @@
                          :class="selectedSuggests.has(mod.slug) ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-slate-200'"
                          @click="toggleSuggestSelection(mod.slug)">
                         <div class="flex gap-3 items-center">
-                            <img :src="mod.icon_url || 'https://docs.modrinth.com/img/logo.svg'" class="w-10 h-10 rounded bg-slate-100 object-cover shrink-0">
+                            <img :src="mod.icon_url || 'https://cdn.modrinth.com/placeholder.svg'" class="w-10 h-10 rounded bg-slate-100 object-cover shrink-0">
                             <div class="flex-1 min-w-0">
                                 <h4 class="font-bold text-sm text-slate-800 truncate" :title="mod.title">{{ mod.title }}</h4>
                                 <div class="flex items-center gap-1 mt-1">
@@ -964,7 +1020,7 @@
             <input type="checkbox" :checked="isChecked" @change="onToggle"
                    class="w-4 h-4 rounded cursor-pointer shrink-0"
                    :class="deleteMode ? 'accent-red-600' : 'text-indigo-600'">
-            <img :src="node.icon || 'https://docs.modrinth.com/img/logo.svg'"
+            <img :src="node.icon || 'https://cdn.modrinth.com/placeholder.svg'"
                  class="w-7 h-7 rounded bg-slate-100 object-cover shrink-0">
             <div class="flex-1 overflow-hidden">
                 <div class="flex items-center flex-wrap gap-1">
@@ -991,15 +1047,14 @@
 </script>
 
 <script type="module">
-    import {DELEGATION, fulfilWanted, readChatResponse} from './js/modrinth-client.js';
-    import {escapeHtml, renderMarkdownSafe, opsRows} from './js/utils/format.js';
+    import {opsRows, renderMarkdownSafe} from './js/utils/format.js';
     import {createApp, ref, reactive, computed, inject, provide, nextTick, watch} from 'vue';
     import TreeNodeComponent from './js/components/TreeNode.js';
     import {
-        currentView, chatHistory, userInput, sessionUuid, searchQuery, thinkTime,
-        currentThought, isLoading, isResolving, isBuilding, packData, previewData,
-        selectedMods, rootTreeNodes, nodesMap, childrenMap, globalHighlightId, dbRules,
-        deleteMode, deleteMarked, deleteBusy, isRefreshing, deleteConflicts, conflictIds,
+        currentView, chatHistory, userInput, searchQuery, thinkTime,
+        currentThought, isLoading, isResolving, isBuilding, previewData,
+        selectedMods, rootTreeNodes, globalHighlightId, dbRules,
+        deleteMode, deleteMarked, deleteBusy, isRefreshing, deleteConflicts,
         ctxMenu, deleteDialog, pendingMrpack, manualAddSlug, showSuggestBoard, isSuggesting,
         suggestedMods, selectedSuggests, availableCategories, categoryGloss, suggestForm, pageJumpInput,
         suggestMode, showAuthModal, authMode, authForm, authError, authSuccess,
@@ -1011,1318 +1066,31 @@
         enableBlacklist, enableUserFeedbackRules, keEnvs, keEnv, keRelation, keModA,
         keModB, keModAInfo, keModBInfo, keModAError, keModBError, keMsg,
     } from './js/store.js';
-    import {authHeader, apiFetch} from './js/api.js';
     import {
-        doAuth, logout, loadConversations, newConversation, loadConversation,
-        deleteConversation, saveMsg
+        doAuth, logout, newConversation, loadConversation,
+        deleteConversation
     } from './js/features/auth.js';
+    import {
+        addBlacklistBySlug, addCategoryPref, addModBySlug, blacklistTotalPages, changePassword, clearBlacklist,
+        clearPrefs, exportPrefs, filteredModPrefs, importPrefs, jumpBlacklistPageFn,
+        jumpModPrefPage, loadKeEnvs, modPrefTotalPages,
+        nextBlacklistPageFn, nextModPrefPage, onKeSlugInput, openSuggestBoardForBlacklist, pagedBlacklist, pagedModPrefs,
+        pageSize, prevBlacklistPageFn, prevModPrefPage, removeBlacklistItem, removeCategoryPref, removeModPref,
+        saveApiKey, saveBlacklistToggle, saveBuildCount, saveFeedbackRulesToggle, saveProfileWeight, saveUsername,
+        startEditBuildCount, submitKeRule, toggleModSource,
+    } from './js/features/prefs.js';
+    import {filteredRootNodes} from './js/features/graph.js';
+    import {acceptCascade, acceptPrerequisites, acceptSeedOnly, closeDeleteDialog, confirmBatchDelete, conflictSummary, ctxDelete, ctxLocate, ctxMenuLabel, ctxOpenModrinth, enterDeleteMode, exitDeleteMode, idLabel, openLab, provideDeleteContract, seedLabels, stillNeeded} from './js/features/delete-flow.js';
+    import {confirmAddSuggestedMods, directAddMod, fetchSuggestions, jumpToPage, openSuggestBoard, openSuggestBoardForPref, resetSuggestPage, suggestPageDown, suggestPageUp, toggleSuggestCategory, toggleSuggestSelection} from './js/features/gacha.js';
+    import {buildPack, groupedDbData, openDbView} from './js/features/pack-view.js';
+    import {abortThinking, onMrpackUpload, sendMessage} from './js/features/chat.js';
 
     const app = createApp({
         setup() {
 
-            // 🔥 新增：用于左侧树状图过滤的搜索关键词
-
-            // 🔥 新增：计时器状态
-            let timerInterval = null;
-
-
-
-
-
-            // Sync Hub State
-            let networkGraph = null;
-
-            // ==========================================
-            // 🗑️ 删除能力状态（P1/P2）
-            // 设计原则：勾选 = 本次导出是否包含（临时，会话内）；删除 = 从整合包清单移除（持久，写入 packData.excludedSlugs）
-            // ==========================================
-
-
-            // 两段式删除确认弹窗状态
-            const closeDeleteDialog = () => {
-                deleteDialog.visible = false;
-                deleteDialog.stage = '';
-                deleteDialog.seed = [];
-                deleteDialog.dependents = [];
-                deleteDialog.prerequisites = [];
-            };
-
-            provide('selectedMods', selectedMods);
-            provide('nodesMap', nodesMap);
-            provide('childrenMap', childrenMap);
-            provide('globalHighlightId', globalHighlightId);
-            provide('toggleMod', (id) => toggleModState(id));
-            provide('deleteMode', deleteMode);
-            provide('deleteMarked', deleteMarked);
-            provide('toggleDeleteMark', (id) => toggleDeleteMark(id));
-            provide('conflictIds', conflictIds);
-
-            // ---------- 删除相关的展示辅助 ----------
-            // 节点 id -> 可读名（优先 slug，便于和 Modrinth 对照）
-            const idLabel = (id) => {
-                const n = nodesMap.value[id];
-                return n ? (n.slug || n.title || id) : id;
-            };
-            const conflictSummary = computed(() =>
-                deleteConflicts.value.map(c => `${c.requiredBy} ← 缺失 ${c.missing}`).join('  |  '));
-            // 弹窗标题里展示"本次要删除的种子模组"可读名
-            const seedLabels = computed(() => deleteDialog.seed.map(idLabel).join('、'));
-
-            // ---------- DAG 邻接关系 ----------
-            // 注意 preview 返回的边方向：from = 前置(被依赖方)，to = 依赖方
-            const buildAdjacency = () => {
-                const dependentsOf = {};     // X -> 依赖 X 的模组（删 X 会波及它们）
-                const prerequisitesOf = {};  // Y -> Y 依赖的模组（删 Y 时可顺带删它们）
-                for (const e of ((previewData.value && previewData.value.edges) || [])) {
-                    (dependentsOf[e.from] || (dependentsOf[e.from] = [])).push(e.to);
-                    (prerequisitesOf[e.to] || (prerequisitesOf[e.to] = [])).push(e.from);
-                }
-                return {dependentsOf, prerequisitesOf};
-            };
-
-            // 求传递闭包（BFS），排除起点自身
-            const closure = (seedIds, nextMap) => {
-                const seedSet = new Set(seedIds);
-                const result = new Set();
-                const queue = [...seedIds];
-                while (queue.length > 0) {
-                    const cur = queue.shift();
-                    for (const nxt of (nextMap[cur] || [])) {
-                        if (seedSet.has(nxt) || result.has(nxt)) continue;
-                        result.add(nxt);
-                        queue.push(nxt);
-                    }
-                }
-                return [...result];
-            };
-
-            // ---------- 两段式删除流程 ----------
-            // 第 1 段：被删项若是别人的必需前置 → 提示"删除 X 和依赖 X 的所有模组 / 不删除"
-            const startDeleteFlow = (ids) => {
-                const seed = [...new Set(ids)].filter(id => nodesMap.value[id]);
-                if (seed.length === 0) return;
-                const {dependentsOf} = buildAdjacency();
-                const cascade = closure(seed, dependentsOf);
-                if (cascade.length > 0) {
-                    Object.assign(deleteDialog, {
-                        visible: true, stage: 'cascade', seed, dependents: cascade, prerequisites: []
-                    });
-                    return;
-                }
-                askDeletePrerequisites(seed);
-            };
-
-            // 第 2 段：被删项自身有前置 → 提示"是否顺带删除所有前置"
-            const askDeletePrerequisites = (ids) => {
-                const {prerequisitesOf} = buildAdjacency();
-                const prereqs = closure(ids, prerequisitesOf);
-                if (prereqs.length > 0) {
-                    Object.assign(deleteDialog, {
-                        visible: true, stage: 'prereq', seed: ids, dependents: [], prerequisites: prereqs
-                    });
-                    return;
-                }
-                closeDeleteDialog();
-                performDelete(ids);
-            };
-
-            // 用户选择「删除 X 及依赖它的模组」→ 合并后继续询问前置
-            const acceptCascade = () => {
-                const merged = [...new Set([...deleteDialog.seed, ...deleteDialog.dependents])];
-                askDeletePrerequisites(merged);
-            };
-
-            // 用户选择「只删除选中的」→ 直接执行
-            const acceptSeedOnly = () => {
-                const seed = [...deleteDialog.seed];
-                closeDeleteDialog();
-                performDelete(seed);
-            };
-
-            // 用户选择「同时删除前置」→ 新增的前置可能又被别的模组依赖，需要再确认一轮
-            // （每轮集合严格增长，图有限，必定收敛）
-            const acceptPrerequisites = () => {
-                const merged = [...new Set([...deleteDialog.seed, ...deleteDialog.prerequisites])];
-                const {dependentsOf} = buildAdjacency();
-                const cascade = closure(merged, dependentsOf);
-                if (cascade.length > 0) {
-                    Object.assign(deleteDialog, {
-                        visible: true, stage: 'cascade', seed: merged, dependents: cascade, prerequisites: []
-                    });
-                    return;
-                }
-                closeDeleteDialog();
-                performDelete(merged);
-            };
-
-            // 该前置是否仍被"不在删除集里"的模组需要（用于弹窗内的红色提示）
-            const stillNeeded = (prereqId) => {
-                const {dependentsOf} = buildAdjacency();
-                const inDelete = new Set([...deleteDialog.seed, ...deleteDialog.prerequisites]);
-                return (dependentsOf[prereqId] || []).some(d => !inDelete.has(d));
-            };
-
-            // ---------- 批量删除模式（左侧 🗑️） ----------
-            const enterDeleteMode = () => {
-                const all = ((previewData.value && previewData.value.nodes) || []).map(n => n.id);
-                // 规则：进入删除模式后，"已勾选(要导出)"→未勾选，"未勾选(不导出)"→已勾选
-                deleteMarked.value = new Set(all.filter(id => !selectedMods.value.has(id)));
-                deleteMode.value = true;
-                repaintAllGraphNodes();
-            };
-            const exitDeleteMode = () => {
-                const wasDeleteMode = deleteMode.value;
-                deleteMode.value = false;
-                deleteMarked.value = new Set();
-                if (wasDeleteMode) repaintAllGraphNodes();
-            };
-            const toggleDeleteMark = (id) => {
-                const s = new Set(deleteMarked.value);
-                if (s.has(id)) s.delete(id); else s.add(id);
-                deleteMarked.value = s;
-                paintGraphNode(id);
-            };
-            const confirmBatchDelete = () => {
-                if (deleteMarked.value.size === 0) return;
-                startDeleteFlow([...deleteMarked.value]);
-            };
-
-            // ---------- 右键菜单 ----------
-            const ctxMenuLabel = computed(() => idLabel(ctxMenu.nodeId));
-            const ctxLocate = () => {
-                const id = ctxMenu.nodeId;
-                ctxMenu.visible = false;
-                if (!id) return;
-                globalHighlightId.value = id;
-                locateTreeNode(id);
-            };
-            const ctxOpenModrinth = () => {
-                const node = nodesMap.value[ctxMenu.nodeId];
-                ctxMenu.visible = false;
-                if (node && node.slug) window.open('https://modrinth.com/mod/' + node.slug, '_blank');
-            };
-            const ctxDelete = () => {
-                const id = ctxMenu.nodeId;
-                ctxMenu.visible = false;
-                if (id) startDeleteFlow([id]);
-            };
-
-            // 定位左侧树节点（被搜索过滤隐藏时先清空过滤再定位）
-            const locateTreeNode = (id) => {
-                nextTick(() => {
-                    const el = document.getElementById('tree-node-' + id);
-                    if (el) {
-                        el.scrollIntoView({behavior: 'smooth', block: 'center'});
-                        return;
-                    }
-                    if (searchQuery.value) {
-                        searchQuery.value = '';
-                        nextTick(() => {
-                            const el2 = document.getElementById('tree-node-' + id);
-                            if (el2) el2.scrollIntoView({behavior: 'smooth', block: 'center'});
-                        });
-                    }
-                });
-            };
-
-            // ---------- 执行删除：本地立即移除 + 后台异步重跑回填 ----------
-            const performDelete = async (ids) => {
-                if (!previewData.value || ids.length === 0) return;
-                const idSet = new Set(ids);
-                const removedNodes = previewData.value.nodes.filter(n => idSet.has(n.id));
-                if (removedNodes.length === 0) return;
-                deleteBusy.value = true;
-                const removedSlugs = removedNodes.map(n => n.slug).filter(Boolean);
-
-                // 1) 本地即时移除节点与相关边，立刻给用户反馈
-                const localConflicts = [];
-                for (const e of (previewData.value.edges || [])) {
-                    if (idSet.has(e.from) && !idSet.has(e.to)) {
-                        localConflicts.push({requiredBy: idLabel(e.to), missing: idLabel(e.from)});
-                    }
-                }
-                const remainNodes = previewData.value.nodes.filter(n => !idSet.has(n.id));
-                const remainEdges = previewData.value.edges.filter(e => !idSet.has(e.from) && !idSet.has(e.to));
-                deleteConflicts.value = localConflicts;
-
-                previewData.value = {...previewData.value, nodes: remainNodes, edges: remainEdges};
-                // 同步整合包清单 + 记入排除名单（后续 preview/chat 都不会把它补回来）
-                packData.modSlugs = packData.modSlugs.filter(s => !removedSlugs.includes(s));
-                packData.excludedSlugs = [...new Set([...(packData.excludedSlugs || []), ...removedSlugs])];
-
-                const newSelected = new Set(selectedMods.value);
-                ids.forEach(id => newSelected.delete(id));
-                selectedMods.value = newSelected;
-                if (idSet.has(globalHighlightId.value)) globalHighlightId.value = null;
-                exitDeleteMode();
-
-                buildTreeData(previewData.value);
-                nextTick(() => renderGraph(networkGraph ? networkGraph.getPositions() : null));
-                deleteBusy.value = false;
-
-                // 2) 后台异步重跑 preview，用权威解析结果回填（不阻塞界面）
-                refreshPreviewInBackground();
-            };
-
-            // 后台重跑：保持用户勾选状态，仅用服务端结果校正图谱与断链诊断
-            const refreshPreviewInBackground = async () => {
-                if (isRefreshing.value) return;
-                isRefreshing.value = true;
-                try {
-                    const res = await fetch('/api/modpack/preview', {
-                        method: 'POST', headers: {'Content-Type': 'application/json', ...authHeader()},
-                        body: JSON.stringify({...packData, excludeUserFeedbackRules: !enableUserFeedbackRules.value})
-                    });
-                    const data = await res.json();
-                    if (!data || !data.nodes) return;
-
-                    // 勾选状态继承：原有节点沿用，新增节点默认勾选，已消失的忽略
-                    const oldNodes = nodesMap.value;
-                    const oldSel = selectedMods.value;
-                    const nextSel = new Set();
-                    data.nodes.forEach(n => {
-                        if (!oldNodes[n.id] || oldSel.has(n.id)) nextSel.add(n.id);
-                    });
-
-                    // 服务端诊断优先（它基于权威解析结果；为空则清空本地推断）
-                    deleteConflicts.value = Array.isArray(data.conflicts) ? data.conflicts : [];
-                    conflictIds.value = new Set(
-                        data.nodes.filter(n => deleteConflicts.value.some(c => c.requiredBy === n.slug))
-                                  .map(n => n.id)
-                    );
-
-                    const positions = networkGraph ? networkGraph.getPositions() : null;
-                    previewData.value = data;
-                    selectedMods.value = nextSel;
-                    buildTreeData(data);
-                    nextTick(() => renderGraph(positions));
-                } catch (e) {
-                    console.warn('后台依赖校验失败，保留本地结果', e);
-                } finally {
-                    isRefreshing.value = false;
-                }
-            };
-
-            // ---------- 全局键盘：Delete 删除选中节点 / Esc 关闭浮层 ----------
-            const isTypingTarget = (el) => {
-                if (!el) return false;
-                const tag = (el.tagName || '').toUpperCase();
-                return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true;
-            };
-            const onGlobalKeyDown = (e) => {
-                if (e.key === 'Escape') {
-                    if (ctxMenu.visible) { ctxMenu.visible = false; return; }
-                    if (deleteDialog.visible) { closeDeleteDialog(); return; }
-                    if (deleteMode.value) { exitDeleteMode(); return; }
-                    return;
-                }
-                if (currentView.value !== 'lab' || deleteDialog.visible) return;
-                if (isTypingTarget(document.activeElement)) return;
-                if ((e.key === 'Delete' || e.key === 'Backspace') && globalHighlightId.value) {
-                    e.preventDefault();
-                    startDeleteFlow([globalHighlightId.value]);
-                }
-            };
-            window.addEventListener('keydown', onGlobalKeyDown);
-
-            // 🔥 深度搜索算法 (DFS)：判断一个节点及其所有子孙节点是否包含关键词
-            const doesNodeOrChildrenMatch = (nodeId, kw) => {
-                const node = nodesMap.value[nodeId];
-                if (!node) return false;
-
-                // 自己匹配上了
-                if ((node.title && node.title.toLowerCase().includes(kw)) ||
-                    (node.slug && node.slug.toLowerCase().includes(kw))) {
-                    return true;
-                }
-
-                // 自己没匹配上，去问儿子们
-                const children = childrenMap.value[nodeId] || [];
-                for (let childId of children) {
-                    if (doesNodeOrChildrenMatch(childId, kw)) return true;
-                }
-
-                return false;
-            };
-
-            const filteredRootNodes = computed(() => {
-                let arr = rootTreeNodes.value;
-                if (searchQuery.value && searchQuery.value.trim() !== '') {
-                    const kw = searchQuery.value.toLowerCase();
-                    // 如果某个根节点底下的隐藏层级有符合的模组，这个根节点就会显示出来！
-                    arr = arr.filter(n => doesNodeOrChildrenMatch(n.id, kw));
-                }
-                return arr;
-            });
-
-            // 🔥 启动思维模拟器：显示思考状态和思考时间
-            const startThinking = () => {
-                isLoading.value = true;
-                const startMs = Date.now();
-                currentThought.value = "🧠 阶段1/4 — 正在解析自然语言，提取核心构筑意图与情景需求...";
-
-                timerInterval = setInterval(() => {
-                    const elapsed = (Date.now() - startMs) / 1000;
-                    thinkTime.value = elapsed.toFixed(1);
-
-                    if (elapsed > 2 && elapsed <= 5)
-                        currentThought.value = "🌐 阶段1/4 — 中文黑话翻译为英文 Slug，构建搜索关键词矩阵...";
-                    else if (elapsed > 5 && elapsed <= 12)
-                        currentThought.value = "⚡ 阶段2/4 — 多路并发召回，向 Modrinth 发起大批量虚拟线程验证...";
-                    else if (elapsed > 12 && elapsed <= 20)
-                        currentThought.value = "🕵️ 阶段3/4 — Critic 审核员正在评估候选池，剔除冲突模组、筛定最终名单...";
-                    else if (elapsed > 20 && elapsed <= 35)
-                        currentThought.value = "🛠️ 阶段4/4 — 图谱引擎运行中，BFS 深度依赖穿透 + 死链抢救 + 冲突检测...";
-                    else if (elapsed > 35 && elapsed <= 60)
-                        currentThought.value = "🛠️ 阶段4/4 — 仍在穿透深层依赖链，请耐心等待 Modrinth API 响应...";
-                    else if (elapsed > 60 && elapsed <= 90)
-                        currentThought.value = "⏳ 网络延迟较高，依赖穿透正在重试失败的请求 (已耗时 " + Math.floor(elapsed) + "s)...";
-                    else if (elapsed > 90)
-                        currentThought.value = "🧩 最终阶段 — 装配过滤蓝图清单，生成构筑图谱...";
-                }, 100);
-            };
-
-            const stopThinking = () => {
-                isLoading.value = false;
-                if (timerInterval) {
-                    clearInterval(timerInterval);
-                    timerInterval = null;
-                }
-            };
-
-            // 🔥 新增：手动终止请求
-            const abortThinking = async () => {
-                try {
-                    await fetch('/api/chat/abort', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ uuid: sessionUuid.value })
-                    });
-                    stopThinking();
-                    chatHistory.value.push({role: 'ai', content: "⛔ 思考已手动终止。"});
-                } catch (e) {
-                    console.error("终止请求发送失败", e);
-                }
-            };
-
-            // 🔥 待发送的 mrpack 附件
-
-            const sendMessage = async () => {
-                let msg = userInput.value.trim();
-                const attached = pendingMrpack.value;
-                if ((!msg && !attached) || isLoading.value) return;
-
-                // 🔥 立即显示用户消息 (含附件标记)
-                let userContent = msg;
-                if (attached) {
-                    userContent = (msg ? '📦 ' + attached.name + '\n' + msg : '📦 ' + attached.name);
-                }
-                chatHistory.value.push({role: 'user', content: userContent});
-                userInput.value = '';
-                const fileToParse = attached ? attached.file : null;
-                pendingMrpack.value = null;
-
-                // 🔥 如果有附件, 先切到 lab 显示加载动画, 再后台解析 mrpack
-                let baseSlugs = packData.modSlugs;
-                if (fileToParse) {
-                    // 立即切到 lab 视图显示 spinner
-                    currentView.value = 'lab';
-                    isResolving.value = true;
-                    try {
-                        const fd = new FormData();
-                        fd.append('file', fileToParse);
-                        const parseRes = await fetch('/api/modpack/parse-mrpack', {
-                            method: 'POST', body: fd
-                        });
-                        const parseData = await parseRes.json();
-                        if (parseData.slugs && parseData.slugs.length > 0) {
-                            baseSlugs = parseData.slugs;
-                            packData.name = fileToParse.name.replace('.mrpack', '');
-                        }
-                    } catch (e) {
-                        isResolving.value = false;
-                        currentView.value = 'chat';
-                        chatHistory.value.push({role: 'ai', content: '❌ 解析 ' + fileToParse.name + ' 失败'});
-                        return;
-                    }
-
-                    if (!msg) {
-                        // 只有附件无文字 → 直接渲染图谱 (大包需要等待 Modrinth API 逐个拉取图标, 可能较慢)
-                        // 导入 = 换了一个包，删除排除名单必须重置
-                        packData.modSlugs = baseSlugs;
-                        packData.excludedSlugs = [];
-                        chatHistory.value.push({
-                            role: 'ai',
-                            content: '已解析 ' + fileToParse.name + '，共 ' + baseSlugs.length + ' 个模组。正在展开构筑图谱 (加载模组图标和依赖关系)...',
-                            hasData: true
-                        });
-                        try {
-                            const previewRes = await fetch('/api/modpack/preview', {
-                                method: 'POST', headers: {'Content-Type': 'application/json', ...authHeader()},
-                                body: JSON.stringify({...packData, excludeUserFeedbackRules: !enableUserFeedbackRules.value})
-                            });
-                            const data = await previewRes.json();
-                            previewData.value = data;
-                            selectedMods.value = new Set(data.nodes.map(n => n.id));
-                            buildTreeData(data);
-                            setTimeout(() => renderGraph(), 100);
-                        } finally {
-                            isResolving.value = false;
-                        }
-                        return;
-                    }
-
-                    // 有文字指令 → 切回聊天, 附件模组已记录在 baseSlugs 中
-                    packData.modSlugs = baseSlugs;
-                    isResolving.value = false;
-                    currentView.value = 'chat';
-                }
-
-                // 有文字指令 → 发给 AI (currentMods 使用 baseSlugs)
-                startThinking();
-                try {
-                    let res = await fetch('/api/chat', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json', ...authHeader()},
-                        body: JSON.stringify({
-                            prompt: msg,
-                            currentMods: baseSlugs.join(','),
-                            uuid: sessionUuid.value,
-                            // 🌍 F01：把包环境一起发给后端，续聊时才不会漂移到默认 neoforge/1.21.1
-                            mcVersion: packData.mcVersion,
-                            loader: packData.loader,
-                            // 🗑️ 图谱里删掉的模组：后端不得再召回/补回（P2）
-                            excludedSlugs: (packData.excludedSlugs || []).join(',')
-                        })
-                    });
-                    let payload = await readChatResponse(res);
-
-                    // 🔁 委派循环：服务器需要外部事实时会把清单发下来，我们取完再送回去，
-                    // 它继续跑并返回"下一份清单"或"最终回复"。不需要外部数据的轮次一次都不会进来
-                    // （响应直接就是 text/plain），所以开关关掉时这段等于不存在。
-                    let delegationRound = 0;
-                    while (payload.kind === 'need-data') {
-                        if (++delegationRound > DELEGATION.MAX_ROUNDS) {
-                            throw new Error('取数轮次异常偏多（已 ' + delegationRound + ' 轮），已中止');
-                        }
-                        const wanted = payload.data.wanted || [];
-                        currentThought.value = `🌐 第 ${delegationRound} 轮取数 — `
-                            + `${wanted.length} 项由你的网络直连 Modrinth（服务器不代劳）...`;
-                        const facts = await fulfilWanted(wanted);
-                        res = await fetch(`/api/chat/task/${encodeURIComponent(payload.data.taskId)}/facts`, {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json', ...authHeader()},
-                            body: JSON.stringify(facts)
-                        });
-                        payload = await readChatResponse(res);
-                    }
-
-                    const aiReply = payload.data;
-                    if (aiReply.includes("⛔ 思考已手动终止")) return;
-
-                    const modsMatch = aiReply.match(/<mods>(.*?)<\/mods>/s);
-                    let hasData = false;
-                    if (modsMatch) {
-                        packData.modSlugs = modsMatch[1].split(',').map(m => m.trim()).filter(Boolean);
-                        packData.name = (aiReply.match(/<name>(.*?)<\/name>/s) || [])[1] || packData.name;
-                        packData.mcVersion = (aiReply.match(/<mc>(.*?)<\/mc>/s) || [])[1] || packData.mcVersion;
-                        packData.loader = (aiReply.match(/<loader>(.*?)<\/loader>/s) || [])[1] || packData.loader;
-                        hasData = true;
-                    }
-                    const cleanReply = aiReply.replace(/<name>.*?<\/name>|<mc>.*?<\/mc>|<loader>.*?<\/loader>|<ops_summary>.*?<\/ops_summary>|<trace>.*?<\/trace>|<mods>.*?<\/mods>/gs, '').trim();
-                    // 🔧 本轮变更（后端 Java 状态生成的结构化摘要）：解析失败就当没有，绝不打断对话
-                    const opsMatch = aiReply.match(/<ops_summary>([\s\S]*?)<\/ops_summary>/);
-                    let ops = null;
-                    if (opsMatch) {
-                        try {
-                            ops = JSON.parse(opsMatch[1]);
-                        } catch (e) {
-                            console.warn('ops_summary 解析失败，已跳过变更卡片', e);
-                        }
-                    }
-                    const finalTime = thinkTime.value;
-                    stopThinking();
-                    chatHistory.value.push({
-                        role: 'ai', content: cleanReply, hasData, ops, thinkTime: finalTime
-                    });
-                } catch (e) {
-                    stopThinking();
-                    chatHistory.value.push({role: 'ai', content: "系统连接中断，请检查后端服务是否启动。"});
-                } finally {
-                    nextTick(() => {
-                        if (currentView.value === 'chat') {
-                            const box = document.querySelector('main');
-                            if (box) box.scrollTop = box.scrollHeight;
-                        }
-                    });
-                }
-            };
-
-            // 🔥 mrpack 上传 → 只暂存文件, 不立即解析
-            const onMrpackUpload = (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                pendingMrpack.value = { file, name: file.name };
-                e.target.value = '';
-            };
-
-            const openLab = async () => {
-                currentView.value = 'lab';
-                isResolving.value = true;
-                // 重新进入图谱：退出删除模式并清掉上一轮的断链提示
-                exitDeleteMode();
-                deleteConflicts.value = [];
-                conflictIds.value = new Set();
-                try {
-                    const res = await fetch('/api/modpack/preview', {
-                        method: 'POST', headers: {'Content-Type': 'application/json', ...authHeader()},
-                        body: JSON.stringify({...packData, excludeUserFeedbackRules: !enableUserFeedbackRules.value})
-                    });
-                    const data = await res.json();
-                    previewData.value = data;
-                    selectedMods.value = new Set(data.nodes.map(n => n.id));
-                    buildTreeData(data);
-                    setTimeout(() => renderGraph(), 100);
-                } finally {
-                    isResolving.value = false;
-                }
-            };
-
-            const buildTreeData = (data) => {
-                const map = {};
-                data.nodes.forEach(n => map[n.id] = n);
-                nodesMap.value = map;
-                const reqBy = {};
-                const depOn = {};
-                data.edges.forEach(e => {
-                    if (!reqBy[e.from]) reqBy[e.from] = [];
-                    reqBy[e.from].push(e.to);
-                    if (!depOn[e.to]) depOn[e.to] = [];
-                    depOn[e.to].push(e.from);
-                });
-                childrenMap.value = depOn;
-                rootTreeNodes.value = data.nodes.filter(n => !reqBy[n.id]).sort((a, b) => (a.slug || '').localeCompare(b.slug || ''));
-            };
-
-            const toggleModState = (id) => {
-                const newSet = new Set(selectedMods.value);
-                if (newSet.has(id)) newSet.delete(id); else newSet.add(id);
-                selectedMods.value = newSet;
-                paintGraphNode(id);
-            };
-
-            /**
-             * 重绘单个 DAG 节点的"激活"配色。
-             * 配色语义随模式切换：普通模式=是否导出(靛蓝)，删除模式=是否待删(红色)。
-             */
-            const paintGraphNode = (id) => {
-                if (!networkGraph) return;
-                const active = deleteMode.value
-                    ? deleteMarked.value.has(id)
-                    : selectedMods.value.has(id);
-                const idle = deleteMode.value
-                    ? {border: '#fca5a5', background: '#fff'}
-                    : {border: '#cbd5e1', background: '#f1f5f9'};
-                networkGraph.body.data.nodes.update({
-                    id: id,
-                    color: active
-                        ? (deleteMode.value ? {border: '#dc2626', background: '#fee2e2'}
-                                            : {border: '#4f46e5', background: '#fff'})
-                        : idle,
-                    font: {color: active ? '#1e293b' : '#94a3b8'}
-                });
-            };
-
-            const repaintAllGraphNodes = () => {
-                if (!networkGraph || !previewData.value) return;
-                previewData.value.nodes.forEach(n => paintGraphNode(n.id));
-            };
-
-            const renderGraph = (fixedPositions) => {
-                const container = document.getElementById('network-canvas');
-                if (!container) return;
-                const visNodes = new vis.DataSet(previewData.value.nodes.map(n => {
-                    // 缺少必需前置的节点用琥珀色描边警示
-                    const conflicted = conflictIds.value.has(n.id);
-                    const item = {
-                        id: n.id,
-                        label: n.title,
-                        title: n.description,
-                        shape: 'circularImage',
-                        image: n.icon || 'https://docs.modrinth.com/img/logo.svg',
-                        size: 24,
-                        font: {size: 12, face: 'sans-serif'},
-                        color: {border: conflicted ? '#f59e0b' : '#4f46e5', background: '#fff'},
-                        borderWidth: 3
-                    };
-                    // 复用旧坐标，避免删除后重绘导致整图重新布局跳动
-                    const p = fixedPositions && fixedPositions[n.id];
-                    if (p) { item.x = p.x; item.y = p.y; }
-                    return item;
-                }));
-                const visEdges = new vis.DataSet(previewData.value.edges.map(e => ({
-                    from: e.from,
-                    to: e.to,
-                    arrows: 'to',
-                    dashes: e.sourceType === 'USER_FEEDBACK' ? false : (e.dashes || false),
-                    color: {color: e.sourceType === 'USER_FEEDBACK' ? '#7c3aed' : (e.dashes ? '#f59e0b' : '#94a3b8')},
-                    smooth: {type: 'continuous'}
-                })));
-
-                const options = {
-                    layout: {hierarchical: false},
-                    physics: {
-                        solver: 'barnesHut',
-                        barnesHut: {
-                            gravitationalConstant: -2000,
-                            centralGravity: 0.3,
-                            springLength: 150,
-                            springConstant: 0.04,
-                            damping: 0.2,
-                            avoidOverlap: 1
-                        },
-                        stabilization: {iterations: 300}
-                    },
-                    interaction: {hover: true, tooltipDelay: 200}
-                };
-
-                networkGraph = new vis.Network(container, {nodes: visNodes, edges: visEdges}, options);
-
-                // 物理引擎控制: 稳定后冻结; 拖动时唤醒; 松手后渐进减速再冻结
-                const enablePhysics = (dampingVal, iterations) => {
-                    networkGraph.setOptions({
-                        physics: {
-                            enabled: true,
-                            solver: 'barnesHut',
-                            barnesHut: {
-                                gravitationalConstant: -2000,
-                                centralGravity: 0.3,
-                                springLength: 150,
-                                springConstant: 0.04,
-                                damping: dampingVal,
-                                avoidOverlap: 0.5
-                            },
-                            stabilization: {
-                                enabled: true,
-                                iterations: iterations,
-                                fit: false
-                            }
-                        }
-                    });
-                };
-
-                networkGraph.on("stabilizationIterationsDone", function () {
-                    networkGraph.setOptions({physics: {enabled: false}});
-                });
-
-                networkGraph.on("dragStart", function () {
-                    ctxMenu.visible = false;
-                    // 拖动时完全启用物理 (低阻尼, 长迭代, 让节点自由运动)
-                    enablePhysics(0.15, 1000);
-                });
-
-                networkGraph.on("dragEnd", function () {
-                    // 松手后渐进减速: 分两阶段
-                    // 阶段1 (立即): 中阻尼 400 迭代 → 快速减速
-                    enablePhysics(0.3, 400);
-                    // 阶段2 (2s后): 高阻尼 200 迭代 → 接近静止 → 完成后冻结
-                    setTimeout(() => {
-                        enablePhysics(0.6, 200);
-                    }, 2000);
-                });
-
-                // 🎯 点击语义：第一次点击 = 定位 + 高亮（不改勾选）；对同一节点再点一次才切换勾选
-                networkGraph.on("click", (params) => {
-                    ctxMenu.visible = false;
-                    if (params.nodes.length === 0) {
-                        globalHighlightId.value = null;   // 点空白 = 取消选中
-                        return;
-                    }
-                    const nodeId = params.nodes[0];
-                    if (globalHighlightId.value === nodeId) {
-                        // 第二次点击：按当前模式切换状态（普通=是否导出，删除模式=是否待删）
-                        if (deleteMode.value) toggleDeleteMark(nodeId);
-                        else toggleModState(nodeId);
-                    } else {
-                        globalHighlightId.value = nodeId; // 第一次点击：仅定位（勾选保持不变）
-                    }
-                    locateTreeNode(nodeId);
-                });
-
-                // 🖱️ 右键菜单：在节点上右键弹出删除/定位/打开 Modrinth
-                networkGraph.on("oncontext", (params) => {
-                    const evt = params.event;
-                    if (evt && typeof evt.preventDefault === 'function') evt.preventDefault();
-                    if (evt && evt.srcEvent && typeof evt.srcEvent.preventDefault === 'function') {
-                        evt.srcEvent.preventDefault();
-                    }
-                    if (params.nodes.length === 0) {
-                        ctxMenu.visible = false;
-                        return;
-                    }
-                    const dom = (params.pointer && params.pointer.DOM) || {x: 20, y: 20};
-                    ctxMenu.nodeId = params.nodes[0];
-                    ctxMenu.x = dom.x;
-                    ctxMenu.y = dom.y;
-                    ctxMenu.visible = true;
-                    globalHighlightId.value = params.nodes[0];
-                });
-
-                networkGraph.on("zoom", () => { ctxMenu.visible = false; });
-            };
-
-            const buildPack = async () => {
-                if (selectedMods.value.size === 0) return alert("请至少选中一个模组！");
-                isBuilding.value = true;
-                // P6-C：只回传 manifestId + 勾选的节点 id，文件由服务端按快照取
-                // （这样导出的一定是预览时那一份，且客户端无法塞入任意文件对象）
-                const selectedIds = previewData.value.nodes
-                    .filter(n => selectedMods.value.has(n.id)).map(n => n.id);
-                try {
-                    const res = await fetch('/api/modpack/build', {
-                        method: 'POST', headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({...packData, manifestId: previewData.value.manifestId, selectedIds})
-                    });
-                    if (!res.ok) {
-                        alert(res.status === 400
-                            ? "清单快照已过期，请重新打开构筑台再打包。"
-                            : "打包失败（HTTP " + res.status + "），请重试。");
-                        return;
-                    }
-                    const blob = await res.blob();
-                    const a = document.createElement('a');
-                    a.href = window.URL.createObjectURL(blob);
-                    a.download = `${packData.name}.mrpack`;
-                    a.click();
-                } finally {
-                    isBuilding.value = false;
-                }
-            };
-
-            const openDbView = async () => {
-                currentView.value = 'db';
-                try {
-                    const res = await fetch('/api/knowledge');
-                    dbRules.value = await res.json();
-                } catch (e) {
-                    alert("获取知识库失败");
-                }
-            };
-
-            const groupedDbData = computed(() => {
-                const groups = {};
-                dbRules.value.forEach(rule => {
-                    if (!groups[rule.environment]) groups[rule.environment] = {};
-                    if (!groups[rule.environment][rule.relationType]) groups[rule.environment][rule.relationType] = {};
-                    if (!groups[rule.environment][rule.relationType][rule.modA]) groups[rule.environment][rule.relationType][rule.modA] = [];
-                    groups[rule.environment][rule.relationType][rule.modA].push(rule);
-                });
-                return groups;
-            });
-
-            // == 新增智能衍生变量 ==
-
-            // 🏷️ 类别清单以 /api/meta/categories 为权威源（后端 CategoryRegistry）；
-            // 这里只保留一份兜底副本，接口不可用时界面仍能正常工作。
-            const loadCategories = async () => {
-                try {
-                    const res = await fetch('/api/meta/categories');
-                    const data = await res.json();
-                    if (data && Array.isArray(data.categories) && data.categories.length > 0) {
-                        availableCategories.value = data.categories;
-                        categoryGloss.value = data.gloss || {};
-                    }
-                } catch (e) {
-                    console.warn('获取类别清单失败，使用内置兜底列表', e);
-                }
-            };
-            loadCategories();
-
-            // 🔥 新增快速跳转相关状态
-
-            const toggleSuggestCategory = (cat) => {
-                const idx = suggestForm.categories.indexOf(cat);
-                if (idx === -1) suggestForm.categories.push(cat);
-                else suggestForm.categories.splice(idx, 1);
-            };
-
-            const suggestPageUp = () => { suggestForm.page++; fetchSuggestions(); };
-            const suggestPageDown = () => { if (suggestForm.page > 0) { suggestForm.page--; fetchSuggestions(); } };
-            const resetSuggestPage = () => { suggestForm.page = 0; };
-
-            // 🔥 新增：页码跳转逻辑
-            const jumpToPage = () => {
-                const target = parseInt(pageJumpInput.value);
-                if (!isNaN(target) && target > 0) {
-                    suggestForm.page = target - 1; // 内部页码从 0 开始
-                    fetchSuggestions();
-                } else {
-                    alert("请输入有效的页码！");
-                }
-            };
-
-            // 1. 手动添加逻辑
-            const directAddMod = () => {
-                const slug = manualAddSlug.value.trim().toLowerCase();
-                if (!slug) return;
-                // 用户手动加回 → 撤销该 slug 的删除排除
-                packData.excludedSlugs = (packData.excludedSlugs || []).filter(s => s !== slug);
-                if (!packData.modSlugs.includes(slug)) {
-                    packData.modSlugs.push(slug);
-                    openLab(); // 重新触发全量图谱绘制
-                }
-                manualAddSlug.value = '';
-            };
-
-            // 2. 呼出衍生面板
-            const openSuggestBoard = () => {
-                showSuggestBoard.value = true;
-                suggestMode.value = 'pack'; // 默认: 添加到整合包
-                suggestedMods.value = [];
-                selectedSuggests.value = new Set();
-            };
-
-            // 从偏好页打开: 选中的模组添加到偏好
-            const openSuggestBoardForPref = () => {
-                showSuggestBoard.value = true;
-                suggestMode.value = 'prefs';
-                suggestedMods.value = [];
-                selectedSuggests.value = new Set();
-            };
-
-            // 3. 点击卡片选择
-            const toggleSuggestSelection = (slug) => {
-                const newSet = new Set(selectedSuggests.value);
-                if (newSet.has(slug)) newSet.delete(slug); else newSet.add(slug);
-                selectedSuggests.value = newSet;
-            };
-
-            // 4. 调用后端搜索
-            const fetchSuggestions = async () => {
-                isSuggesting.value = true;
-                try {
-                    const req = {
-                        loader: packData.loader,
-                        mcVersion: packData.mcVersion,
-                        categories: suggestForm.categories,
-                        minDownloads: suggestForm.minDownloads,
-                        maxDownloads: suggestForm.maxDownloads,
-                        sortMethod: suggestForm.sortType,
-                        page: suggestForm.page,
-                        currentSlugs: Array.from(selectedMods.value).map(id => nodesMap.value[id]?.slug).filter(Boolean)
-                    };
-                    const res = await fetch('/api/modpack/suggest', {
-                        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(req)
-                    });
-                    suggestedMods.value = await res.json();
-                } catch(e) {
-                    alert("衍生请求失败！");
-                } finally { isSuggesting.value = false; }
-            };
-
-            // 5. 确认添加
-            const confirmAddSuggestedMods = async () => {
-                if (selectedSuggests.value.size === 0) return;
-                if (suggestMode.value === 'blacklist') {
-                    for (const slug of selectedSuggests.value) {
-                        await fetch('/api/prefs/blacklist', {
-                            method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
-                            body: JSON.stringify({slug, source: 'agent'})
-                        });
-                    }
-                    await loadBlacklist();
-                } else if (suggestMode.value === 'prefs') {
-                    // 添加到模组偏好
-                    for (const slug of selectedSuggests.value) {
-                        await fetch('/api/prefs/mods', {
-                            method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
-                            body: JSON.stringify({slug, category: ''})
-                        });
-                    }
-                    await loadPrefs();
-                } else {
-                    // 添加到整合包
-                    selectedSuggests.value.forEach(slug => {
-                        if (!packData.modSlugs.includes(slug)) packData.modSlugs.push(slug);
-                    });
-                    // 用户主动加回 → 撤销这些 slug 的删除排除
-                    const added = new Set(selectedSuggests.value);
-                    packData.excludedSlugs = (packData.excludedSlugs || []).filter(s => !added.has(s));
-                    openLab();
-                }
-                showSuggestBoard.value = false;
-            };
-
-            // ========== 用户认证 ==========
-
-
-            // ========== 设置页 ==========
-            const saveApiKey = async () => {
-                const key = profileApiKey.value.trim();
-                if (!key) return;
-                try {
-                    const r = await apiFetch('/api/user/profile', {
-                        method: 'PUT', headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({apiKey: key})
-                    });
-                    const d = await r.json();
-                    hasApiKey.value = d.hasApiKey === true;
-                    if (authUser.value) {
-                        authUser.value.hasApiKey = hasApiKey.value;
-                        localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
-                    }
-                    profileApiKey.value = '';
-                    profileApiKeyMsg.value = 'API Key 已保存成功';
-                    setTimeout(() => profileApiKeyMsg.value = '', 3000);
-                } catch(e) {
-                    if (e.message === '未登录') return;
-                    profileApiKeyMsg.value = '保存失败: ' + e.message;
-                }
-            };
-            const changePassword = async () => {
-                if (!pwOld.value || !pwNew.value) return;
-                pwMsg.value = '';
-                try {
-                    const r = await apiFetch('/api/user/change-password', {
-                        method: 'PUT', headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({oldPassword: pwOld.value, newPassword: pwNew.value})
-                    });
-                    const d = await r.json();
-                    if (d.error) { pwMsg.value = d.error; return; }
-                    pwMsg.value = '密码修改成功';
-                    pwOld.value = ''; pwNew.value = '';
-                    setTimeout(() => pwMsg.value = '', 3000);
-                } catch(e) { if (e.message !== '未登录') pwMsg.value = '修改失败'; }
-            };
-
-            const saveUsername = async () => {
-                const uname = profileUsername.value.trim();
-                if (!uname) return;
-                await apiFetch('/api/user/profile', {
-                    method: 'PUT', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({username: uname})
-                });
-                authUser.value.username = uname;
-                localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
-                profileUsername.value = '';
-            };
-            const saveProfileWeight = async () => {
-                if (!authUser.value) return;
-                await fetch('/api/user/profile', {
-                    method: 'PUT', headers: {...authHeader(), 'Content-Type': 'application/json'},
-                    body: JSON.stringify({preferenceWeight: String(profileWeight.value)})
-                });
-                authUser.value.preferenceWeight = profileWeight.value;
-                localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
-            };
-
-            // ========== 偏好 ==========
-            const filteredModPrefs = computed(() => {
-                let arr = modPrefs.value;
-                if (modPrefSearch.value) {
-                    const kw = modPrefSearch.value.toLowerCase();
-                    arr = arr.filter(m => m.slug.includes(kw) || (m.category||'').includes(kw) || ((modInfoCache.value[m.slug]||{}).title||'').toLowerCase().includes(kw));
-                }
-                return arr;
-            });
-
-            // ========== 分页 ==========
-            const pageSize = 10;
-            const modPrefTotalPages = computed(() => Math.max(1, Math.ceil(filteredModPrefs.value.length / pageSize)));
-            const pagedModPrefs = computed(() => {
-                const start = modPrefPage.value * pageSize;
-                return filteredModPrefs.value.slice(start, start + pageSize);
-            });
-            const filteredBlacklist = computed(() => blacklistItems.value);
-            const blacklistTotalPages = computed(() => Math.max(1, Math.ceil(filteredBlacklist.value.length / pageSize)));
-            const pagedBlacklist = computed(() => {
-                const start = blacklistPage.value * pageSize;
-                return filteredBlacklist.value.slice(start, start + pageSize);
-            });
-            const prevModPrefPage = () => { if (modPrefPage.value > 0) modPrefPage.value--; };
-            const nextModPrefPage = () => { if (modPrefPage.value < modPrefTotalPages.value - 1) modPrefPage.value++; };
-            const jumpModPrefPage = () => {
-                const t = parseInt(modPrefJump.value);
-                if (!isNaN(t) && t >= 1 && t <= modPrefTotalPages.value) modPrefPage.value = t - 1;
-            };
-            const prevBlacklistPageFn = () => { if (blacklistPage.value > 0) blacklistPage.value--; };
-            const nextBlacklistPageFn = () => { if (blacklistPage.value < blacklistTotalPages.value - 1) blacklistPage.value++; };
-            const jumpBlacklistPageFn = () => {
-                const t = parseInt(blacklistJump.value);
-                if (!isNaN(t) && t >= 1 && t <= blacklistTotalPages.value) blacklistPage.value = t - 1;
-            };
-
-            // Modrinth 数据缓存 (仅渲染时获取，不存储在导出文件)
-            const loadModInfoCache = async (slugs) => {
-                for (const slug of slugs) {
-                    if (modInfoCache.value[slug]) continue;
-                    try {
-                        const r = await fetch('/api/prefs/mod-info/' + slug);
-                        const d = await r.json();
-                        if (!d.error) modInfoCache.value[slug] = d;
-                    } catch(e) {}
-                }
-            };
-
-            // 手动 slug 输入添加
-            const addModBySlug = async () => {
-                const slug = manualSlugInput.value.trim().toLowerCase();
-                if (!slug) return;
-                addingModBySlug.value = true; modSlugAddMsg.value = '';
-                try {
-                    // 先验证 slug 有效
-                    const infoR = await fetch('/api/prefs/mod-info/' + slug);
-                    const info = await infoR.json();
-                    if (info.error) { modSlugAddMsg.value = '该 slug 不存在于 Modrinth'; return; }
-                    // 添加到偏好
-                    const r = await apiFetch('/api/prefs/mods', {
-                        method: 'POST', headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({slug, source: 'user'})
-                    });
-                    const d = await r.json();
-                    modInfoCache.value[slug] = info;
-                    modSlugAddMsg.value = '成功添加: ' + slug;
-                    manualSlugInput.value = '';
-                    await loadPrefs();
-                } catch(e) {
-                    if (e.message !== '未登录') modSlugAddMsg.value = '添加失败';
-                } finally { addingModBySlug.value = false; }
-            };
-
-            // 编辑构建次数
-            const startEditBuildCount = (mp) => {
-                editingBuildCountId.value = mp.id;
-                editingBuildCountVal.value = mp.buildCount;
-                nextTick(() => {
-                    const el = document.querySelector('input[type=number][min="0"]');
-                    if (el) el.focus();
-                });
-            };
-            const saveBuildCount = async (mp) => {
-                const val = editingBuildCountVal.value;
-                editingBuildCountId.value = null;
-                if (val === mp.buildCount) return;
-                try {
-                    await apiFetch('/api/prefs/mods/' + mp.id, {
-                        method: 'PUT', headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({buildCount: val})
-                    });
-                    mp.buildCount = val;
-                } catch(e) { if (e.message !== '未登录') alert('更新失败'); }
-            };
-
-            // 切换 source (手动 ↔ 自动)
-            const toggleModSource = async (mp) => {
-                const newSource = mp.source === 'user' ? 'agent' : 'user';
-                try {
-                    const r = await apiFetch('/api/prefs/mods/' + mp.id, {
-                        method: 'PUT', headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({source: newSource})
-                    });
-                    const d = await r.json();
-                    if (d.deleted) { await loadPrefs(); return; }
-                    mp.source = d.source;
-                    mp.buildCount = d.buildCount;
-                } catch(e) { if (e.message !== '未登录') alert('操作失败'); }
-            };
-
-            const loadPrefs = async () => {
-                if (!authUser.value) return;
-                try {
-                    const cr = await fetch('/api/prefs/categories', {headers: authHeader()});
-                    categoryPrefs.value = await cr.json();
-                    const mr = await fetch('/api/prefs/mods', {headers: authHeader()});
-                    modPrefs.value = await mr.json();
-                    // 异步加载 Modrinth 卡片数据
-                    loadModInfoCache(modPrefs.value.map(m => m.slug));
-                } catch(e) {}
-            };
-            // 进入设置页时自动加载偏好
-            watch(currentView, (v) => {
-                if (v === 'profile') {
-                    loadPrefs();
-                    loadBlacklist();
-                    profileWeight.value = authUser.value ? authUser.value.preferenceWeight : 0.3;
-                    hasApiKey.value = authUser.value ? authUser.value.hasApiKey === true : false;
-                    enableBlacklist.value = authUser.value ? authUser.value.enableBlacklist === true : false;
-                    enableUserFeedbackRules.value = authUser.value ? authUser.value.enableUserFeedbackRules === true : false;
-                }
-                if (v === 'knowledge-editor') loadKeEnvs();
-            });
-
-            const addCategoryPref = async () => {
-                await fetch('/api/prefs/categories', {
-                    method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
-                    body: JSON.stringify({category: newCatPref.category, rank: String(newCatPref.rank)})
-                }); loadPrefs();
-            };
-            const removeCategoryPref = async (id) => {
-                await fetch('/api/prefs/categories/' + id, {method: 'DELETE', headers: authHeader()});
-                loadPrefs();
-            };
-            const removeModPref = async (id) => {
-                await fetch('/api/prefs/mods/' + id, {method: 'DELETE', headers: authHeader()});
-                loadPrefs();
-            };
-            const clearPrefs = async () => {
-                await fetch('/api/prefs/clear', {method: 'POST', headers: authHeader()});
-                loadPrefs();
-            };
-
-            // ========== 黑名单管理 ==========
-
-            const loadBlacklist = async () => {
-                if (!authUser.value) return;
-                try {
-                    const r = await fetch('/api/prefs/blacklist', {headers: authHeader()});
-                    blacklistItems.value = await r.json();
-                    loadModInfoCache(blacklistItems.value.map(b => b.slug).filter(s => !modInfoCache.value[s]));
-                } catch(e) {}
-            };
-            const addBlacklistBySlug = async () => {
-                const slug = blacklistSlugInput.value.trim().toLowerCase();
-                if (!slug) return;
-                blacklistMsg.value = '';
-                try {
-                    // 先验证 slug 存在于 Modrinth
-                    const infoR = await fetch('/api/prefs/mod-info/' + slug);
-                    const info = await infoR.json();
-                    if (info.error) { blacklistMsg.value = '该 slug 在 Modrinth 不存在'; return; }
-                    modInfoCache.value[slug] = info;
-                    const r = await apiFetch('/api/prefs/blacklist', {
-                        method: 'POST', headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({slug, source: 'user'})
-                    });
-                    const d = await r.json();
-                    if (d.error) { blacklistMsg.value = d.error; return; }
-                    blacklistSlugInput.value = '';
-                    blacklistMsg.value = '已添加: ' + slug;
-                    setTimeout(() => blacklistMsg.value = '', 3000);
-                    await loadBlacklist();
-                } catch(e) { if (e.message !== '未登录') blacklistMsg.value = '添加失败'; }
-            };
-            const removeBlacklistItem = async (id) => {
-                await fetch('/api/prefs/blacklist/' + id, {method: 'DELETE', headers: authHeader()});
-                loadBlacklist();
-            };
-            const clearBlacklist = async () => {
-                await fetch('/api/prefs/blacklist/clear', {method: 'POST', headers: authHeader()});
-                loadBlacklist();
-            };
-            const saveBlacklistToggle = async () => {
-                if (!authUser.value) return;
-                await fetch('/api/user/profile', {
-                    method: 'PUT', headers: {...authHeader(), 'Content-Type': 'application/json'},
-                    body: JSON.stringify({enableBlacklist: String(enableBlacklist.value)})
-                });
-                authUser.value.enableBlacklist = enableBlacklist.value;
-                localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
-            };
-            const saveFeedbackRulesToggle = async () => {
-                if (!authUser.value) return;
-                await fetch('/api/user/profile', {
-                    method: 'PUT', headers: {...authHeader(), 'Content-Type': 'application/json'},
-                    body: JSON.stringify({enableUserFeedbackRules: String(enableUserFeedbackRules.value)})
-                });
-                authUser.value.enableUserFeedbackRules = enableUserFeedbackRules.value;
-                localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
-            };
-            const openSuggestBoardForBlacklist = () => {
-                showSuggestBoard.value = true;
-                suggestMode.value = 'blacklist';
-                suggestedMods.value = [];
-                selectedSuggests.value = new Set();
-            };
-
-            // ========== 知识规则编辑器 ==========
-
-            const loadKeEnvs = async () => {
-                try {
-                    const r = await fetch('/api/knowledge/feedback/environments');
-                    const envs = await r.json();
-                    if (envs.length > 0) { keEnvs.value = envs; keEnv.value = envs[0]; }
-                } catch(e) {}
-            };
-            const onKeSlugInput = async (which) => {
-                const slug = (which === 'A' ? keModA.value : keModB.value).trim().toLowerCase();
-                const setInfo = which === 'A' ? (v) => keModAInfo.value = v : (v) => keModBInfo.value = v;
-                const setError = which === 'A' ? (v) => keModAError.value = v : (v) => keModBError.value = v;
-                if (!slug) { setInfo(null); setError(''); return; }
-                setError('');
-                try {
-                    const r = await fetch('/api/prefs/mod-info/' + slug);
-                    const d = await r.json();
-                    if (d.error) { setInfo(null); setError('该 slug 在 Modrinth 不存在'); }
-                    else { setInfo(d); setError(''); }
-                } catch(e) { setError('查询失败'); }
-            };
-            const submitKeRule = async () => {
-                if (!keModAInfo.value || !keModBInfo.value) return;
-                keMsg.value = '';
-                try {
-                    const r = await apiFetch('/api/knowledge/feedback/add', {
-                        method: 'POST', headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({
-                            environment: keEnv.value,
-                            modA: keModAInfo.value.slug,
-                            modB: keModBInfo.value.slug,
-                            relationType: keRelation.value
-                        })
-                    });
-                    const d = await r.json();
-                    if (d.error) { keMsg.value = d.error; return; }
-                    keMsg.value = d.message || '规则已添加';
-                    if (d.ok) { keModA.value = ''; keModB.value = ''; keModAInfo.value = null; keModBInfo.value = null; }
-                    setTimeout(() => keMsg.value = '', 5000);
-                } catch(e) { if (e.message !== '未登录') keMsg.value = '提交失败'; }
-            };
-            const exportPrefs = async () => {
-                const r = await fetch('/api/prefs/export', {headers: authHeader()});
-                const blob = await r.blob();
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = 'maa-preferences-' + new Date().toISOString().slice(0,10) + '.json';
-                a.click();
-            };
-            const importPrefs = async (e) => {
-                const file = e.target.files[0]; if (!file) return;
-                const text = await file.text();
-                await fetch('/api/prefs/import', {
-                    method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'}, body: text
-                });
-                loadPrefs(); e.target.value = '';
-            };
-
-            // 🔥 buildPack 包装: 构建后更新偏好
-            const origBuildPack = buildPack;
-            const buildPackWithPref = async () => {
-                await origBuildPack();
-                if (authUser.value && packData.modSlugs.length > 0) {
-                    fetch('/api/prefs/update-on-build', {
-                        method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
-                        body: JSON.stringify({slugs: packData.modSlugs})
-                    }).finally(() => loadPrefs());
-                }
-            };
-
-            // 🔥 sendMessage 包装: 自动创建/保存对话
-            const origSendMessage = sendMessage;
-            const sendMessageWithHistory = async () => {
-                if (authUser.value && !currentConvId.value) await newConversation();
-                const msg = userInput.value.trim();
-                const attached = pendingMrpack.value;
-                await origSendMessage();
-                if (authUser.value && currentConvId.value) {
-                    const userContent = msg + (attached ? ' 📦'+attached.name : '');
-                    saveMsg('user', userContent, false, '', []);
-                    nextTick(() => {
-                        const last = chatHistory.value[chatHistory.value.length - 1];
-                        if (last && last.role === 'ai') {
-                            saveMsg('ai', last.content, last.hasData||false, last.thinkTime||'', packData.modSlugs);
-                        }
-                    });
-                }
-            };
+            // 🗑️ 删除流程：provide 契约 + 批量删除 + 右键菜单 + 执行删除 + 键盘快捷键 + 装配台入口
+            //    （实现全在 js/features/delete-flow.js；这里必须在 setup 里同步调用，provide 依赖组件实例）
+            provideDeleteContract();
 
 
             return {
@@ -2339,7 +1107,7 @@
                 manualAddSlug, showSuggestBoard, isSuggesting, suggestedMods, selectedSuggests, suggestForm,
                 availableCategories, categoryGloss,
                 pageJumpInput,
-                sendMessage: sendMessageWithHistory, openLab, buildPack: buildPackWithPref, openDbView, abortThinking, onMrpackUpload, pendingMrpack,
+                sendMessage, openLab, buildPack, openDbView, abortThinking, onMrpackUpload, pendingMrpack,
                 directAddMod, openSuggestBoard, openSuggestBoardForPref, suggestMode, toggleSuggestSelection, fetchSuggestions, confirmAddSuggestedMods,
                 jumpToPage, toggleSuggestCategory,suggestPageUp,suggestPageDown,resetSuggestPage,
                 // 🔐 auth
@@ -2371,11 +1139,27 @@
         }
     });
 
+    // 把 Vue 内部的错误也接到红条上。
+    // 为什么必须有：setup() 里抛的错（比如漏了一个没 export 的名字 → ReferenceError）会被
+    // Vue 的 handleError 吞掉 —— 它只 console.error，异常不会逃到 window，
+    // 于是 <head> 那个守卫一声不响，页面却是空白（v-cloak 被摘掉，只剩页脚），
+    // 看起来像"没有报错的白屏"。这次就是这么被骗了一轮。
+    app.config.errorHandler = function (err, instance, info) {
+        window.__maaFatal('Vue 运行出错（' + info + '）', (err && err.stack) || String(err));
+    };
+
     app.component('tree-node', TreeNodeComponent);
-    app.mount('#app');
-    // 显式摘掉 v-cloak：不依赖"Vue 会不会处理根容器上的这个属性"。
-    // 少这一行的话，万一它不摘，页面就是永久空白——比闪一下糟得多。
-    document.getElementById('app')?.removeAttribute('v-cloak');
+    try {
+        app.mount('#app');
+        // 显式摘掉 v-cloak：不依赖"Vue 会不会处理根容器上的这个属性"。
+        // 少这一行的话，万一它不摘，页面就是永久空白——比闪一下糟得多。
+        document.getElementById('app')?.removeAttribute('v-cloak');
+    } catch (e) {
+        // 挂载失败绝不静默：交给 <head> 里那个守卫画在页面上。
+        // 三次白屏都是挂载期抛错引起的，而 v-cloak 会把线索一起藏掉。
+        window.__maaFatal('Vue 挂载失败', (e && e.stack) || String(e));
+        throw e;
+    }
 </script>
 
 <!-- 页脚备案信息 — 高 z-index 浮于页面底部 -->

@@ -145,6 +145,21 @@
                             <skip>${skipFrontendChecks}</skip>
                         </configuration>
                     </execution>
+                    <!-- import 行核对：某文件"用到的模块导出"必须都 import 进来。
+                          真实事故：搬块时漏了一个没 export 的名字（confirmBatchDelete），
+                          index.html 还在用它 → setup ReferenceError → 而 Vue 会吞掉这个异常，
+                          表现为"没有红条的白屏"。默认只读，手工加 write 参数才会按口径补齐。 -->
+                    <execution>
+                        <id>frontend-import-lines-check</id>
+                        <phase>test</phase>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <executable>node</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments><argument>eval/fe-import-lines.mjs</argument></arguments>
+                            <skip>${skipFrontendChecks}</skip>
+                        </configuration>
+                    </execution>
                 </executions>
             </plugin>
         </plugins>

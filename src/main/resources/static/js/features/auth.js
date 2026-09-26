@@ -6,7 +6,7 @@
 import {authError, authForm, authLoading, authMode, authSuccess, authUser, chatHistory,
     conversationList, currentConvId, currentView, hasApiKey, packData, showAuthModal,
     showSidebar, thinkTime} from '../store.js';
-import {authHeader, apiFetch} from '../api.js';
+import {authHeader} from '../api.js';
 
 // 从 localStorage 恢复登录 — 先恢复再异步校验服务端是否有效
 const savedAuth = localStorage.getItem('maa-auth');
