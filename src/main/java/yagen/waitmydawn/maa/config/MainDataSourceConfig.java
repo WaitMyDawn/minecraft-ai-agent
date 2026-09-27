@@ -38,6 +38,20 @@ public class MainDataSourceConfig {
     @Value("${spring.datasource.password:}")
     private String password;
 
+    /**
+     * 连接池大小。
+     *
+     * <p>注意：{@code spring.datasource.hikari.*} 那套配置在这里<b>不生效</b> —— 这个 DataSource
+     * 是手写的 {@code new HikariDataSource()}，不是 Spring Boot 自动配置出来的，所以池参数只能在代码里设。
+     * 默认的 10 个连接在多用户并发写对话/消息时会排队，拿不到连接要等 30 秒才抛错。
+     */
+    @Value("${maa.db.pool-size:20}")
+    private int poolSize;
+
+    /** 拿连接的等待上限（毫秒）：宁可快速失败并给出明确错误，也不要让请求挂 30 秒 */
+    @Value("${maa.db.connection-timeout-ms:10000}")
+    private long connectionTimeoutMs;
+
     @Bean
     @Primary
     public DataSource dataSource() {
@@ -46,6 +60,10 @@ public class MainDataSourceConfig {
         ds.setDriverClassName(driverClassName);
         ds.setUsername(username);
         ds.setPassword(password);
+        ds.setPoolName("maa-hikari");
+        ds.setMaximumPoolSize(Math.max(2, poolSize));
+        ds.setMinimumIdle(2);
+        ds.setConnectionTimeout(Math.max(250, connectionTimeoutMs));
         return ds;
     }
 

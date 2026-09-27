@@ -39,14 +39,19 @@ public class AiAgentService {
     private int maxTokens;
 
     // 不复用 agent 实例, 每次请求根据用户 API key 动态创建
-    // maxRetries(1) 确保用户终止思考时不会自动重试，立即响应中断
+    //
+    // maxRetries(0) = 客户端自己一次都不重试，重试统一交给 ChatController.callAgentWithRetry：
+    //   - 它只对"值得重试"的失败退避（429/5xx/超时，按 langchain4j 的 RetriableException 判定）；
+    //   - 它会先看 abort 标记，用户已点「终止思考」就立刻放弃。
+    // 旧值是 1：本意是"用户终止后不要自动重试"，但那层是盲重试（连 401 也会再来一次），
+    // 而且叠上外层重试后最坏会打出 6 次请求。
     private ChatModel createModel(String userApiKey, TokenUsageCollector usage) {
         return OpenAiChatModel.builder()
                 .baseUrl(apiUrl)
                 .apiKey(userApiKey)
                 .modelName("deepseek-chat")
                 .timeout(Duration.ofMinutes(5))
-                .maxRetries(1)
+                .maxRetries(0)
                 .maxTokens(maxTokens)
                 .temperature(0.2)
                 .frequencyPenalty(0.0)

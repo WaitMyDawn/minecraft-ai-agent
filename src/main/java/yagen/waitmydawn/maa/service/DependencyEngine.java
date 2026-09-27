@@ -32,6 +32,8 @@ public class DependencyEngine {
 
     /** 整包解析结果缓存：key=loader|mc|sortedSlugs，TTL 10 分钟（避免 chat→preview 重复 BFS） */
     private static final long RESOLVE_CACHE_TTL_MS = 10 * 60 * 1000L;
+    /** 缓存条数上限；到顶按"最旧优先"淘汰，而不是整表清空 */
+    private static final int RESOLVE_CACHE_MAX = 200;
     private final ConcurrentHashMap<String, ResolveCacheHit> resolveCache = new ConcurrentHashMap<>();
 
     private record ResolveCacheHit(long cachedAt, ResolutionResult result) {
@@ -101,7 +103,17 @@ public class DependencyEngine {
             return hit.result;
         }
         ResolutionResult result = doResolve(initialSlugs, loader, mcVersion);
-        if (resolveCache.size() > 50) resolveCache.clear();
+        // 惰性清理 + 最旧优先淘汰。原来是"超过 50 条就整表 clear()"——多用户下 A 的插入会把 B
+        // 刚算好的依赖图清掉（10 分钟 TTL 等于没用），于是重复 BFS、重复出网，而出口还要过令牌闸排队。
+        resolveCache.entrySet().removeIf(e -> now - e.getValue().cachedAt() >= RESOLVE_CACHE_TTL_MS);
+        if (resolveCache.size() >= RESOLVE_CACHE_MAX) {
+            resolveCache.entrySet().stream()
+                    .sorted(java.util.Comparator.comparingLong(e -> e.getValue().cachedAt()))
+                    .limit(Math.max(1, resolveCache.size() / 4))
+                    .map(java.util.Map.Entry::getKey)
+                    .toList()                                   // 先收成 List 再删，避免边遍历边改
+                    .forEach(resolveCache::remove);
+        }
         resolveCache.put(key, new ResolveCacheHit(now, result));
         return result;
     }

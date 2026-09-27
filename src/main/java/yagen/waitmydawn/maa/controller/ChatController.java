@@ -88,6 +88,12 @@ public class ChatController {
 
     // 使用 volatile 标记替代 Thread.interrupt() 实现即时终止
     private final Map<String, Boolean> abortedSessions = new ConcurrentHashMap<>();
+    /**
+     * 同一会话同时只跑一轮。TTL 25 分钟（比单轮等待上限 20 分钟留点余量）：
+     * 超过就抢占，避免进程被杀/异常卡住后把这个 uuid 永久锁死。
+     */
+    private final yagen.waitmydawn.maa.runtime.RoundGuard roundGuard =
+            new yagen.waitmydawn.maa.runtime.RoundGuard(25 * 60 * 1000L);
 
     /**
      * 版本负面记录: key = loader|mc|slug, value = 记录时刻。
@@ -285,6 +291,8 @@ public class ChatController {
             }
             return "未配置 API Key。请先登录后在设置页配置个人 Key，或通过环境变量 DEEPSEEK_API_KEY 设置系统默认 Key。";
         }
+        // 供 lambda 捕获（effectiveApiKey 上面被赋值过，不是 effectively final）
+        final String apiKeyForCall = effectiveApiKey;
 
         // 获取用户 ID (用于保存对话历史)
         Long userId = userIdFor(authToken);
@@ -405,6 +413,17 @@ public class ChatController {
         }
         sb.append("【用户指令】：\n").append(prompt).append("\n");
 
+        // 🚦 同一会话 + 同一账号同时只跑一轮：一轮要跑几十秒到几分钟，而候选池/勾选/清单快照都是按轮算的，
+        // 并发两轮会让后到的回复覆盖先到的状态。注意**只按 uuid 拦是不够的**：前端那个 uuid 每次打开页面
+        // 都重新生成（store.js 的 sessionUuid 没持久化），多开标签页/换浏览器/刷新一下就是新的 uuid。
+        // 所以登录用户还要占住"账号"这一个名额 —— 同一个人同时只能跑一轮，不管开几个窗口。
+        // 放在 try 之前、prompt 构建之后：这里抛异常的概率极低，且 TTL 能兜住万一没释放的情况。
+        if (!roundGuard.begin(uuid, userId)) {
+            MaaLog.user("已有轮次在跑，拒绝并发轮次");
+            return "⏳ 你上一轮构筑还在进行中（同一账号同时只能跑一轮）。"
+                    + "可以点「终止思考」结束它，或等它跑完再发指令。";
+        }
+
         try {
             System.out.println("\n=======================================================");
             System.out.println("🤖 [阶段 1] 呼叫规划师 (Architect Agent) 分析意图与蓝图...");
@@ -413,7 +432,8 @@ public class ChatController {
             ArchitectPackTools packTools = new ArchitectPackTools(state, modrinthCacheService, apiClient,
                     aliasRegistry, loaderVersionService);
             AiAgentService.AgentCallResult architectCall =
-                    aiAgentService.planBlueprint(sb.toString(), effectiveApiKey, packTools);
+                    callAgentWithRetry("规划师(Architect)", uuid,
+                            () -> aiAgentService.planBlueprint(sb.toString(), apiKeyForCall, packTools));
             String aiBlueprint = architectCall.text();
             // 🌍 工具 setEnvironment 的切换**优先于**正则兜底（语义判断更准）：
             // 模型主动切了就用它；没切则看正则兜底（见上面 envIntent 的解析）。
@@ -467,6 +487,12 @@ public class ChatController {
             System.err.println("AI 调用异常: " + msg);
             MaaLog.error("AI 调用异常: " + msg, e);
 
+            // 先用**状态码**判定（准），判不出来再退回下面的文本匹配（旧逻辑，保留兜底）
+            String llmNote = llmErrorNote(e);
+            if (llmNote != null) {
+                MaaLog.user("LLM 错误按状态码归类: " + e.getClass().getSimpleName() + " / " + msg);
+                return llmNote;
+            }
             // 区分不同错误类型给出友好提示
             if (msg.contains("service_unavailable") || msg.contains("too busy")) {
                 return "DeepSeek 官方服务繁忙，请稍等片刻后重试。\n\n建议：稍等 1-2 分钟后重试，或者更换 API Key 对应的账户。";
@@ -487,6 +513,7 @@ public class ChatController {
         } finally {
             MaaLog.clearUserKey();
             abortedSessions.remove(uuid);
+            roundGuard.end(uuid);        // 必须在 finally：否则这个 uuid 要等 TTL 才解锁
         }
     }
 
@@ -509,6 +536,85 @@ public class ChatController {
     /** 日志归属键：chat() 与 doChat() 必须用同一套规则，否则同一次请求的日志会劈成两个文件 */
     private static String userLogKey(Long userId, String uuid) {
         return userId != null ? "user-" + userId : "anon-" + sanitizeUuid(uuid);
+    }
+
+    /** LLM 调用最多试几次（首次 + 2 次重试）。 */
+    private static final int LLM_MAX_ATTEMPTS = 3;
+
+    /**
+     * 把 LLM 侧的失败翻译成"用户能照着做的提示"。
+     *
+     * <p><b>判定只用 DeepSeek 返回的 HTTP 状态码</b>：langchain4j 1.18.1 把它映射成了带状态码的异常
+     * （{@code HttpException.statusCode()}），并对 429/5xx 打了 {@code RetriableException} 标记、
+     * 对 401 打了 {@code NonRetriableException}。旧实现按 {@code msg.contains("401")} 这类**文本**猜，
+     * 换个报错措辞就失效。
+     *
+     * @return 面向用户的文案；{@code null} 表示"不是能识别的 LLM 错误"，交给上层旧逻辑
+     */
+    static String llmErrorNote(Throwable e) {
+        if (e == null) return null;
+        int code = (e instanceof dev.langchain4j.exception.HttpException http) ? http.statusCode() : -1;
+        if (e instanceof dev.langchain4j.exception.AuthenticationException || code == 401) {
+            return "❌ DeepSeek 拒绝了这次请求：API Key 无效或已过期（HTTP 401）。"
+                    + "请到右上角 ⚙️ 设置 更新你的 Key。";
+        }
+        if (code == 402) return "❌ 你的 DeepSeek 账户余额不足（HTTP 402），请充值后再试。";
+        if (code == 403) return "❌ 你的 API Key 没有调用该模型的权限（HTTP 403）。";
+        if (e instanceof dev.langchain4j.exception.RateLimitException || code == 429) {
+            return "⏳ 你的 API Key 触发了 DeepSeek 的速率限制（HTTP 429，通常是并发或频率超限）。"
+                    + "已自动重试仍失败，请等几十秒再试；同时开多个标签页对话也会触发。";
+        }
+        if (e instanceof dev.langchain4j.exception.TimeoutException) {
+            return "⏱️ DeepSeek 响应超时（单次上限 5 分钟）。请稍后重试，或把需求拆小一点。";
+        }
+        if (e instanceof dev.langchain4j.exception.ContentFilteredException) {
+            return "🚫 这次提问被 DeepSeek 的内容安全策略拦截了，换个说法再试。";
+        }
+        if (e instanceof dev.langchain4j.exception.InvalidRequestException) {
+            return "❌ DeepSeek 拒绝了这次请求（HTTP 400）。若反复出现，请把这条发我排查。";
+        }
+        if (e instanceof dev.langchain4j.exception.InternalServerException || code >= 500) {
+            return "🛠️ DeepSeek 服务端故障（HTTP " + (code > 0 ? code : "5xx")
+                    + "）。已自动重试仍失败，请稍后再试。";
+        }
+        return null;
+    }
+
+    /**
+     * 这次失败值不值得重试：优先信 langchain4j 的 {@code RetriableException} 标记（429/5xx/超时），
+     * 其次看状态码兜底；401/400 这类明确不该重试的直接放弃。
+     */
+    static boolean llmRetriable(Throwable e) {
+        if (e instanceof dev.langchain4j.exception.RetriableException) return true;
+        return e instanceof dev.langchain4j.exception.HttpException http
+                && (http.statusCode() == 429 || http.statusCode() >= 500);
+    }
+
+    /**
+     * 带退避的 LLM 调用：只对"值得重试"的失败重试（最多 {@link #LLM_MAX_ATTEMPTS} 次），
+     * 且用户已点"终止思考"就立刻放弃 —— 不能用自动重试违背用户的终止意图
+     * （langchain4j 自己的 maxRetries 设成 1 就是为此，这里是在它外层再加一层有界重试）。
+     */
+    private AiAgentService.AgentCallResult callAgentWithRetry(String label, String uuid,
+                                                              java.util.function.Supplier<AiAgentService.AgentCallResult> call) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return call.get();
+            } catch (RuntimeException e) {
+                if (attempt >= LLM_MAX_ATTEMPTS || !llmRetriable(e) || isAborted(uuid)) throw e;
+                long waitMs = 1000L * attempt + java.util.concurrent.ThreadLocalRandom.current().nextLong(400);
+                String note = "🔁 " + label + " 调用失败（" + e.getClass().getSimpleName() + "），"
+                        + waitMs + "ms 后重试（第 " + attempt + "/" + (LLM_MAX_ATTEMPTS - 1) + " 次）";
+                System.out.println(note);
+                MaaLog.user(note);
+                try {
+                    Thread.sleep(waitMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
+        }
     }
 
     /** 模型是否完全没输出构筑标签（= 只写了说明文字，属于格式违规，需要纠正重试） */
@@ -560,9 +666,9 @@ public class ChatController {
         // 委派开启：整个流程挪到长生命周期的虚拟线程上——挂起等浏览器的线程必须活得比这次请求长。
         // RequestScope 在这里（提交时）捕获，否则任务里发出的服务器请求统计不到本轮 <trace>。
         // 用和 doChat 完全一样的推导规则，否则委派那几行会写进另一个日志文件
-        String userKey = userLogKey(userIdFor(authToken),
-                payload.getOrDefault("uuid", "default-user"));
-        DelegationTasks.Task task = delegationTasks.submit(null, userKey, RequestScope.current(),
+        Long uid = userIdFor(authToken);
+        String userKey = userLogKey(uid, payload.getOrDefault("uuid", "default-user"));
+        DelegationTasks.Task task = delegationTasks.submit(null, uid, userKey, RequestScope.current(),
                 () -> doChat(payload, authToken, apiKeyOverride, convId));
         return continueOrReturn(task);
     }
@@ -574,11 +680,23 @@ public class ChatController {
      * 版本的环境要匹配请求的环境）、条数有上限。过了这几关才唤醒挂起的线程。
      */
     @PostMapping("/task/{taskId}/facts")
-    public ResponseEntity<Object> submitFacts(@PathVariable String taskId, @RequestBody JsonNode body) {
+    public ResponseEntity<Object> submitFacts(@PathVariable String taskId, @RequestBody JsonNode body,
+                                              @RequestHeader(value = "X-Auth-Token", required = false) String authToken) {
         DelegationTasks.Task task = delegationTasks.find(taskId);
         if (task == null) {
             return ResponseEntity.status(404).contentType(MediaType.APPLICATION_JSON)
                     .body(Map.of("error", "任务不存在或已过期", "taskId", taskId));
+        }
+        // 归属校验：有主的任务只认主人。taskId 是不可猜的随机串，但它是**唯一凭据**——
+        // 不做这一步，别有用心的登录用户拿到 taskId 就能往别人的轮次里塞伪造事实，
+        // 还能从这个接口的响应里读到别人的最终结果（下面 continueOrReturn 会把回复返回）。
+        // 认不出归属时一律回 404 而不是 403：不告诉对方"这个任务确实存在，只是不是你的"。
+        if (task.ownerId() != null) {
+            Long uid = userIdFor(authToken);
+            if (uid == null || !uid.equals(task.ownerId())) {
+                return ResponseEntity.status(404).contentType(MediaType.APPLICATION_JSON)
+                        .body(Map.of("error", "任务不存在或已过期", "taskId", taskId));
+            }
         }
         if (task.isDone()) {
             return continueOrReturn(task);
@@ -615,12 +733,26 @@ public class ChatController {
     }
 
     @PostMapping("/abort")
-    public String abortChat(@RequestBody Map<String, String> payload) {
+    public String abortChat(@RequestBody Map<String, String> payload,
+                            @RequestHeader(value = "X-Auth-Token", required = false) String authToken) {
         String uuid = payload.getOrDefault("uuid", "default-user");
-        abortedSessions.put(uuid, true);
+        // token 优先取请求头；页面卸载时前端用 sendBeacon 发的请求带不了自定义头，所以 body 里也放了一份
+        Long uid = userIdFor(authToken != null ? authToken : payload.get("token"));
+        // 只在这个会话**真的在跑**时才置终止标记：不然会留一个没人消费的 true 在表里
+        // （典型场景：用户在上一轮刚结束的瞬间点了"终止思考"），下一次正常请求一进来就被它秒杀，
+        // 白烧一次规划师调用才回"已手动终止"。顺便也挡住了"拿别人 uuid 乱终止"。
+        boolean running = roundGuard.isRunning(uuid);
+        if (running) abortedSessions.put(uuid, true);
+        // 刷新过页面时 uuid 已经换成新的了：把该账号**所有**在跑的轮次都标记上，
+        // 否则用户点了终止，老那一轮看不到标记，会带着残缺数据一路跑完（只有新 uuid 被标记）。
+        for (String u : roundGuard.activeUuidsOf(uid)) abortedSessions.put(u, true);
         // 挂起的线程最多要等 5 秒才自己醒来，用户点了终止不该再等——直接放行
-        int woken = delegationTasks.cancelByUser(sanitizeUuid(uuid));
-        System.out.println("🛑 收到用户终止指令 (volatile flag) — uuid=" + uuid
+        // 按账号找而不是按 userKey：userKey 里带 uuid，而 uuid 每次刷新都会换，
+        // 刷新页面后点终止就永远打不中原来那个任务（这是修之前真实存在的问题）。
+        int woken = uid != null
+                ? delegationTasks.cancelByOwner(uid)
+                : delegationTasks.cancelByUser("anon-" + sanitizeUuid(uuid));
+        System.out.println("🛑 收到用户终止指令 — uuid=" + uuid + "，running=" + running
                 + (woken > 0 ? "，已唤醒 " + woken + " 个等数据的任务" : ""));
         return "ok";
     }
@@ -865,9 +997,45 @@ public class ChatController {
                 .body(text);
     }
 
-    /** 检查是否已终止 */
+    /** 检查是否已终止：用户手动终止，或这一轮已被判定为"客户端已离开" */
     private boolean isAborted(String uuid) {
+        // 浏览器跑了（刷新/关标签/崩溃/断网）之后这一轮没必要再跑：它只会挨个等预算超时、
+        // 回源去挤那把全局令牌闸，还占着"同一账号同时只跑一轮"的名额不放。
+        // 标记打在上下文上，而这里的调用点都发生在该轮自己的上下文里（DelegationContext.runWith）。
+        DelegationContext ctx = DelegationContext.current();
+        if (ctx != null && ctx.abandoned()) return true;
         return Boolean.TRUE.equals(abortedSessions.getOrDefault(uuid, false));
+    }
+
+    /** 判定"客户端已离开"的门槛：发出需求之后这么久一个回执都没有，就当浏览器不在了 */
+    private static final long ABANDONED_AFTER_MS = 120_000L;
+
+    /**
+     * 僵尸轮次回收（兜底）。
+     *
+     * <p>为什么需要：浏览器刷新/关闭/崩溃之后，那一轮仍然在服务器上跑 —— 每个取数点等预算超时后
+     * 自己回源，一圈下来要好几分钟；期间一直占着"同一账号同时只跑一轮"的名额，而用户页面上
+     * 已经没有终止按钮了（{@code isLoading} 已变 false），只能干等或者重启服务器。
+     *
+     * <p>正常刷新/关闭由前端 {@code pagehide} 时主动发的 abort 覆盖；这里兜的是浏览器崩溃、断电、
+     * 网络直接断掉这类不会触发 pagehide 的情况。
+     *
+     * <p>判定口径故意保守：<b>发出过需求、且一个回执都没收到</b>，并持续 120 秒。
+     * 只要收到过任何一次回执就不算（哪怕内容是"我取不到"），因为那说明客户端还在干活。
+     */
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 60_000)
+    public void reapAbandonedRounds() {
+        long now = System.currentTimeMillis();
+        for (DelegationTasks.Task t : delegationTasks.all()) {
+            if (t.isDone()) continue;
+            DelegationContext ctx = t.context();
+            if (ctx.dispatchedCount() <= 0 || ctx.servedCount() > 0) continue;
+            if (now - t.createdAtMillis() < ABANDONED_AFTER_MS) continue;
+            ctx.markAbandoned();
+            ctx.cancelAll();   // 唤醒还在等数据的取数点，让它们立刻返回而不是等满预算
+            System.out.println("♻️ 轮次被判为客户端已离开（已发出 " + ctx.dispatchedCount()
+                    + " 项需求、0 回执），已作废并释放账号名额：" + t.taskId());
+        }
     }
 
     // ==========================================
@@ -2153,7 +2321,8 @@ public class ChatController {
 
                     if (isAborted(uuid)) return "⛔ 思考已手动终止。";
 
-                    criticCall = aiAgentService.criticPools(criticContext.toString(), effectiveApiKey);
+                    criticCall = callAgentWithRetry("审核员(Critic)", uuid,
+                            () -> aiAgentService.criticPools(criticContext.toString(), effectiveApiKey));
                     String criticReply = criticCall.text();
                     if (forceCriticDegraded) {
                         // 🧪 评测故障注入：模拟"输出打满 token 上限被截断"，把闭合标签切掉
@@ -2501,7 +2670,14 @@ public class ChatController {
 
         } catch (Exception e) {
             System.err.println("组装蓝图失败: " + e.getMessage());
-            return aiBlueprint;
+            // 🐛 旧实现直接 `return aiBlueprint`：评论员那一步的 LLM 失败会被静默吞掉，
+            // 用户拿到的是**带 XML 标签的规划师原文**（`<core_mods>` 都在里面），既没有图谱也不知道出了什么事。
+            // 能识别的 LLM 失败就如实说；其余保留"尽力返回原文"的旧行为，但要留下日志线索。
+            MaaLog.error("组装蓝图失败: " + e.getClass().getSimpleName(), e);
+            String note = llmErrorNote(e);
+            if (note != null) return note;
+            return aiBlueprint + "\n\n⚠️ （本轮组装过程中出错，上面是规划阶段的原文，图谱可能不完整；"
+                    + "错误类型：" + e.getClass().getSimpleName() + "）";
         }
     }
 

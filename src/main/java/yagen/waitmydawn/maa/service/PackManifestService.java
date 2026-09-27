@@ -34,8 +34,15 @@ public class PackManifestService {
     private static final Logger log = LoggerFactory.getLogger(PackManifestService.class);
     /** 快照存活时间：一次编辑会话足够，过期即失效（避免内存里长期堆着旧包） */
     private static final long TTL_MS = 30 * 60 * 1000L;
-    /** 最多保留多少份快照（LRU 淘汰） */
-    private static final int MAX_MANIFESTS = 20;
+    /**
+     * 最多保留多少份快照（LRU 淘汰）。
+     *
+     * <p>这里原来是 20 —— 单机单人时够用，多用户下不够：这份表是<b>全局共享</b>的，
+     * 两个用户交替预览/生成时，后者的快照会把前者的挤出去；前者再点生成，{@code filesFor} 返回 null，
+     * 就回退到"逐个模组查版本"的兼容路径 —— 把本该零出网的导出变成几十次出网请求（还要过令牌闸排队）。
+     * 快照本身很小（每份就是一组 fileInfo），放宽到 200 的代价可以忽略。
+     */
+    private static final int MAX_MANIFESTS = 200;
 
     private record Manifest(long createdAt, String loader, String mcVersion,
                             Map<String, JsonNode> fileByNodeId) {

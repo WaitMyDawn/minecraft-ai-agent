@@ -50,11 +50,33 @@ const stopThinking = () => {
 };
 
 // 🔥 新增：手动终止请求
+// 刷新 / 关标签 / 切走页面时，如果还有一轮在跑，主动告诉服务器"这一轮我不要了"。
+//
+// 不这么做的后果是真实的线上问题：那一轮会继续在服务器上跑完（每次等数据超时后自己回源），
+// 期间一直占着"同一账号同时只能跑一轮"的名额；用户刷新完再发指令只会看到
+// "⏳ 你上一轮构筑还在进行中"，而此时 isLoading 已经变 false、终止按钮根本不在页面上，
+// 除了等它自己跑完没有任何办法 —— 这就是"只能重启服务器"的来源。
+//
+// 用 sendBeacon 而不是 fetch：页面卸载时 fetch 会被浏览器直接掐断，sendBeacon 由浏览器保证送出。
+// 但它不能带自定义请求头，所以把 token 放进 body，后端两种都认。
+window.addEventListener('pagehide', () => {
+    if (!isLoading.value) return;
+    try {
+        const body = JSON.stringify({
+            uuid: sessionUuid.value,
+            token: (authUser.value && authUser.value.token) || ''
+        });
+        navigator.sendBeacon('/api/chat/abort', new Blob([body], {type: 'application/json'}));
+    } catch (e) { /* 卸载路径上什么都做不了，静默 */ }
+});
+
 export const abortThinking = async () => {
     try {
         await fetch('/api/chat/abort', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            // 带上 token：服务端要按账号找这一轮的委派任务（uuid 每次刷新都会变，靠它找不着），
+            // 顺便让"拿别人 uuid 乱终止"这条路走不通
+            headers: {'Content-Type': 'application/json', ...authHeader()},
             body: JSON.stringify({ uuid: sessionUuid.value })
         });
         stopThinking();

@@ -4,11 +4,43 @@ services:
     container_name: maa
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     env_file:
       - .env
     volumes:
       - ./maa-app.jar:/app/app.jar
       - ./maa_db:/app/maa_db
       - ./maa_logs:/app/logs
-      - ./maa-base-server:/app/maa-base-server
+    # 健康检查：Docker 默认只看"进程还在不在"。进程活着但应用已经挂了（启动失败、
+    # 线程池卡死、端口没起来），它一无所知，nginx 那边只会一直 502。
+    # 这里问应用自己的 /api/health（存活语义；带 strict 的那种留给外部监控）。
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s      # 启动期：Spring 上下文 + JPA + 首次版本刷新，60 秒内不判失败
+    # 容器 stdout 日志轮转。不设上限时 json-file 日志会把 /var/lib/docker 撑爆
+    # （应用自己的日志是另一份，在 maa_logs/ 里，由 LOG_RETENTION_DAYS 管）。
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    # 停容器时给应用一点时间跑完手上的请求（配合 application.properties 里的
+    # server.shutdown=graceful）。注意：几分钟的长轮构筑仍然会被切断，这个只保住短请求。
+    stop_grace_period: 30s
+
+# 想让"不健康"也自动重启（Docker 本身不会因为 healthcheck 失败而重启容器），
+# 可以打开下面这段。代价：它要挂 docker.sock —— 等于把宿主机的 Docker 控制权交给这个容器，
+# 安全上是个真让步。更轻的做法是让外部监控报警，人来重启。
+#
+#  autoheal:
+#    image: willfarrell/autoheal:latest
+#    container_name: autoheal
+#    restart: unless-stopped
+#    environment:
+#      - AUTOHEAL_CONTAINER_LABEL=all
+#      - AUTOHEAL_INTERVAL=30
+#    volumes:
+#      - /var/run/docker.sock:/var/run/docker.sock

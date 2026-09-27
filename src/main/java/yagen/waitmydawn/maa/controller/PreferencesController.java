@@ -43,7 +43,10 @@ public class PreferencesController {
 
     private Long requireUser(String token) {
         Long uid = userController.validateToken(token);
-        if (uid == null) throw new RuntimeException("未登录");
+        // 用 ResponseStatusException 而不是裸 RuntimeException：后者会被当成未处理异常返回 500，
+        // 前端拿到 500 只会显示"服务器错误"，而这里明明是"你没登录"（401）
+        if (uid == null) throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.UNAUTHORIZED, "未登录");
         return uid;
     }
 
@@ -85,7 +88,13 @@ public class PreferencesController {
     @GetMapping("/conversations/{id}/messages")
     public ResponseEntity<List<Map<String, Object>>> getMessages(
             @RequestHeader("X-Auth-Token") String token, @PathVariable Long id) {
-        requireUser(token);
+        Long uid = requireUser(token);
+        // 归属校验：对话 id 是自增数字，能枚举。少了这一步，任何登录用户换个 id 就能
+        // 把别人的对话历史（需求描述、构筑结果）整段读走。不是自己的就当不存在。
+        var convOpt = convRepo.findById(id);
+        if (convOpt.isEmpty() || !uid.equals(convOpt.get().getUserId())) {
+            return ResponseEntity.status(404).body(List.of());
+        }
         return ResponseEntity.ok(msgRepo.findByConversationIdOrderByCreatedAtAsc(id).stream()
                 .map(m -> {
                     Map<String, Object> mm = new LinkedHashMap<>();
@@ -101,18 +110,22 @@ public class PreferencesController {
     public ResponseEntity<Map<String, Object>> saveMessage(
             @RequestHeader("X-Auth-Token") String token, @PathVariable Long id,
             @RequestBody Map<String, Object> body) {
-        requireUser(token);
+        Long uid = requireUser(token);
+        // 同上的归属校验：否则能往别人的对话里塞消息，对方一打开就看见
+        var convOpt = convRepo.findById(id);
+        if (convOpt.isEmpty() || !uid.equals(convOpt.get().getUserId())) {
+            return ResponseEntity.status(404).body(Map.of("error", "对话不存在"));
+        }
         ChatMessage msg = new ChatMessage(id,
                 body.get("role").toString(), body.get("content").toString(),
                 Boolean.TRUE.equals(body.get("hasData")),
                 body.getOrDefault("thinkTime", "").toString(),
                 body.getOrDefault("modSlugs", "").toString());
         msgRepo.save(msg);
-        convRepo.findById(id).ifPresent(c -> {
-            c.setUpdatedAt(java.time.LocalDateTime.now());
-            if (body.containsKey("title")) c.setTitle(body.get("title").toString());
-            convRepo.save(c);
-        });
+        Conversation conv = convOpt.get();
+        conv.setUpdatedAt(java.time.LocalDateTime.now());
+        if (body.containsKey("title")) conv.setTitle(body.get("title").toString());
+        convRepo.save(conv);
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
@@ -185,9 +198,14 @@ public class PreferencesController {
     @DeleteMapping("/categories/{id}")
     public ResponseEntity<Map<String, Object>> removeCategoryPref(
             @RequestHeader("X-Auth-Token") String token, @PathVariable Long id) {
-        requireUser(token);
+        Long uid = requireUser(token);
+        // 归属校验：id 是自增的，不比对 userId 就能删掉别人的偏好行（同类漏子见下面两处）
+        var opt = catRepo.findById(id);
+        if (opt.isEmpty() || !uid.equals(opt.get().getUserId())) {
+            return ResponseEntity.status(404).body(Map.of("error", "偏好不存在"));
+        }
         catRepo.deleteById(id);
-        normalizeCategoryRanks(requireUser(token));
+        normalizeCategoryRanks(uid);
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
@@ -291,7 +309,11 @@ public class PreferencesController {
     @DeleteMapping("/mods/{id}")
     public ResponseEntity<Map<String, Object>> removeModPref(
             @RequestHeader("X-Auth-Token") String token, @PathVariable Long id) {
-        requireUser(token);
+        Long uid = requireUser(token);
+        var opt = modRepo.findById(id);
+        if (opt.isEmpty() || !uid.equals(opt.get().getUserId())) {
+            return ResponseEntity.status(404).body(Map.of("error", "偏好不存在"));
+        }
         modRepo.deleteById(id);
         return ResponseEntity.ok(Map.of("ok", true));
     }
@@ -406,7 +428,11 @@ public class PreferencesController {
     @DeleteMapping("/blacklist/{id}")
     public ResponseEntity<Map<String, Object>> removeBlacklist(
             @RequestHeader("X-Auth-Token") String token, @PathVariable Long id) {
-        requireUser(token);
+        Long uid = requireUser(token);
+        var opt = blacklistRepo.findById(id);
+        if (opt.isEmpty() || !uid.equals(opt.get().getUserId())) {
+            return ResponseEntity.status(404).body(Map.of("error", "条目不存在"));
+        }
         blacklistRepo.deleteById(id);
         return ResponseEntity.ok(Map.of("ok", true));
     }

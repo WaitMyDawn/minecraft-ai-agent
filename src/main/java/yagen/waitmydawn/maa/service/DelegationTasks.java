@@ -70,16 +70,21 @@ public class DelegationTasks {
     /** 一个在后台跑的构筑任务 */
     public static final class Task {
         private final String taskId;
+        /** 提交时刻：僵尸轮次回收要算它跑了多久 */
+        private final long createdAtMillis = System.currentTimeMillis();
         /** 发起这次构筑的会话标识（前端 uuid），用于 /api/chat/abort 立即叫停挂起的线程 */
         private final String userKey;
+        /** 发起者账号 id；匿名 = null。用户回执端点用它做归属校验（别人的 taskId 不该能往里塞数据） */
+        private final Long ownerId;
         private final DelegationContext context = new DelegationContext();
         private final CompletableFuture<String> result = new CompletableFuture<>();
         /** 提交时捕获的请求作用域：任务里的出网计数都记在它上面，收口时要读它而不是当前线程的 */
         private RequestScope scope;
 
-        private Task(String taskId, String userKey) {
+        private Task(String taskId, String userKey, Long ownerId) {
             this.taskId = taskId;
             this.userKey = userKey;
+            this.ownerId = ownerId;
         }
 
         public String taskId() {
@@ -90,8 +95,18 @@ public class DelegationTasks {
             return userKey;
         }
 
+        /** 发起者账号 id（匿名 = null） */
+        public Long ownerId() {
+            return ownerId;
+        }
+
         public RequestScope scope() {
             return scope;
+        }
+
+        /** 提交时刻（毫秒） */
+        public long createdAtMillis() {
+            return createdAtMillis;
         }
 
         public DelegationContext context() {
@@ -114,8 +129,14 @@ public class DelegationTasks {
      * 记回发起请求的那一份 {@code <trace>}，否则委派走的那些请求会统计不到。
      */
     public Task submit(String taskId, String userKey, RequestScope scope, Callable<String> work) {
+        return submit(taskId, null, userKey, scope, work);
+    }
+
+    /** 登记归属账号的那一版（登录用户走这条） */
+    public Task submit(String taskId, Long ownerId, String userKey, RequestScope scope,
+                       Callable<String> work) {
         Task task = new Task(taskId == null || taskId.isBlank()
-                ? UUID.randomUUID().toString().substring(0, 8) : taskId, userKey);
+                ? UUID.randomUUID().toString().substring(0, 8) : taskId, userKey, ownerId);
         task.scope = scope;
         tasks.put(task.taskId, task);
         executor.execute(() -> RequestScope.runWith(scope, () -> DelegationContext.runWith(task.context, () -> {
@@ -130,6 +151,11 @@ public class DelegationTasks {
 
     public Task find(String taskId) {
         return taskId == null ? null : tasks.getIfPresent(taskId);
+    }
+
+    /** 只读遍历当前任务表（僵尸轮次回收用） */
+    public java.util.Collection<Task> all() {
+        return tasks.asMap().values();
     }
 
     /**
@@ -182,6 +208,24 @@ public class DelegationTasks {
         int n = 0;
         for (Task t : tasks.asMap().values()) {
             if (userKey.equals(t.userKey()) && !t.isDone()) {
+                t.context().cancelAll();
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * 按账号终止该用户所有在等的任务。
+     *
+     * <p>为什么按账号而不是按 {@code userKey}：userKey 里带着 uuid，而前端 uuid 每次刷新都会变，
+     * 于是"刷新页面后点终止"永远打不中原来那个任务；按账号找就没这个问题（同一个人同时只跑一轮）。
+     */
+    public int cancelByOwner(Long ownerId) {
+        if (ownerId == null) return 0;
+        int n = 0;
+        for (Task t : tasks.asMap().values()) {
+            if (ownerId.equals(t.ownerId()) && !t.isDone()) {
                 t.context().cancelAll();
                 n++;
             }

@@ -234,6 +234,23 @@ public final class DelegationContext {
         return served.get();
     }
 
+    // ---------- 客户端跑路标记 ----------
+    // 发出需求之后一个回执都没回来，说明浏览器已经不在了（刷新/关标签/崩溃/断网）。
+    // 这一轮继续跑下去毫无意义：它只会挨个等预算超时、然后回源去挤那把全局令牌闸，
+    // 还占着"同一账号同时只跑一轮"的名额不放。由 ChatController 的定时回收打上这个标记。
+
+    private volatile boolean abandoned;
+
+    /** true = 已被判定为"客户端已离开" */
+    public boolean abandoned() {
+        return abandoned;
+    }
+
+    /** 判定客户端已离开（由回收任务调用） */
+    public void markAbandoned() {
+        this.abandoned = true;
+    }
+
     /** 等超时、退回服务器自抓的次数（观测用：这个数大说明用户网络/浏览器不给力） */
     public int timedOutCount() {
         return timedOut.get();

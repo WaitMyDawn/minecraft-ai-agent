@@ -30,6 +30,7 @@ desktop.ini
 maa_db/*.mv.db
 maa_db/*.trace.db
 maa_db/*.lock.db
+maa_db/backups/
 logs/
 
 # ===== 日志 =====

@@ -70,7 +70,10 @@ export const authSuccess = ref('');
 export const authLoading = ref(false);
 export const authUser = ref(null);  // {token, accountNumber, username}
 export const showSidebar = ref(false);
-export const currentConvId = ref(null);
+// 当前对话 id：**必须持久化**。以前只放在内存里，一轮对话中途刷新页面就变成"空白对话"——
+// 历史还在数据库里，但页面上没有任何入口能回到它（侧边栏列表虽然拉回来了，用户还得自己认得是哪个）。
+export const currentConvId = ref(
+    (() => { try { const v = localStorage.getItem('maa-conv'); return v ? Number(v) : null; } catch (e) { return null; } })());
 export const conversationList = ref([]);
 export const profileApiKey = ref('');
 export const profileApiKeyMsg = ref('');

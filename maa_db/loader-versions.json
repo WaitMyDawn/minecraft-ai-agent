@@ -1,20 +1,10 @@
 {
-  "updatedAt" : "2026-09-27T00:35:55.546278500Z",
+  "updatedAt" : "2026-09-27T04:40:07.502397Z",
   "loaders" : {
     "neoforge" : {
       "source" : "maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml + net/neoforged/forge（MC 1.20.1 那批在旧 artifact 下）。从版本号反推 MC 版本（族与 MC 1:1），挑选策略：正式版 > 最新 beta > 最新 alpha；只增不删，manual 列出的键不覆盖，非正式版记在 prerelease 里",
       "manual" : [ ],
-      "prerelease" : {
-        "1.20.3" : "beta",
-        "1.20.5" : "beta",
-        "1.21.2" : "beta",
-        "1.21.6" : "beta",
-        "1.21.7" : "beta",
-        "1.21.9" : "beta",
-        "26.1" : "beta",
-        "26.1.1" : "beta",
-        "26.3" : "beta"
-      },
+      "prerelease" : { },
       "gameVersions" : {
         "1.20.2" : "20.2.93",
         "1.20.4" : "20.4.251",
@@ -122,7 +112,7 @@
         "1.8.9" : "11.15.1.2318",
         "1.9" : "12.16.1.1938",
         "1.9.4" : "12.17.0.2317",
-        "26.3" : "66.0.4"
+        "26.3" : "66.0.5"
       }
     },
     "fabric-loader" : {

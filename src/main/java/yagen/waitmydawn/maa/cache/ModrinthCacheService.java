@@ -280,15 +280,22 @@ public class ModrinthCacheService {
      * 校验通过后回填 versions（内存 + 写回 H2）。
      * 幂等：同 slug+loader 追加小版本，不重复写入。
      */
-    public synchronized void recordVersion(String slug, String loader, String mcVersion) {
+    public void recordVersion(String slug, String loader, String mcVersion) {
         String l = loader.toLowerCase();
-        Map<String, Set<String>> byLoaderMap =
-                knownVersions.computeIfAbsent(slug, k -> new ConcurrentHashMap<>());
-        Set<String> vers = byLoaderMap.computeIfAbsent(l, k -> ConcurrentHashMap.newKeySet());
-        if (!vers.add(mcVersion)) {
-            return; // 已存在，无需写库
+        // 临界区里只改内存，写库（JDBC，磁盘 I/O）挪到锁外：
+        // 这个方法在一轮里会被调用几十上百次（每发现一个新版本一次），原来整段 synchronized 意味着
+        // 多用户并发时大家排队等别人写盘。快照式拷贝保证落库的是同一时刻的一致内容。
+        Map<String, Set<String>> snapshot = new java.util.LinkedHashMap<>();
+        synchronized (this) {
+            Map<String, Set<String>> byLoaderMap =
+                    knownVersions.computeIfAbsent(slug, k -> new ConcurrentHashMap<>());
+            Set<String> vers = byLoaderMap.computeIfAbsent(l, k -> ConcurrentHashMap.newKeySet());
+            if (!vers.add(mcVersion)) {
+                return; // 已存在，无需写库
+            }
+            byLoaderMap.forEach((k, v) -> snapshot.put(k, new java.util.LinkedHashSet<>(v)));
         }
-        persistVersions(slug, byLoaderMap);
+        persistVersions(slug, snapshot);
     }
 
     private void persistVersions(String slug, Map<String, Set<String>> byLoaderMap) {

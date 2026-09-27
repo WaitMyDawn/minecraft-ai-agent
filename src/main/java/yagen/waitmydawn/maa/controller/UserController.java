@@ -4,13 +4,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import yagen.waitmydawn.maa.model.*;
+import yagen.waitmydawn.maa.runtime.SessionRegistry;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.SecretKeySpec;
 import java.security.MessageDigest;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 @RestController
 @RequestMapping("/api/user")
@@ -20,19 +20,23 @@ public class UserController {
     private final UserRepository userRepo;
     private final ConversationRepository convRepo;
     private final ChatMessageRepository msgRepo;
-    private final Map<String, Long> sessions = new ConcurrentHashMap<>(); // token → userId
+    /** token → userId 的会话表，带空闲有效期（见 SessionRegistry 的取舍说明） */
+    private final SessionRegistry sessions;
     private final String encryptionSecret;
     private final boolean allowRegistration;
 
     public UserController(UserRepository userRepo, ConversationRepository convRepo,
                           ChatMessageRepository msgRepo,
                           @Value("${maa.encryption.secret}") String encryptionSecret,
-                          @Value("${maa.allow-registration:true}") boolean allowRegistration) {
+                          @Value("${maa.allow-registration:true}") boolean allowRegistration,
+                          @Value("${maa.session.ttl-days:30}") long sessionTtlDays) {
         this.userRepo = userRepo;
         this.convRepo = convRepo;
         this.msgRepo = msgRepo;
         this.encryptionSecret = encryptionSecret;
         this.allowRegistration = allowRegistration;
+        // 天数 → 毫秒。给下限 1 天：配成 0 或负数会让所有人都登不进来（400 起不来比"token 不过期"更难排查）
+        this.sessions = new SessionRegistry(Math.max(1, sessionTtlDays) * 24L * 60 * 60 * 1000);
     }
 
     /** 注册: 账号从 1000 起自动分配 */
@@ -55,8 +59,7 @@ public class UserController {
         User user = new User(accountNumber, username, hash(password));
         userRepo.save(user);
 
-        String token = UUID.randomUUID().toString();
-        sessions.put(token, user.getId());
+        String token = sessions.issue(user.getId());
 
         return ResponseEntity.ok(Map.of(
                 "token", token,
@@ -79,8 +82,7 @@ public class UserController {
             return ResponseEntity.ok(Map.of("error", "账号或密码错误"));
         }
         User user = userOpt.get();
-        String token = UUID.randomUUID().toString();
-        sessions.put(token, user.getId());
+        String token = sessions.issue(user.getId());
 
         return ResponseEntity.ok(Map.of(
                 "token", token,
@@ -98,11 +100,11 @@ public class UserController {
     public ResponseEntity<Map<String, Object>> updateProfile(
             @RequestHeader("X-Auth-Token") String token,
             @RequestBody Map<String, String> body) {
-        Long userId = sessions.get(token);
+        Long userId = sessions.touch(token);
         if (userId == null) return ResponseEntity.status(401).body(Map.of("error", "未登录，请重新登录"));
         var userOpt = userRepo.findById(userId);
         if (userOpt.isEmpty()) {
-            sessions.remove(token);
+            sessions.revoke(token);
             return ResponseEntity.status(401).body(Map.of("error", "用户不存在"));
         }
         User user = userOpt.get();
@@ -132,7 +134,7 @@ public class UserController {
     public ResponseEntity<Map<String, Object>> changePassword(
             @RequestHeader("X-Auth-Token") String token,
             @RequestBody Map<String, String> body) {
-        Long userId = sessions.get(token);
+        Long userId = sessions.touch(token);
         if (userId == null) return ResponseEntity.status(401).body(Map.of("error", "未登录"));
         var userOpt = userRepo.findById(userId);
         if (userOpt.isEmpty()) return ResponseEntity.status(401).body(Map.of("error", "用户不存在"));
@@ -153,27 +155,41 @@ public class UserController {
 
     /** 验证 token 并返回 userId, null 表示无效 */
     public Long validateToken(String token) {
-        if (token == null) return null;  // ConcurrentHashMap 不接受 null key
-        return sessions.get(token);
+        return sessions.touch(token);   // 内部已挡 null；顺便滑动续期
     }
 
     /** 根据 token 获取用户对象 (用于获取 accountNumber 等) */
     public Optional<User> getUserByToken(String token) {
-        Long uid = sessions.get(token);
+        Long uid = sessions.touch(token);
         if (uid == null) return Optional.empty();
         return userRepo.findById(uid);
+    }
+
+    /**
+     * 退出登录：服务端立刻作废这个 token。
+     *
+     * <p>为什么要有：前端 {@code logout} 只删了 localStorage，token 本身还是有效的 ——
+     * 网络抓包、共用电脑、浏览器同步都会把它带出去。没有这个端点，"退出登录"是假的。
+     *
+     * <p>token 缺失也返回 ok：调用方唯一想听的就是"你已经退出了"，为此报错没有意义。
+     */
+    @PostMapping("/logout")
+    public ResponseEntity<Map<String, Object>> logout(
+            @RequestHeader(value = "X-Auth-Token", required = false) String token) {
+        sessions.revoke(token);
+        return ResponseEntity.ok(Map.of("ok", true));
     }
 
     /** 前端页面加载时校验 token 是否有效，同步登录状态 */
     @GetMapping("/check-token")
     public ResponseEntity<Map<String, Object>> checkToken(@RequestHeader("X-Auth-Token") String token) {
-        Long userId = sessions.get(token);
+        Long userId = sessions.touch(token);
         if (userId == null) {
             return ResponseEntity.status(401).body(Map.of("valid", false, "error", "未登录"));
         }
         var userOpt = userRepo.findById(userId);
         if (userOpt.isEmpty()) {
-            sessions.remove(token);
+            sessions.revoke(token);
             return ResponseEntity.status(401).body(Map.of("valid", false, "error", "用户不存在"));
         }
         User user = userOpt.get();
@@ -190,8 +206,7 @@ public class UserController {
 
     /** 根据 token 获取用户解密后的 API Key */
     public String getUserApiKey(String token) {
-        if (token == null) return null;  // ConcurrentHashMap 不接受 null key
-        Long uid = sessions.get(token);
+        Long uid = sessions.touch(token);
         if (uid == null) return null;
         return userRepo.findById(uid)
                 .map(u -> decrypt(u.getEncryptedApiKey()))

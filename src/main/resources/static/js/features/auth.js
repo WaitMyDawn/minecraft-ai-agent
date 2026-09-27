@@ -16,7 +16,7 @@ if (savedAuth) { try { authUser.value = JSON.parse(savedAuth); } catch(e){} }
 if (authUser.value && authUser.value.token) {
     fetch('/api/user/check-token', {
         headers: {'X-Auth-Token': authUser.value.token}
-    }).then(r => r.json()).then(d => {
+    }).then(r => r.json()).then(async d => {   // async：下面要 await 拉列表、恢复当前对话
         if (!d.valid) {
             authUser.value = null;
             localStorage.removeItem('maa-auth');
@@ -30,7 +30,12 @@ if (authUser.value && authUser.value.token) {
             // 不拉就永远是空的——数据库里的记录还在，但页面上没有任何路径能点进去。
             // 放在这里的 then 回调里是安全的：它一定在模块体执行完之后才跑，
             // 不会撞上 loadConversations 这个 const 的暂时性死区。
-            loadConversations();
+            await loadConversations();
+            // 再把自己正在编辑的那个对话恢复回来：一轮对话中途刷新（或者切走再回来）时，
+            // 用户期待看到的是"刚才那段"，不是空白页。id 是从 localStorage 里恢复的。
+            if (currentConvId.value) {
+                await loadConversation(currentConvId.value);
+            }
         }
     }).catch(() => {});
 }
@@ -71,6 +76,14 @@ export const doAuth = async () => {
     } finally { authLoading.value = false; }
 };
 export const logout = () => {
+    // 必须先告诉服务端：只删 localStorage 的话，这个 token 在服务端依然有效，
+    // 被抓包/共用电脑带走后还能继续用（TTL 只治"放着不用"，治不了"主动退出"）。
+    // 不 await —— 本机 UI 不该等网络；请求失败也只是服务端多留一条等它自然过期的会话。
+    // 注意顺序：authHeader() 读的是 authUser.value，必须在下面清空之前取。
+    try {
+        const h = authHeader();
+        if (h['X-Auth-Token']) fetch('/api/user/logout', {method: 'POST', headers: h}).catch(() => {});
+    } catch (e) {}
     authUser.value = null; localStorage.removeItem('maa-auth');
     currentView.value = 'chat'; showSidebar.value = false; conversationList.value = [];
 };
@@ -114,6 +127,7 @@ export const newConversation = async () => {
         });
         const d = await r.json();
         currentConvId.value = d.id;
+        localStorage.setItem('maa-conv', String(d.id));   // 刷新后要能回到这个新对话
         // 新对话 = 新包：清空清单与删除排除名单
         chatHistory.value = []; packData.modSlugs = []; packData.excludedSlugs = [];
         await loadConversations();
@@ -133,13 +147,17 @@ export const loadConversation = async (id) => {
         // 切换历史对话 = 切换包：不继承上一个包的删除排除名单
         packData.excludedSlugs = [];
         currentConvId.value = id;
+        localStorage.setItem('maa-conv', String(id));
     } catch(e) {}
 };
 export const deleteConversation = async (id) => {
     await fetch('/api/prefs/conversations/' + id, {
         method: 'DELETE', headers: authHeader()
     });
-    if (currentConvId.value === id) { currentConvId.value = null; chatHistory.value = []; }
+    if (currentConvId.value === id) {
+        currentConvId.value = null; chatHistory.value = [];
+        localStorage.removeItem('maa-conv');
+    }
     await loadConversations();
 };
 export const saveMsg = async (role, content, hasData, thinkTime, slugs) => {

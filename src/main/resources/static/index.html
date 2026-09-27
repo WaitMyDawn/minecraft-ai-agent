@@ -362,6 +362,8 @@
                     <span class="w-3 h-3 border-2 border-amber-300 border-t-transparent rounded-full animate-spin inline-block"></span>
                     后台校验依赖…
                 </span>
+                <!-- 这里原本放过一个「🧪 运行检验」外链，已删：这一页的右上角那排按钮本来就常驻，
+                     同一个入口出现两次只会让人犹豫点哪个（顶栏那个保留）。 -->
                 <button @click="buildPack" :disabled="isBuilding"
                         class="bg-green-500 hover:bg-green-600 px-6 py-1.5 rounded-md font-bold text-sm">
                     {{ isBuilding ? '打包中...' : '确认打包下载 (.mrpack)' }}
