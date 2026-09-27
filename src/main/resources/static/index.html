@@ -234,6 +234,14 @@
                     class="bg-purple-600 hover:bg-purple-500 px-4 py-2 rounded-lg font-bold shadow text-sm flex items-center gap-1">
                 <span>🧬</span> 规则编辑
             </button>
+            <!-- 运行检验工具（原"沙盒检验"的独立软件版）：纯外链，所以用 <a> 而不是 <button> ——
+                 这样中键新标签、右键复制链接、状态栏预览 URL 这些原生行为都在。
+                 rel="noreferrer" 与页脚备案链接保持一致（新标签打开第三方页面时的最小防护）。 -->
+            <a href="https://github.com/WaitMyDawn/MAA-Checker/releases" target="_blank" rel="noreferrer"
+               title="下载运行检验工具（检查整合包能否正常启动/运行）"
+               class="bg-sky-600 hover:bg-sky-500 px-4 py-2 rounded-lg font-bold shadow text-sm flex items-center gap-1">
+                <span>🧪</span> 运行检验
+            </a>
         </div>
     </header>
 
