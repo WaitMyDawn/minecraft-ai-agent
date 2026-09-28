@@ -51,6 +51,33 @@ public class SessionRegistry {
         if (token != null) sessions.remove(token);
     }
 
+    /**
+     * 作废某个账号的<b>全部</b>会话（改密码、换绑邮箱后调用）。
+     *
+     * <p>为什么必须做：改密码的场景是"我觉得密码可能被别人知道了"。如果只改密码不踢会话，
+     * 对方手里那个 token 还能继续用（我们发的 token 是独立凭据，不随密码变化），改密码就等于白改。
+     */
+    public int revokeAllOf(Long userId) {
+        return revokeAllOf(userId, null);
+    }
+
+    /**
+     * 作废该账号的会话，但保留一个（用于"改密码后当前设备不用重登，其它设备掉线"）。
+     *
+     * @param keepToken 要保留的 token；null = 全踢
+     */
+    public int revokeAllOf(Long userId, String keepToken) {
+        if (userId == null) return 0;
+        int[] n = {0};
+        sessions.entrySet().removeIf(e -> {
+            if (e.getKey().equals(keepToken)) return false;
+            boolean hit = userId.equals(e.getValue().userId());
+            if (hit) n[0]++;
+            return hit;
+        });
+        return n[0];
+    }
+
     /** 当前会话数（排查 / 测试用） */
     public int size() {
         return sessions.size();

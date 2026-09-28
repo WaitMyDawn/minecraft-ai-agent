@@ -64,7 +64,20 @@ export const pageJumpInput = ref('');
 export const suggestMode = ref('pack'); // 'pack' = 添加到整合包, 'prefs' = 添加到偏好
 export const showAuthModal = ref(false);
 export const authMode = ref('login');  // 'login' | 'register'
-export const authForm = reactive({account: '', username: '', password: ''});
+// email/code 只在注册时用；reset* 是"忘记密码"那条独立流程（不共用 authMode，
+// 因为模板里到处是 authMode === 'login' ? ... : ... 的三元，塞第三种取值容易改错）
+export const authForm = reactive({account: '', username: '', password: '', email: '', code: ''});
+export const authResetMode = ref(false);           // true = 正在走"忘记密码"
+export const resetForm = reactive({email: '', code: '', newPassword: ''});
+export const resetResult = ref(null);              // 重置成功后展示的账号号提示
+// 设置页（改密码 / 换绑邮箱）
+export const bindForm = reactive({newEmail: '', oldCode: '', newCode: ''});
+export const bindMsg = ref('');
+// 邮箱卡片默认只显示"当前邮箱 + 两个按钮"，点按钮才展开对应表单（'' | 'bind' | 'unbind'）：
+// 换绑要填两个字段、解绑只有一句警告，默认全展开会把卡片撑得很长
+export const emailAction = ref('');
+export const pwCode = ref('');                     // 改密码时发到当前绑定邮箱的验证码
+export const emailHintDismissed = ref(false);      // "还没绑邮箱"的提示条被手动关掉过
 export const authError = ref('');
 export const authSuccess = ref('');
 export const authLoading = ref(false);

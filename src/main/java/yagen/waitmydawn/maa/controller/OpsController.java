@@ -6,8 +6,14 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import yagen.waitmydawn.maa.service.BackupService;
+import yagen.waitmydawn.maa.service.BrevoMailClient;
+import yagen.waitmydawn.maa.service.EmailCodeService;
+import yagen.waitmydawn.maa.service.EmailNormalizer;
+import yagen.waitmydawn.maa.service.MailService;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -30,12 +36,97 @@ import java.util.Map;
 public class OpsController {
 
     private final BackupService backupService;
+    private final MailService mailService;
+    private final BrevoMailClient brevo;
     private final String token;
 
-    public OpsController(BackupService backupService,
+    public OpsController(BackupService backupService, MailService mailService, BrevoMailClient brevo,
                          @Value("${maa.ops.token:}") String token) {
         this.backupService = backupService;
+        this.mailService = mailService;
+        this.brevo = brevo;
         this.token = token == null ? "" : token.trim();
+    }
+
+    /**
+     * 邮件通道状态：现在用哪条通道、还剩多少额度、查不到额度时是什么原因。
+     *
+     * <p>带 {@code raw=true} 时把 Brevo 账户接口的<b>原始返回</b>也带出来 —— 额度字段名在不同
+     * 计划下会变（sendLimit / emailCredits 等），解析对不上时看原始响应最省事。
+     */
+    @GetMapping("/mail-status")
+    public ResponseEntity<Map<String, Object>> mailStatus(
+            @RequestHeader(value = "X-Ops-Token", required = false) String givenToken,
+            @RequestParam(value = "raw", defaultValue = "false") boolean raw) {
+        if (token.isEmpty()) {
+            return ResponseEntity.status(404).body(Map.of("error", "not found"));
+        }
+        if (!tokenMatches(token, givenToken)) {
+            return ResponseEntity.status(403).body(Map.of("error", "ops token 不正确"));
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("provider", mailService.providerName());
+        body.put("configured", mailService.isConfigured());
+        body.put("diagnose", mailService.diagnose());       // 不可用时是原因，可用时是 null
+        MailService.Quota q = mailService.quota();
+        Map<String, Object> quota = new LinkedHashMap<>();
+        quota.put("remaining", q.remaining());             // null = 查不到（此时不阻断发信）
+        quota.put("exhausted", q.exhausted());
+        quota.put("detail", q.detail());
+        quota.put("checkedSecAgo", (System.currentTimeMillis() - q.checkedAtMillis()) / 1000);
+        body.put("quota", quota);
+        if (raw && "brevo".equals(mailService.providerName()) && brevo.isConfigured()) {
+            try {
+                body.put("brevoAccountRaw", brevo.account().toString());
+            } catch (Exception e) {
+                body.put("brevoAccountRaw", "查询失败: " + e.getMessage());
+            }
+        }
+        return ResponseEntity.ok(body);
+    }
+
+    /**
+     * 发信自检：确认 SMTP 凭据 / 端口 / 发件域名（SPF、DKIM）到底通不通。
+     *
+     * <p>为什么单独做这个端点：用户报"收不到验证码"时，可能的原因有五六种（授权码错、端口被封、
+     * 发件地址没验证、SPF 没配导致进垃圾箱、对方服务器拒收……），而注册流程只会给一句笼统的失败。
+     * 这个端点让你能把"发信链路"单独摘出来验一遍，不用走注册流程、不消耗验证码额度。
+     *
+     * <p>{@code to} 可以不传 —— 不传就发给发件人自己（最省事，也最容易先排除"目标邮箱拒收"这类干扰）。
+     */
+    @PostMapping("/mail-test")
+    public ResponseEntity<Map<String, Object>> mailTest(
+            @RequestHeader(value = "X-Ops-Token", required = false) String givenToken,
+            @RequestBody(required = false) Map<String, String> body) {
+        if (token.isEmpty()) {
+            return ResponseEntity.status(404).body(Map.of("error", "not found"));
+        }
+        if (!tokenMatches(token, givenToken)) {
+            return ResponseEntity.status(403).body(Map.of("error", "ops token 不正确"));
+        }
+        if (!mailService.isConfigured()) {
+            return ResponseEntity.ok(Map.of("ok", false, "error", mailService.diagnose()));
+        }
+        String to = EmailNormalizer.normalize(body == null ? null : body.get("to"));
+        if (to == null || to.isEmpty()) to = mailService.fromAddress();   // 默认发给自己
+        if (!EmailNormalizer.isValidFormat(to)) {
+            return ResponseEntity.ok(Map.of("ok", false, "error", "收件人地址不合法：" + to));
+        }
+        try {
+            mailService.sendCode(to, "发信自检", EmailCodeService.randomCode(), 5);
+            MailService.Quota q = mailService.quota();
+            Map<String, Object> ok = new LinkedHashMap<>();
+            ok.put("ok", true);
+            ok.put("provider", mailService.providerName());
+            ok.put("to", to);
+            ok.put("remainingAfterSendHint", q.remaining());   // 发信后缓存被清，这里等于重新查一次
+            ok.put("message", "已提交 " + mailService.providerName() + "。收不到就依次查：垃圾箱 → 发件人是否已验证 → SPF/DKIM 记录");
+            return ResponseEntity.ok(ok);
+        } catch (Exception e) {
+            // 失败要把原始信息带出来，这正是这个端点存在的意义
+            return ResponseEntity.ok(Map.of("ok", false,
+                    "error", e.getClass().getSimpleName() + ": " + e.getMessage()));
+        }
     }
 
     /**

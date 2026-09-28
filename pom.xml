@@ -82,6 +82,12 @@
             <groupId>com.github.ben-manes.caffeine</groupId>
             <artifactId>caffeine</artifactId>
         </dependency>
+        <!-- 发验证码用（SMTP）。只依赖这一层的邮件封装；具体走 QQ 还是阿里云 DirectMail 由
+             .env 里的 spring.mail.* 决定，代码不用改。 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
     </dependencies>
 
     <build>

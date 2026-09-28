@@ -1,6 +1,7 @@
 import {computed, nextTick, watch} from 'vue';
-import {addingModBySlug, authUser, blacklistItems, blacklistJump, blacklistMsg, blacklistPage, blacklistSlugInput, categoryPrefs, currentView, editingBuildCountId, editingBuildCountVal, enableBlacklist, enableUserFeedbackRules, hasApiKey, keEnv, keEnvs, keModA, keModAError, keModAInfo, keModB, keModBError, keModBInfo, keMsg, keRelation, manualSlugInput, modInfoCache, modPrefJump, modPrefPage, modPrefs, modPrefSearch, modSlugAddMsg, newCatPref, profileApiKey, profileApiKeyMsg, profileUsername, profileWeight, pwMsg, pwNew, pwOld, selectedSuggests, showSuggestBoard, suggestedMods, suggestMode} from '../store.js';
+import {addingModBySlug, authUser, bindForm, bindMsg, blacklistItems, blacklistJump, blacklistMsg, blacklistPage, blacklistSlugInput, categoryPrefs, currentView, editingBuildCountId, editingBuildCountVal, emailAction, emailHintDismissed, enableBlacklist, enableUserFeedbackRules, hasApiKey, keEnv, keEnvs, keModA, keModAError, keModAInfo, keModB, keModBError, keModBInfo, keMsg, keRelation, manualSlugInput, modInfoCache, modPrefJump, modPrefPage, modPrefs, modPrefSearch, modSlugAddMsg, newCatPref, profileApiKey, profileApiKeyMsg, profileUsername, profileWeight, pwCode, pwMsg, pwNew, pwOld, selectedSuggests, showSuggestBoard, suggestedMods, suggestMode} from '../store.js';
 import {apiFetch, authHeader} from '../api.js';
+import {startCooldown} from '../utils/code-cooldown.js';
 
 // 设置页：个人 API Key、改密码、改用户名、偏好影响权重。
 //
@@ -35,19 +36,118 @@ export const saveApiKey = async () => {
     }
 };
 export const changePassword = async () => {
-    if (!pwOld.value || !pwNew.value) return;
+    // 验证方式与后端一致：绑了邮箱只认邮箱验证码（不传当前密码），没绑才要当前密码
+    const hasEmail = !!(authUser.value && authUser.value.email);
+    if (hasEmail ? (!pwNew.value || !pwCode.value) : (!pwOld.value || !pwNew.value)) return;
     pwMsg.value = '';
     try {
         const r = await apiFetch('/api/user/change-password', {
             method: 'PUT', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({oldPassword: pwOld.value, newPassword: pwNew.value})
+            // 两个字段都带上也无所谓（后端按有没有绑邮箱只取需要的那个）：
+            // 有邮箱 → 只看 code；没邮箱 → 只看 oldPassword
+            body: JSON.stringify({
+                oldPassword: hasEmail ? '' : pwOld.value,
+                newPassword: pwNew.value,
+                code: hasEmail ? pwCode.value : ''
+            })
         });
         const d = await r.json();
         if (d.error) { pwMsg.value = d.error; return; }
         pwMsg.value = '密码修改成功';
-        pwOld.value = ''; pwNew.value = '';
+        pwOld.value = ''; pwNew.value = ''; pwCode.value = '';
         setTimeout(() => pwMsg.value = '', 3000);
     } catch(e) { if (e.message !== '未登录') pwMsg.value = '修改失败'; }
+};
+
+// ---------- 邮箱：改密码的验证码 / 换绑（旧邮箱码 + 新邮箱码）----------
+//
+// 三个按钮各用各的倒计时 key：它们发给不同邮箱或不同用途，服务端彼此独立，共用一个倒计时
+// 会让用户在本来能立刻发的按钮上白等 60 秒。
+
+/** 发"改密码"的验证码（后端固定发到当前绑定邮箱，前端不指定收件人） */
+export const sendPwCode = async () => {
+    pwMsg.value = '';
+    try {
+        const r = await apiFetch('/api/user/email-code', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({purpose: 'change_password'})
+        });
+        const d = await r.json();
+        if (d.error) { pwMsg.value = d.error; return; }
+        startCooldown('pw', 60);
+        pwMsg.value = '验证码已发到你的绑定邮箱';
+    } catch(e) { if (e.message !== '未登录') pwMsg.value = '发送失败'; }
+};
+
+/** 发"新邮箱"的验证码（换绑现在只验新邮箱，不再要旧邮箱的码） */
+export const sendBindCode = async () => {
+    bindMsg.value = '';
+    if (!(bindForm.newEmail || '').trim()) {
+        bindMsg.value = '请先填写新邮箱'; return;
+    }
+    try {
+        const r = await apiFetch('/api/user/email-code', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({purpose: 'bind_new', email: bindForm.newEmail})
+        });
+        const d = await r.json();
+        if (d.error) { bindMsg.value = d.error; return; }
+        startCooldown('new', 60);
+        bindMsg.value = '验证码已发到新邮箱';
+    } catch(e) { if (e.message !== '未登录') bindMsg.value = '发送失败'; }
+};
+
+export const saveBindEmail = async () => {
+    bindMsg.value = '';
+    const newEmail = (bindForm.newEmail || '').trim();
+    if (!newEmail) { bindMsg.value = '请填写新邮箱'; return; }
+    try {
+        const r = await apiFetch('/api/user/bind-email', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({newEmail, oldCode: bindForm.oldCode, newCode: bindForm.newCode})
+        });
+        const d = await r.json();
+        if (d.error) { bindMsg.value = d.error; return; }
+        // 同步本地登录态：设置页要立刻显示新邮箱，提示条也该消失
+        if (authUser.value) {
+            authUser.value = {...authUser.value, email: d.email};
+            localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
+        }
+        bindMsg.value = d.message || '邮箱已更新';
+        bindForm.newEmail = ''; bindForm.oldCode = ''; bindForm.newCode = '';
+    } catch(e) { if (e.message !== '未登录') bindMsg.value = '保存失败'; }
+};
+
+/** 关掉"还没绑邮箱"的提示条（存 localStorage，别每次刷新都烦人） */
+export const dismissEmailHint = () => {
+    emailHintDismissed.value = true;
+    try { localStorage.setItem('maa-email-hint-dismissed', '1'); } catch (e) {}
+};
+
+/** 展开/收起邮箱卡片里的表单（'' | 'bind' | 'unbind'）；切换时清掉上一条提示 */
+export const openEmailAction = (action) => {
+    emailAction.value = emailAction.value === action ? '' : action;
+    bindMsg.value = '';
+};
+
+// 解绑邮箱：按用户要求改成"点一下就解绑"，不再要验证码。
+// 所以这里必须把后果贴在按钮旁边 —— 解绑之后忘记密码就只能人工找站长，而且拿到会话的人也能一键解绑。
+export const doUnbindEmail = async () => {
+    bindMsg.value = '';
+    try {
+        const r = await apiFetch('/api/user/unbind-email', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({})
+        });
+        const d = await r.json();
+        if (d.error) { bindMsg.value = d.error; return; }
+        if (authUser.value) {
+            authUser.value = {...authUser.value, email: ''};
+            localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
+        }
+        emailAction.value = '';
+        bindMsg.value = d.message || '邮箱已解绑';
+    } catch(e) { if (e.message !== '未登录') bindMsg.value = '解绑失败'; }
 };
 
 export const saveUsername = async () => {

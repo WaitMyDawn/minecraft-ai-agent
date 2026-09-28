@@ -32,6 +32,7 @@ maa_db/*.trace.db
 maa_db/*.lock.db
 maa_db/backups/
 logs/
+maa_logs/
 
 # ===== 日志 =====
 *.log

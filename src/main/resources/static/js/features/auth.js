@@ -4,9 +4,11 @@
 // 抽取前专门验过这一点——如果它反过来调用图谱/聊天里的函数，就会形成循环依赖，
 // 那样只能靠注入回调解决，代价大得多。以后再往这里加东西，先看这条。
 import {authError, authForm, authLoading, authMode, authSuccess, authUser, chatHistory,
-    conversationList, currentConvId, currentView, hasApiKey, packData, showAuthModal,
+    conversationList, currentConvId, currentView, hasApiKey, packData,
+    authResetMode, resetForm, resetResult, showAuthModal,
     showSidebar, thinkTime} from '../store.js';
 import {authHeader} from '../api.js';
+import {startCooldown} from '../utils/code-cooldown.js';
 import {ref} from 'vue';
 
 // 从 localStorage 恢复登录 — 先恢复再异步校验服务端是否有效
@@ -48,7 +50,9 @@ export const doAuth = async () => {
         ? { account: authForm.account, password: authForm.password }
         // acceptedDelegation 现在后端不校验（UserController.register 收的是 Map，多的字段会被忽略），
         // 但先把口径带出去：将来要在服务端留痕/强制，只需在 register 里加一行判断。
-        : { username: authForm.username, password: authForm.password, acceptedDelegation: 'true' };
+        // 注册必须带邮箱 + 邮箱验证码（后端会真的校验，邮箱还是"一个邮箱一个账号"的唯一依据）
+        : { username: authForm.username, password: authForm.password,
+            email: authForm.email, code: authForm.code, acceptedDelegation: 'true' };
     try {
         const r = await fetch(url, {  // url 已是 /api/user/login 格式，浏览器自动拼域名
             method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
@@ -86,6 +90,86 @@ export const logout = () => {
     } catch (e) {}
     authUser.value = null; localStorage.removeItem('maa-auth');
     currentView.value = 'chat'; showSidebar.value = false; conversationList.value = [];
+};
+
+// ---------- 邮箱验证码：注册 / 忘记密码共用一套"发送 + 倒计时"逻辑 ----------
+//
+// 倒计时只是体验（防止用户狂点），真正的限流在后端：同邮箱一天 3 个、两次间隔 60 秒。
+// 所以后端返回的错误（"请 42 秒后再试" / "该邮箱今天已发送 3 次"）要原样显示给用户 ——
+// 前端倒计时和后端限流不可能完全对齐，以后端为准。
+export const sendAuthCode = async () => {
+    const email = (authForm.email || '').trim();
+    authError.value = '';
+    if (!email) { authError.value = '请先填写邮箱'; return; }
+    authLoading.value = true;
+    try {
+        const r = await fetch('/api/user/email-code', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({email, purpose: 'register'})
+        });
+        const d = await r.json();
+        if (d.error) { authError.value = d.error; return; }
+        startCooldown('auth', 60);
+        authSuccess.value = '验证码已发送，请查收邮箱（没收到先看垃圾箱）';
+    } catch (e) {
+        authError.value = '网络错误: ' + (e.message || '');
+    } finally { authLoading.value = false; }
+};
+
+// ---------- 忘记密码：邮箱 → 验证码 → 新密码；成功后把账号号明确告诉用户 ----------
+export const openReset = () => {
+    authResetMode.value = true;
+    resetResult.value = null;
+    authError.value = ''; authSuccess.value = '';
+    resetForm.email = authForm.email || '';   // 顺手带过用户刚填的邮箱
+    resetForm.code = ''; resetForm.newPassword = '';
+};
+
+export const cancelReset = () => {
+    authResetMode.value = false;
+    resetResult.value = null;
+    authError.value = ''; authSuccess.value = '';
+};
+
+export const sendResetCode = async () => {
+    const email = (resetForm.email || '').trim();
+    authError.value = '';
+    if (!email) { authError.value = '请先填写邮箱'; return; }
+    authLoading.value = true;
+    try {
+        const r = await fetch('/api/user/email-code', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({email, purpose: 'reset'})
+        });
+        const d = await r.json();
+        if (d.error) { authError.value = d.error; return; }
+        startCooldown('auth', 60);
+        authSuccess.value = '验证码已发送，请查收邮箱（没收到先看垃圾箱）';
+    } catch (e) {
+        authError.value = '网络错误: ' + (e.message || '');
+    } finally { authLoading.value = false; }
+};
+
+export const doResetPassword = async () => {
+    authError.value = ''; authSuccess.value = '';
+    if (!resetForm.email || !resetForm.code || !resetForm.newPassword) {
+        authError.value = '邮箱、验证码、新密码都要填'; return;
+    }
+    authLoading.value = true;
+    try {
+        const r = await fetch('/api/user/reset-password', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({email: resetForm.email, code: resetForm.code,
+                                  newPassword: resetForm.newPassword})
+        });
+        const d = await r.json();
+        if (d.error) { authError.value = d.error; return; }
+        // 关键体验：用户往往就是忘了账号号才来重置的，这里必须把它显示出来
+        resetResult.value = {accountNumber: d.accountNumber, message: d.message};
+        resetForm.code = ''; resetForm.newPassword = '';
+    } catch (e) {
+        authError.value = '网络错误: ' + (e.message || '');
+    } finally { authLoading.value = false; }
 };
 
 // ---------- 注册前的知情同意：构筑时的 Modrinth 取数由"你的浏览器"直连 ----------

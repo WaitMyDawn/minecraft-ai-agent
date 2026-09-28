@@ -247,6 +247,17 @@
 
     <!-- 主聊天界面 (整合包构筑) -->
     <div class="flex-1 flex flex-col h-full bg-slate-50 relative overflow-hidden" v-if="currentView === 'chat'">
+        <!-- 老用户（还没绑邮箱）的一次性提示：邮箱是找回密码的唯一方式，不绑就等于密码忘了没法自助找回。
+             做成可关掉的横幅而不是强制弹窗 —— 他自己决定什么时候绑。 -->
+        <div v-if="authUser && !authUser.email && !emailHintDismissed"
+             class="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center gap-3 text-sm">
+            <span class="text-amber-700 flex-1">
+                ⚠️ 你还没绑定邮箱 —— 忘记密码时无法自助找回。建议现在去 <b>⚙️ 设置</b> 绑定一个邮箱。
+            </span>
+            <!-- 设置页的视图名是 'profile'（顶部 ⚙️ 设置按钮也是切到它）。写成 'settings' 会让所有视图都不匹配 → 白屏 -->
+            <button @click="currentView = 'profile'" class="text-amber-700 hover:text-amber-900 font-bold whitespace-nowrap">去绑定</button>
+            <button @click="dismissEmailHint" class="text-amber-500 hover:text-amber-700 whitespace-nowrap" title="不再提示">✕</button>
+        </div>
         <main class="flex-1 overflow-y-auto p-4 flex flex-col gap-4 max-w-4xl w-full mx-auto" ref="chatBox">
             <div v-for="(msg, idx) in chatHistory" :key="idx"
                  class="p-4 rounded-xl shadow-sm max-w-[85%] leading-relaxed whitespace-pre-wrap"
@@ -574,19 +585,77 @@
     <div v-if="showAuthModal" class="absolute inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center">
         <div class="bg-white rounded-2xl shadow-2xl w-96 p-8 relative">
             <button @click="showAuthModal = false" class="absolute top-3 right-3 text-slate-400 hover:text-red-500 text-2xl leading-none">&times;</button>
-            <h3 class="text-xl font-bold mb-4">{{ authMode === 'login' ? '登录' : '注册' }}</h3>
-            <div class="space-y-3">
+            <h3 class="text-xl font-bold mb-4">{{ authResetMode ? '找回密码' : (authMode === 'login' ? '登录' : '注册') }}</h3>
+
+            <!-- 找回密码：邮箱 + 验证码 + 新密码。成功后把账号号明确显示出来（用户就是忘了它才来的） -->
+            <div v-if="authResetMode" class="space-y-3">
+                <div v-if="resetResult" class="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                    <p class="text-emerald-700 text-sm font-bold">密码已重置</p>
+                    <p class="text-emerald-700 text-sm mt-1">你的账号是
+                        <span class="font-mono text-lg font-bold">{{ resetResult.accountNumber }}</span>
+                        ，请用它或邮箱 + 新密码登录。</p>
+                </div>
+                <div>
+                    <label class="text-sm font-bold text-slate-700">注册邮箱</label>
+                    <input v-model="resetForm.email" placeholder="填写你注册时用的邮箱"
+                           class="w-full border rounded px-3 py-2 outline-none focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="text-sm font-bold text-slate-700">邮箱验证码</label>
+                    <div class="flex gap-2">
+                        <input v-model="resetForm.code" placeholder="6 位数字" maxlength="6"
+                               class="flex-1 border rounded px-3 py-2 outline-none focus:border-blue-500">
+                        <button @click="sendResetCode" :disabled="authLoading || byKey('auth') > 0"
+                                class="px-3 py-2 rounded bg-slate-700 hover:bg-slate-600 disabled:bg-slate-300 text-white text-sm font-bold whitespace-nowrap">
+                            {{ byKey('auth') > 0 ? byKey('auth') + 's' : '发送验证码' }}
+                        </button>
+                    </div>
+                </div>
+                <div>
+                    <label class="text-sm font-bold text-slate-700">新密码</label>
+                    <input v-model="resetForm.newPassword" type="password"
+                           placeholder="8~64 位，需含字母和数字" @keyup.enter="doResetPassword"
+                           class="w-full border rounded px-3 py-2 outline-none focus:border-blue-500">
+                </div>
+                <p v-if="authError" class="text-red-500 text-sm">{{ authError }}</p>
+                <p v-if="authSuccess" class="text-emerald-600 text-sm font-bold">{{ authSuccess }}</p>
+                <button @click="doResetPassword" :disabled="authLoading"
+                        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg transition">
+                    {{ authLoading ? '处理中...' : '重置密码' }}
+                </button>
+                <p class="text-sm text-slate-500 text-center cursor-pointer hover:text-blue-600" @click="cancelReset">
+                    返回登录
+                </p>
+            </div>
+
+            <div v-else class="space-y-3">
                 <div v-if="authMode === 'login'">
                     <label class="text-sm font-bold text-slate-700">账号</label>
-                    <input v-model="authForm.account" class="w-full border rounded px-3 py-2 outline-none focus:border-blue-500">
+                    <input v-model="authForm.account" placeholder="账号 或 注册邮箱" class="w-full border rounded px-3 py-2 outline-none focus:border-blue-500">
                 </div>
                 <div v-if="authMode === 'register'">
                     <label class="text-sm font-bold text-slate-700">用户名 (可选)</label>
                     <input v-model="authForm.username" placeholder="留空则用账号作为用户名" class="w-full border rounded px-3 py-2 outline-none focus:border-blue-500">
                 </div>
+                <div v-if="authMode === 'register'">
+                    <label class="text-sm font-bold text-slate-700">邮箱</label>
+                    <input v-model="authForm.email" placeholder="用来收验证码、以后找回密码" class="w-full border rounded px-3 py-2 outline-none focus:border-blue-500">
+                </div>
+                <div v-if="authMode === 'register'">
+                    <label class="text-sm font-bold text-slate-700">邮箱验证码</label>
+                    <div class="flex gap-2">
+                        <input v-model="authForm.code" placeholder="6 位数字" maxlength="6" class="flex-1 border rounded px-3 py-2 outline-none focus:border-blue-500">
+                        <button @click="sendAuthCode" :disabled="authLoading || byKey('auth') > 0"
+                                class="px-3 py-2 rounded bg-slate-700 hover:bg-slate-600 disabled:bg-slate-300 text-white text-sm font-bold whitespace-nowrap">
+                            {{ byKey('auth') > 0 ? byKey('auth') + 's' : '发送验证码' }}
+                        </button>
+                    </div>
+                </div>
                 <div>
                     <label class="text-sm font-bold text-slate-700">密码</label>
-                    <input v-model="authForm.password" type="password" @keyup.enter="doAuth" class="w-full border rounded px-3 py-2 outline-none focus:border-blue-500">
+                    <input v-model="authForm.password" type="password" @keyup.enter="doAuth"
+                           :placeholder="authMode === 'register' ? '8~64 位，需含字母和数字' : ''"
+                           class="w-full border rounded px-3 py-2 outline-none focus:border-blue-500">
                 </div>
                 <p v-if="authError" class="text-red-500 text-sm">{{ authError }}</p>
                 <p v-if="authSuccess" class="text-emerald-600 text-sm font-bold">{{ authSuccess }}</p>
@@ -598,6 +667,9 @@
                 <p class="text-sm text-slate-500 text-center cursor-pointer hover:text-blue-600"
                    @click="authMode = authMode === 'login' ? 'register' : 'login'; authError = ''; authSuccess = ''; cancelRegConsent()">
                     {{ authMode === 'login' ? '没有账号？去注册' : '已有账号？去登录' }}
+                </p>
+                <p v-if="authMode === 'login'" class="text-sm text-slate-500 text-center cursor-pointer hover:text-blue-600" @click="openReset">
+                    忘记密码？
                 </p>
             </div>
         </div>
@@ -688,11 +760,89 @@
             <div class="bg-white rounded-xl shadow-sm border p-6">
                 <h3 class="font-bold text-lg mb-3">🔒 修改密码</h3>
                 <div class="space-y-2">
-                    <input v-model="pwOld" type="password" placeholder="当前密码" class="w-full border rounded px-3 py-2 text-sm outline-none focus:border-blue-500">
-                    <input v-model="pwNew" type="password" placeholder="新密码 (至少4位)" class="w-full border rounded px-3 py-2 text-sm outline-none focus:border-blue-500">
+                    <!-- 验证方式二选一：绑了邮箱就用邮箱验证码（不需要当前密码）；没绑才输当前密码。
+                         两边都显示会让人以为"必须全填"，也会让记不住当前密码的人卡在这里。 -->
+                    <input v-if="!authUser?.email" v-model="pwOld" type="password" placeholder="当前密码"
+                           class="w-full border rounded px-3 py-2 text-sm outline-none focus:border-blue-500">
+                    <input v-model="pwNew" type="password" placeholder="新密码（8~64 位，需含字母和数字）" class="w-full border rounded px-3 py-2 text-sm outline-none focus:border-blue-500">
+                    <div v-if="authUser?.email" class="flex gap-2">
+                        <input v-model="pwCode" placeholder="邮箱验证码（发到当前绑定邮箱）" maxlength="6"
+                               class="flex-1 border rounded px-3 py-2 text-sm outline-none focus:border-blue-500">
+                        <button @click="sendPwCode" :disabled="byKey('pw') > 0"
+                                class="px-3 py-2 rounded bg-slate-700 hover:bg-slate-600 disabled:bg-slate-300 text-white text-sm font-bold whitespace-nowrap">
+                            {{ byKey('pw') > 0 ? byKey('pw') + 's' : '发送验证码' }}
+                        </button>
+                    </div>
+                    <p class="text-xs text-slate-400">
+                        <span v-if="authUser?.email">身份验证用邮箱验证码（发到 {{ authUser.email }}），不需要当前密码。</span>
+                        <span v-else>你还没绑定邮箱，需要用<strong>当前密码</strong>验证身份。绑定邮箱后可改用邮箱验证码。</span>
+                    </p>
                     <p v-if="pwMsg" class="text-sm" :class="pwMsg.includes('成功') ? 'text-emerald-600' : 'text-red-500'">{{ pwMsg }}</p>
-                    <button @click="changePassword" :disabled="!pwOld || !pwNew" class="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white px-4 py-2 rounded text-sm font-bold">修改密码</button>
+                    <button @click="changePassword"
+                            :disabled="authUser?.email ? (!pwNew || !pwCode) : (!pwOld || !pwNew)"
+                            class="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white px-4 py-2 rounded text-sm font-bold">修改密码</button>
                 </div>
+            </div>
+
+            <!-- 邮箱绑定 / 换绑 -->
+            <div class="bg-white rounded-xl shadow-sm border p-6">
+                <h3 class="font-bold text-lg mb-2">📧 邮箱</h3>
+                <p class="text-sm text-slate-500 mb-3">
+                    当前绑定：
+                    <span v-if="authUser?.email" class="font-mono text-slate-700">{{ authUser.email }}</span>
+                    <span v-else class="text-amber-600 font-bold">未绑定</span>
+                </p>
+                <p class="text-xs text-slate-400 mb-4">
+                    邮箱是找回密码的唯一方式。<span v-if="!authUser?.email">你还没绑定邮箱 —— 一旦忘记密码就无法自助找回，建议现在绑定。</span>
+                </p>
+                <!-- 默认只显示两个按钮，点哪个展开哪个：换绑要填两个字段、解绑只有一句警告，
+                     全展开会把卡片撑得很长，也容易让人误点"解绑" -->
+                <div class="flex gap-2">
+                    <button @click="openEmailAction('bind')"
+                            class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-bold">
+                        {{ authUser?.email ? '换绑邮箱' : '绑定邮箱' }}
+                    </button>
+                    <button v-if="authUser?.email" @click="openEmailAction('unbind')"
+                            class="border border-red-300 text-red-600 hover:bg-red-50 px-4 py-2 rounded text-sm font-bold">
+                        解绑邮箱
+                    </button>
+                </div>
+
+                <!-- 换绑/绑定表单（只验新邮箱的码） -->
+                <div v-if="emailAction === 'bind'" class="mt-3 space-y-2 border-t border-slate-100 pt-3">
+                    <input v-model="bindForm.newEmail" placeholder="新邮箱"
+                           class="w-full border rounded px-3 py-2 text-sm outline-none focus:border-blue-500">
+                    <div class="flex gap-2">
+                        <input v-model="bindForm.newCode" placeholder="新邮箱收到的验证码" maxlength="6"
+                               class="flex-1 border rounded px-3 py-2 text-sm outline-none focus:border-blue-500">
+                        <button @click="sendBindCode" :disabled="byKey('new') > 0"
+                                class="px-3 py-2 rounded bg-slate-700 hover:bg-slate-600 disabled:bg-slate-300 text-white text-sm font-bold whitespace-nowrap">
+                            {{ byKey('new') > 0 ? byKey('new') + 's' : '发验证码' }}
+                        </button>
+                    </div>
+                    <div class="flex gap-2">
+                        <button @click="saveBindEmail" :disabled="!bindForm.newEmail || !bindForm.newCode"
+                                class="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white px-4 py-2 rounded text-sm font-bold">
+                            确认{{ authUser?.email ? '换绑' : '绑定' }}
+                        </button>
+                        <button @click="openEmailAction('')" class="text-slate-500 hover:text-slate-700 text-sm px-2">取消</button>
+                    </div>
+                </div>
+
+                <!-- 解绑确认（点击即解绑，所以后果必须写在这儿） -->
+                <div v-if="emailAction === 'unbind'" class="mt-3 border-t border-slate-100 pt-3">
+                    <p class="text-sm text-red-600 mb-3">
+                        ⚠️ 解绑后<strong>无法用邮箱自助找回密码</strong>，忘记密码只能联系站长人工处理。
+                        确认解绑 <span class="font-mono">{{ authUser?.email }}</span> 吗？
+                    </p>
+                    <div class="flex gap-2">
+                        <button @click="doUnbindEmail"
+                                class="bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded text-sm font-bold">确认解绑</button>
+                        <button @click="openEmailAction('')" class="text-slate-500 hover:text-slate-700 text-sm px-2">取消</button>
+                    </div>
+                </div>
+
+                <p v-if="bindMsg" class="text-sm mt-3" :class="bindMsg.includes('已') ? 'text-emerald-600' : 'text-red-500'">{{ bindMsg }}</p>
             </div>
 
             <!-- 用户名修改 -->
@@ -1088,6 +1238,7 @@
 
 <script type="module">
     import {opsRows, renderMarkdownSafe} from './js/utils/format.js';
+    import {byKey} from './js/utils/code-cooldown.js';
     import {createApp, ref, reactive, computed, inject, provide, nextTick, watch} from 'vue';
     import TreeNodeComponent from './js/components/TreeNode.js';
     import {
@@ -1098,6 +1249,7 @@
         ctxMenu, deleteDialog, pendingMrpack, manualAddSlug, showSuggestBoard, isSuggesting,
         suggestedMods, selectedSuggests, availableCategories, categoryGloss, suggestForm, pageJumpInput,
         suggestMode, showAuthModal, authMode, authForm, authError, authSuccess,
+        authResetMode, resetForm, resetResult, bindForm, bindMsg, emailAction, pwCode, emailHintDismissed,
         authLoading, authUser, showSidebar, currentConvId, conversationList, profileApiKey,
         profileApiKeyMsg, profileUsername, profileWeight, hasApiKey, pwOld, pwNew,
         pwMsg, categoryPrefs, modPrefs, modPrefSearch, newCatPref, modPrefPage,
@@ -1109,6 +1261,7 @@
     import {
         doAuth, logout, newConversation, loadConversation,
         deleteConversation, acceptRegConsent, cancelRegConsent, openRegConsent, regConsentAgreed, showRegConsent,
+        sendAuthCode, openReset, cancelReset, sendResetCode, doResetPassword,
     } from './js/features/auth.js';
     import {
         addBlacklistBySlug, addCategoryPref, addModBySlug, blacklistTotalPages, changePassword, clearBlacklist,
@@ -1118,6 +1271,8 @@
         pageSize, prevBlacklistPageFn, prevModPrefPage, removeBlacklistItem, removeCategoryPref, removeModPref,
         saveApiKey, saveBlacklistToggle, saveBuildCount, saveFeedbackRulesToggle, saveProfileWeight, saveUsername,
         startEditBuildCount, submitKeRule, toggleModSource,
+        sendPwCode, sendBindCode, saveBindEmail, dismissEmailHint,
+        openEmailAction, doUnbindEmail,
     } from './js/features/prefs.js';
     import {filteredRootNodes} from './js/features/graph.js';
     import {acceptCascade, acceptPrerequisites, acceptSeedOnly, closeDeleteDialog, confirmBatchDelete, conflictSummary, ctxDelete, ctxLocate, ctxMenuLabel, ctxOpenModrinth, enterDeleteMode, exitDeleteMode, idLabel, openLab, provideDeleteContract, seedLabels, stillNeeded} from './js/features/delete-flow.js';
@@ -1152,7 +1307,10 @@
                 jumpToPage, toggleSuggestCategory,suggestPageUp,suggestPageDown,resetSuggestPage,
                 // 🔐 auth
                 showAuthModal, authMode, authForm, authError, authSuccess, authLoading, authUser, showSidebar,
-                doAuth, logout,
+                doAuth, logout, authResetMode, resetForm, resetResult, bindForm, bindMsg, emailAction, pwCode,
+                emailHintDismissed, dismissEmailHint, sendPwCode, sendBindCode, saveBindEmail, byKey,
+                openEmailAction, doUnbindEmail,
+                sendAuthCode, openReset, cancelReset, sendResetCode, doResetPassword,
                 showRegConsent, regConsentAgreed, openRegConsent, cancelRegConsent, acceptRegConsent,
                 renderMarkdownSafe, opsRows,
                 // 📂 conversations

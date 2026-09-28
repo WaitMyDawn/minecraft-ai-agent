@@ -99,4 +99,28 @@ class SessionRegistryTest {
         assertEquals(1, reg.size(), "过期条目应被写入口扫掉，不能让 Map 一直涨");
         assertTrue(reg.size() < 300);
     }
+
+    @Test
+    @DisplayName("revokeAllOf：踢掉该账号全部会话（改密码/重置密码用）")
+    void revokeAllOfKicksEverySession() {
+        SessionRegistry reg = new SessionRegistry(30 * DAY);
+        String a = reg.issueAt(1L, 0L);   // 同一账号三台设备
+        String b = reg.issueAt(1L, 0L);
+        String c = reg.issueAt(2L, 0L);   // 别人的会话
+        assertEquals(2, reg.revokeAllOf(1L));
+        assertNull(reg.touchAt(a, 1L));
+        assertNull(reg.touchAt(b, 1L));
+        assertEquals(2L, reg.touchAt(c, 1L), "不能误伤别的账号");
+    }
+
+    @Test
+    @DisplayName("revokeAllOf 可以保留一个（改密码后当前设备不用重登）")
+    void revokeAllOfKeepsGivenToken() {
+        SessionRegistry reg = new SessionRegistry(30 * DAY);
+        String keep = reg.issueAt(1L, 0L);
+        String other = reg.issueAt(1L, 0L);
+        assertEquals(1, reg.revokeAllOf(1L, keep));
+        assertEquals(1L, reg.touchAt(keep, 1L), "当前设备的会话要留着");
+        assertNull(reg.touchAt(other, 1L), "其它设备要掉线");
+    }
 }
