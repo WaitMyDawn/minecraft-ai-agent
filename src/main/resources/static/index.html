@@ -3,6 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <title>MAA 整合包构筑台</title>
+    <!-- 站点图标：文件放在 static/ 下，由 Spring Boot 直接提供在站点根路径
+         （线上 nginx 是 catch-all 反代，加图标不需要改它的配置）。
+         32×32 是标签页的标准尺寸，HiDPI 屏按 2 倍显示也够清晰（16 CSS px @2x）。
+         ⚠️ favicon 的浏览器缓存极顽固：将来换图标请连文件名一起改（如 icon-v2.png）
+         或加 ?v=2，否则老用户会长时间看到旧图标，普通刷新也不一定管用。 -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/icon.png">
+    <!-- 兜底：老浏览器与部分抓取器（Slack / 微信链接预览 / RSS 阅读器）会直接请求 /favicon.ico -->
+    <link rel="icon" href="/favicon.ico" sizes="any">
     <script src="https://cdn.tailwindcss.com"></script>
 <script type="importmap">
 {"imports": {"vue": "https://cdn.jsdelivr.net/npm/vue@3/dist/vue.esm-browser.prod.js"}}
