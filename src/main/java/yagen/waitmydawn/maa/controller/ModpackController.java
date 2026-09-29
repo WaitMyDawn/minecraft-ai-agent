@@ -37,10 +37,13 @@ public class ModpackController {
     private final LoaderVersionService loaderVersionService;
     /** P6-C：preview 与 build 之间的包清单快照 */
     private final PackManifestService manifestService;
+    /** 判定"这次要不要参考用户反馈规则"：口径只此一处，依赖穿透与预览共用 */
+    private final UserController userController;
 
     public ModpackController(DependencyEngine dependencyEngine, ModrinthApiClient apiClient, ObjectMapper objectMapper,
                              KnowledgeDb knowledgeDb, RestClient restClient, MrpackParser mrpackParser,
-                             LoaderVersionService loaderVersionService, PackManifestService manifestService) {
+                             LoaderVersionService loaderVersionService, PackManifestService manifestService,
+                             UserController userController) {
         this.dependencyEngine = dependencyEngine;
         this.apiClient = apiClient;
         this.restClient = restClient;
@@ -49,6 +52,7 @@ public class ModpackController {
         this.mrpackParser = mrpackParser;
         this.loaderVersionService = loaderVersionService;
         this.manifestService = manifestService;
+        this.userController = userController;
     }
 
     public static class ModpackRequest {
@@ -58,6 +62,14 @@ public class ModpackController {
         public List<String> modSlugs;
         /** 用户在图谱里显式删除的模组（P2）：解析后一律剔除，并报告由此产生的断链 */
         public List<String> excludedSlugs;
+        /**
+         * @deprecated 服务端<b>不再采信</b>这个字段。参考不参考用户反馈规则，只看登录用户
+         *     设置里的开关（{@code User#enableUserFeedbackRules}）——客户端这个值是 localStorage
+         *     里的旧快照，改了设置它就是过期的；更糟的是它只作用于预览画边、不作用于依赖穿透，
+         *     于是"规则把节点拉进来了，却不画那条线"。字段保留仅为兼容旧前端，改由
+         *     {@link UserController#excludesUserFeedbackRules(String)} 统一判定。
+         */
+        @Deprecated
         public boolean excludeUserFeedbackRules;
     }
 
@@ -85,7 +97,9 @@ public class ModpackController {
     }
 
     @PostMapping("/preview")
-    public ResponseEntity<JsonNode> previewPack(@RequestBody ModpackRequest request) {
+    public ResponseEntity<JsonNode> previewPack(
+            @RequestHeader(value = "X-Auth-Token", required = false) String token,
+            @RequestBody ModpackRequest request) {
         long startTime = System.currentTimeMillis();
 
         ObjectNode responseJson = objectMapper.createObjectNode();
@@ -93,14 +107,18 @@ public class ModpackController {
         ArrayNode edgesArray = responseJson.putArray("edges");
 
         String loadersParam = "[\"" + request.loader.toLowerCase() + "\"]";
-        KnowledgeRule.SourceType exclude = request.excludeUserFeedbackRules
+        // 「参考用户反馈规则」的开关由服务端按登录用户判定，不再看请求体（见 ModpackRequest 的注释）
+        KnowledgeRule.SourceType exclude = userController.excludesUserFeedbackRules(token)
                 ? KnowledgeRule.SourceType.USER_FEEDBACK : null;
         List<KnowledgeRule> activeRules = knowledgeDb.getActiveRules(
                 request.loader.toLowerCase() + "-" + request.mcVersion, exclude);
 
         // 🔥 核心修复：就算是从手动添加来的孤儿模组，这里也要走一次深度依赖穿透，把它们的前置全部挖出来！
         Set<String> initialSlugs = new LinkedHashSet<>(request.modSlugs);
-        Set<String> fullResolvedSlugs = dependencyEngine.resolveFullDependencies(initialSlugs, request.loader.toLowerCase(), request.mcVersion);
+        // ⚠️ 必须和上面 activeRules 用同一份规则集：引擎决定"谁进图"（节点），
+        //    下面的循环决定"画哪条线"，两边分裂就会出现"有节点、没连线"
+        Set<String> fullResolvedSlugs = dependencyEngine.resolveFullDependencies(
+                initialSlugs, request.loader.toLowerCase(), request.mcVersion, exclude);
 
         // 🚀 批量预取：把整张图的项目元数据一次取回（100 个/请求），下面的逐节点循环随即变成缓存命中。
         // 依赖引擎 BFS 已经把大部分灌进缓存了，这里只补它没覆盖到的（例如用户手动加的孤立模组）。

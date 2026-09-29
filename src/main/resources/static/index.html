@@ -539,8 +539,47 @@
             <div class="w-[88px]"></div>
         </header>
         <div class="flex-1 overflow-y-auto p-6 max-w-5xl mx-auto w-full">
+            <!-- 筛选：加载器 / 加载器版本是选项筛选，主模组是"包含输入字符才显示"的文本筛选 -->
+            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-3 mb-3 flex flex-wrap items-end gap-3 text-sm">
+                <div class="flex flex-col gap-1">
+                    <label class="font-bold text-slate-700">加载器</label>
+                    <select v-model="dbFilterLoader" class="border rounded px-2 py-1.5 outline-none focus:border-indigo-500 min-w-[130px]">
+                        <option value="">全部</option>
+                        <option v-for="l in dbLoaderOptions" :key="l" :value="l">{{ l }}</option>
+                    </select>
+                </div>
+                <div class="flex flex-col gap-1">
+                    <label class="font-bold text-slate-700">加载器版本</label>
+                    <select v-model="dbFilterVersion" class="border rounded px-2 py-1.5 outline-none focus:border-indigo-500 min-w-[130px]">
+                        <option value="">全部</option>
+                        <option v-for="v in dbVersionOptions" :key="v" :value="v">{{ v }}</option>
+                    </select>
+                </div>
+                <div class="flex flex-col gap-1 flex-1 min-w-[220px]">
+                    <label class="font-bold text-slate-700">主模组（包含输入的字符才显示）</label>
+                    <input v-model="dbFilterModA" placeholder="例如 irons / create"
+                           class="border rounded px-2 py-1.5 outline-none focus:border-indigo-500 font-mono">
+                </div>
+                <button @click="resetDbFilters"
+                        class="px-3 py-1.5 rounded bg-slate-100 hover:bg-slate-200 font-bold text-slate-600">清除筛选</button>
+            </div>
+
+            <!-- 配色图例：不展开主模组也要能一眼看出谁带用户来源、谁还没生效 -->
+            <div class="flex flex-wrap items-center gap-4 text-xs text-slate-500 mb-3">
+                <span class="flex items-center gap-1">
+                    <span class="inline-block w-3 h-3 rounded-sm" :style="{background: '#9C1A15'}"></span>
+                    用户来源 · 已生效（认可 − 不认可 ≥ 3）
+                </span>
+                <span class="flex items-center gap-1">
+                    <span class="inline-block w-3 h-3 rounded-sm" :style="{background: '#EA6560'}"></span>
+                    含未生效的用户来源
+                </span>
+                <span class="text-slate-400">{{ authUser ? '👍/👎 可投票，再点一次可取消' : '登录后可对用户来源规则投票' }}</span>
+            </div>
+
             <div v-if="dbRules.length === 0" class="text-center text-slate-400 mt-20">暂无知识库数据</div>
-            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+            <div v-else-if="Object.keys(groupedDbData).length === 0" class="text-center text-slate-400 mt-20">当前筛选条件下没有规则</div>
+            <div v-if="Object.keys(groupedDbData).length > 0" class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
                 <details v-for="(envs, envName) in groupedDbData" :key="envName" class="mb-4 group" open>
                     <summary class="cursor-pointer font-bold bg-slate-800 text-white p-3 rounded-lg flex items-center">
                         🌍 环境: {{ envName }}
@@ -554,22 +593,45 @@
                             </summary>
                             <div class="ml-6 mt-2">
                                 <details v-for="(rules, modA) in types" :key="modA" class="mb-2 group">
-                                    <summary class="cursor-pointer text-sm font-bold text-slate-700 flex items-center">
-                                        📦 主模组: <a :href="'https://modrinth.com/mod/' + modA" target="_blank" class="font-mono bg-slate-100 px-1 ml-1 rounded hover:underline text-indigo-600">{{ modA }}</a></summary>
+                                    <summary class="cursor-pointer text-sm font-bold text-slate-700 flex items-center flex-wrap gap-1">
+                                        📦 主模组: <a :href="'https://modrinth.com/mod/' + modA" target="_blank"
+                                                      class="font-mono px-1 ml-1 rounded hover:underline"
+                                                      :class="groupState(rules) ? '' : 'bg-slate-100 text-indigo-600'"
+                                                      :style="groupModAStyle(rules)">{{ modA }}</a>
+                                        <span v-if="groupState(rules) === 'pending'" class="text-[10px] font-normal text-slate-500">（含未生效的用户来源）</span>
+                                    </summary>
                                     <ul class="ml-8 list-disc text-sm text-slate-600 mt-1">
-                                        <li v-for="rule in rules" :key="rule.id" class="mt-1 flex items-center gap-2">
+                                        <li v-for="rule in rules" :key="rule.id" class="mt-1 flex flex-wrap items-center gap-2">
                                             <span>指向 ➡️</span>
                                             <a :href="'https://modrinth.com/mod/' + rule.modB" target="_blank"
                                                class="font-mono font-bold px-1 rounded hover:underline cursor-pointer"
-                                               :class="typeName === 'CONFLICTS_WITH' ? 'bg-red-50 text-red-600 hover:text-red-800' : 'bg-indigo-50 text-indigo-600 hover:text-indigo-800'">
+                                               :class="rule.sourceType === 'USER_FEEDBACK' ? '' : (typeName === 'CONFLICTS_WITH' ? 'bg-red-50 text-red-600 hover:text-red-800' : 'bg-indigo-50 text-indigo-600 hover:text-indigo-800')"
+                                               :style="ruleStyle(rule)">
                                                 {{ rule.modB }}
                                             </a>
-                                            <span class="text-xs text-white px-2 rounded-full ml-2"
-                                                  :class="rule.sourceType === 'ADMIN' ? 'bg-red-500' : rule.sourceType === 'MODRINTH' ? 'bg-emerald-500' : 'bg-purple-500'">来源: {{ rule.sourceType }}</span>
-                                            <span v-if="rule.sourceType === 'USER_FEEDBACK'" class="text-xs px-2 rounded-full ml-1"
-                                                  :class="rule.confirmCount >= 3 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'">
-                                                可信度: {{ rule.confirmCount }} {{ rule.confirmCount >= 3 ? '✅ 可用' : '⏳ 需≥3' }}
-                                            </span>
+                                            <span v-if="rule.sourceType !== 'USER_FEEDBACK'" class="text-xs text-white px-2 rounded-full ml-1"
+                                                  :class="rule.sourceType === 'ADMIN' ? 'bg-red-500' : 'bg-emerald-500'">来源: {{ rule.sourceType }}</span>
+                                            <template v-else>
+                                                <span class="text-xs px-2 py-0.5 rounded-full font-bold ml-1" :style="ruleStyle(rule)">
+                                                    用户来源 · 净值 {{ rule.confirmCount }} {{ rule.effective ? '✅ 已生效' : '⏳ 未生效' }}
+                                                </span>
+                                                <span class="text-xs text-slate-400">👍{{ rule.approveCount }} / 👎{{ rule.disapproveCount }}</span>
+                                                <!-- 认可 / 不认可：两个按钮互斥，再点一次同一个按钮 = 取消 -->
+                                                <button @click="voteRule(rule, 'APPROVE')" :disabled="!authUser || dbVoteBusy"
+                                                        :title="authUser ? (rule.myVote === 'APPROVE' ? '再点一次取消认可' : '认可这条规则') : '登录后可投票'"
+                                                        class="text-xs px-2 py-0.5 rounded-full border font-bold transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                                        :class="rule.myVote === 'APPROVE' ? 'border-transparent text-white' : 'bg-white text-slate-600 border-slate-300 hover:border-[#9C1A15]'"
+                                                        :style="rule.myVote === 'APPROVE' ? {background: '#9C1A15', borderColor: '#9C1A15'} : {}">
+                                                    👍 认可
+                                                </button>
+                                                <button @click="voteRule(rule, 'DISAPPROVE')" :disabled="!authUser || dbVoteBusy"
+                                                        :title="authUser ? (rule.myVote === 'DISAPPROVE' ? '再点一次取消不认可' : '不认可这条规则') : '登录后可投票'"
+                                                        class="text-xs px-2 py-0.5 rounded-full border font-bold transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                                        :class="rule.myVote === 'DISAPPROVE' ? 'border-transparent' : 'bg-white text-slate-600 border-slate-300 hover:border-[#EA6560]'"
+                                                        :style="rule.myVote === 'DISAPPROVE' ? {background: '#EA6560', color: '#3F0A08', borderColor: '#EA6560'} : {}">
+                                                    👎 不认可
+                                                </button>
+                                            </template>
                                         </li>
                                     </ul>
                                 </details>
@@ -1040,10 +1102,16 @@
                 <h3 class="font-bold text-lg mb-4">添加规则</h3>
                 <div class="space-y-4">
                     <div>
-                        <label class="text-sm font-bold text-slate-700 mb-2 block">环境</label>
-                        <select v-model="keEnv" class="border rounded px-3 py-2 text-sm w-64 outline-none focus:border-purple-500">
-                            <option v-for="e in keEnvs" :value="e" :key="e">{{ e }}</option>
-                        </select>
+                        <label class="text-sm font-bold text-slate-700 mb-2 block">环境（先选加载器，再选版本）</label>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <select v-model="keLoader" class="border rounded px-3 py-2 text-sm w-40 outline-none focus:border-purple-500">
+                                <option v-for="l in Object.keys(keLoaderEnvs)" :value="l" :key="l">{{ l }}</option>
+                            </select>
+                            <select v-model="keVersion" class="border rounded px-3 py-2 text-sm w-40 outline-none focus:border-purple-500">
+                                <option v-for="v in (keLoaderEnvs[keLoader] || [])" :value="v" :key="v">{{ v }}</option>
+                            </select>
+                            <span class="text-xs text-slate-500">= 环境 <span class="font-mono font-bold text-purple-600">{{ keEnv || '（未选择）' }}</span></span>
+                        </div>
                         <button @click="loadKeEnvs" class="ml-2 text-xs text-indigo-500 hover:underline">刷新列表</button>
                     </div>
                     <div>
@@ -1087,7 +1155,7 @@
                     <div v-if="keRelation === 'CONFLICTS_WITH' && keModAInfo && keModBInfo" class="text-center text-sm text-slate-500">
                         ↔️ {{ keModA || 'A' }} 与 {{ keModB || 'B' }} 互斥冲突
                     </div>
-                    <p v-if="keMsg" class="text-sm" :class="keMsg.includes('成功')||keMsg.includes('已更新') ? 'text-emerald-600' : 'text-amber-600'">{{ keMsg }}</p>
+                    <p v-if="keMsg" class="text-sm" :class="keMsgOk ? 'text-emerald-600' : 'text-amber-600'">{{ keMsg }}</p>
                     <button @click="submitKeRule" :disabled="!keModAInfo||!keModBInfo" class="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-slate-300 text-white font-bold py-3 rounded-lg transition">确认添加规则</button>
                 </div>
             </div>
@@ -1255,8 +1323,9 @@
         pwMsg, categoryPrefs, modPrefs, modPrefSearch, newCatPref, modPrefPage,
         modPrefJump, blacklistPage, blacklistJump, modInfoCache, manualSlugInput, addingModBySlug,
         modSlugAddMsg, editingBuildCountId, editingBuildCountVal, blacklistItems, blacklistSlugInput, blacklistMsg,
-        enableBlacklist, enableUserFeedbackRules, keEnvs, keEnv, keRelation, keModA,
-        keModB, keModAInfo, keModBInfo, keModAError, keModBError, keMsg,
+        enableBlacklist, enableUserFeedbackRules, keLoaderEnvs, keLoader, keVersion, keEnv, keRelation, keModA,
+        keModB, keModAInfo, keModBInfo, keModAError, keModBError, keMsg, keMsgOk,
+        dbFilterLoader, dbFilterVersion, dbFilterModA, dbVoteBusy,
     } from './js/store.js';
     import {
         doAuth, logout, newConversation, loadConversation,
@@ -1269,15 +1338,15 @@
         jumpModPrefPage, loadKeEnvs, modPrefTotalPages,
         nextBlacklistPageFn, nextModPrefPage, onKeSlugInput, openSuggestBoardForBlacklist, pagedBlacklist, pagedModPrefs,
         pageSize, prevBlacklistPageFn, prevModPrefPage, removeBlacklistItem, removeCategoryPref, removeModPref,
-        saveApiKey, saveBlacklistToggle, saveBuildCount, saveFeedbackRulesToggle, saveProfileWeight, saveUsername,
+        refreshDbRules, saveApiKey, saveBlacklistToggle, saveBuildCount, saveFeedbackRulesToggle, saveProfileWeight, saveUsername,
         startEditBuildCount, submitKeRule, toggleModSource,
-        sendPwCode, sendBindCode, saveBindEmail, dismissEmailHint,
+        voteRule, sendPwCode, sendBindCode, saveBindEmail, dismissEmailHint,
         openEmailAction, doUnbindEmail,
     } from './js/features/prefs.js';
     import {filteredRootNodes} from './js/features/graph.js';
     import {acceptCascade, acceptPrerequisites, acceptSeedOnly, closeDeleteDialog, confirmBatchDelete, conflictSummary, ctxDelete, ctxLocate, ctxMenuLabel, ctxOpenModrinth, enterDeleteMode, exitDeleteMode, idLabel, openLab, provideDeleteContract, seedLabels, stillNeeded} from './js/features/delete-flow.js';
     import {confirmAddSuggestedMods, directAddMod, fetchSuggestions, jumpToPage, openSuggestBoard, openSuggestBoardForPref, resetSuggestPage, suggestPageDown, suggestPageUp, toggleSuggestCategory, toggleSuggestSelection} from './js/features/gacha.js';
-    import {buildPack, groupedDbData, openDbView} from './js/features/pack-view.js';
+    import {buildPack, dbLoaderOptions, dbVersionOptions, groupModAStyle, groupState, groupedDbData, openDbView, resetDbFilters, ruleStyle} from './js/features/pack-view.js';
     import {abortThinking, onMrpackUpload, sendMessage} from './js/features/chat.js';
 
     const app = createApp({
@@ -1292,6 +1361,10 @@
                 currentView, chatHistory, userInput, isLoading, thinkTime, currentThought,
                 isResolving, isBuilding,
                 previewData, selectedMods, rootTreeNodes, dbRules, groupedDbData,
+                // 🗂️ 知识库规则管理视图：筛选 + 用户来源配色 + 认可/不认可
+                dbFilterLoader, dbFilterVersion, dbFilterModA, dbVoteBusy,
+                dbLoaderOptions, dbVersionOptions, resetDbFilters,
+                groupState, groupModAStyle, ruleStyle, refreshDbRules, voteRule,
                 searchQuery, filteredRootNodes,
                 // 🗑️ 删除能力（P1/P2）
                 deleteMode, deleteMarked, deleteBusy, isRefreshing, deleteConflicts, conflictSummary,
@@ -1332,7 +1405,7 @@
                 blacklistItems, blacklistSlugInput, blacklistMsg, enableBlacklist, enableUserFeedbackRules,
                 addBlacklistBySlug, removeBlacklistItem, clearBlacklist, saveBlacklistToggle, saveFeedbackRulesToggle, openSuggestBoardForBlacklist,
                 // 🧬 knowledge editor
-                keEnvs, keEnv, keRelation, keModA, keModB, keModAInfo, keModBInfo, keModAError, keModBError, keMsg,
+                keLoaderEnvs, keLoader, keVersion, keEnv, keRelation, keModA, keModB, keModAInfo, keModBInfo, keModAError, keModBError, keMsg, keMsgOk,
                 loadKeEnvs, onKeSlugInput, submitKeRule,
             };
         }

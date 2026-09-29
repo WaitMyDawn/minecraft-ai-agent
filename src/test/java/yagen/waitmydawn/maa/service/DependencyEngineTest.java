@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -43,7 +44,7 @@ class DependencyEngineTest {
     void setUp() {
         api = mock(ModrinthApiClient.class);
         knowledgeDb = mock(KnowledgeDb.class);
-        when(knowledgeDb.getActiveRules(anyString())).thenReturn(List.of());
+        when(knowledgeDb.getActiveRules(anyString(), any())).thenReturn(List.of());
         engine = new DependencyEngine(api, knowledgeDb);
     }
 
@@ -249,7 +250,7 @@ class DependencyEngineTest {
         // core 是用户点名的根；rival 是它拉进来的依赖 → 冲突时保核心、剔非核心
         register("core", "PC", List.of("required:PR"));
         register("rival", "PR", List.of());
-        when(knowledgeDb.getActiveRules(anyString())).thenReturn(List.of(
+        when(knowledgeDb.getActiveRules(anyString(), any())).thenReturn(List.of(
                 new KnowledgeRule(NEOFORGE + "-" + MC, "core", "rival",
                         "CONFLICTS_WITH", KnowledgeRule.SourceType.ADMIN, 999)));
 
@@ -266,7 +267,7 @@ class DependencyEngineTest {
     void conflictBetweenRootsIsReported() {
         register("rootA", "PA", List.of());
         register("rootB", "PB", List.of());
-        when(knowledgeDb.getActiveRules(anyString())).thenReturn(List.of(
+        when(knowledgeDb.getActiveRules(anyString(), any())).thenReturn(List.of(
                 new KnowledgeRule(NEOFORGE + "-" + MC, "rootA", "rootB",
                         "CONFLICTS_WITH", KnowledgeRule.SourceType.ADMIN, 999)));
 
@@ -275,6 +276,52 @@ class DependencyEngineTest {
         assertTrue(r.unresolved().stream()
                         .anyMatch(u -> u.reason() == ResolutionResult.Reason.CONFLICT_BETWEEN_ROOTS),
                 "两个根互斥应报给用户，实际=" + r.unresolved());
+    }
+
+    @Test
+    @DisplayName("用户来源规则按开关生效：关掉时既不挖前置、也不留边（节点与边同源）")
+    void userFeedbackRuleHonoursTheExclusion() {
+        register("spellbook", "PS", List.of());
+        register("deeperdarker", "PD", List.of());
+        // 关键：stub 必须像真实的 KnowledgeDb 一样尊重第二个参数（按来源过滤），
+        // 否则这个测试只会测出 mock 的行为，测不出引擎有没有把开关传下去。
+        KnowledgeRule userRule = new KnowledgeRule(NEOFORGE + "-" + MC, "spellbook", "deeperdarker",
+                "DEPENDS_ON", KnowledgeRule.SourceType.USER_FEEDBACK, 3);
+        when(knowledgeDb.getActiveRules(anyString(), any())).thenAnswer(inv ->
+                KnowledgeRule.SourceType.USER_FEEDBACK.equals(inv.getArgument(1))
+                        ? List.of() : List.of(userRule));
+
+        ResolutionResult withUserRules = engine.resolveWithReport(Set.of("spellbook"), NEOFORGE, MC, null);
+        assertTrue(withUserRules.orderedSlugs().contains("deeperdarker"),
+                "参考用户规则时应把它的前置挖出来，实际=" + withUserRules.orderedSlugs());
+        assertTrue(withUserRules.graph().getDependentsOf("deeperdarker").contains("spellbook"),
+                "参考用户规则时，图里必须同时有这条边（否则就是有节点没连线）");
+
+        ResolutionResult withoutUserRules = engine.resolveWithReport(Set.of("spellbook"), NEOFORGE, MC,
+                KnowledgeRule.SourceType.USER_FEEDBACK);
+        assertFalse(withoutUserRules.orderedSlugs().contains("deeperdarker"),
+                "关掉开关后用户规则不该再把前置拉进包，实际=" + withoutUserRules.orderedSlugs());
+    }
+
+    @Test
+    @DisplayName("解析缓存按规则集隔离：先算的『参考用户规则』不能污染后来的『不参考』")
+    void resolveCacheIsSeparatedByRuleScope() {
+        register("spellbook", "PS", List.of());
+        register("deeperdarker", "PD", List.of());
+        KnowledgeRule userRule = new KnowledgeRule(NEOFORGE + "-" + MC, "spellbook", "deeperdarker",
+                "DEPENDS_ON", KnowledgeRule.SourceType.USER_FEEDBACK, 3);
+        when(knowledgeDb.getActiveRules(anyString(), any())).thenAnswer(inv ->
+                KnowledgeRule.SourceType.USER_FEEDBACK.equals(inv.getArgument(1))
+                        ? List.of() : List.of(userRule));
+
+        // 同一个包、同一个环境，两种规则集 —— 走缓存路径，顺序反过来也算过
+        ResolutionResult withUserRules = engine.resolveCachedResult(Set.of("spellbook"), NEOFORGE, MC, null);
+        ResolutionResult withoutUserRules = engine.resolveCachedResult(Set.of("spellbook"), NEOFORGE, MC,
+                KnowledgeRule.SourceType.USER_FEEDBACK);
+
+        assertTrue(withUserRules.orderedSlugs().contains("deeperdarker"));
+        assertFalse(withoutUserRules.orderedSlugs().contains("deeperdarker"),
+                "缓存 key 没有按规则集区分，第二次解析复用了第一次的结果（跨用户串味）");
     }
 
     @Test

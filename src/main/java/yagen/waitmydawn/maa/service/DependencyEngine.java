@@ -30,7 +30,12 @@ public class DependencyEngine {
     private static final int DEFAULT_NODE_BUDGET = 500;
     private final int nodeBudget;
 
-    /** 整包解析结果缓存：key=loader|mc|sortedSlugs，TTL 10 分钟（避免 chat→preview 重复 BFS） */
+    /**
+     * 整包解析结果缓存：key=loader|mc|规则集|sortedSlugs，TTL 10 分钟（避免 chat→preview 重复 BFS）。
+     *
+     * <p>key 里必须带"这份解析用了哪一类规则"：同一个包、同一个环境，开了开关（参考用户反馈规则）
+     * 和没开是两份不同的解析结果，混用会让 A 用户的包串到 B 用户那里，而且 TTL 有 10 分钟。
+     */
     private static final long RESOLVE_CACHE_TTL_MS = 10 * 60 * 1000L;
     /** 缓存条数上限；到顶按"最旧优先"淘汰，而不是整表清空 */
     private static final int RESOLVE_CACHE_MAX = 200;
@@ -67,7 +72,22 @@ public class DependencyEngine {
      * 深度依赖穿透 — 返回扁平 slug 集合 (保持向后兼容)
      */
     public Set<String> resolveFullDependencies(Set<String> initialSlugs, String loader, String mcVersion) {
-        return new LinkedHashSet<>(resolveCachedGraph(initialSlugs, loader, mcVersion).getOrderedSlugs());
+        return resolveFullDependencies(initialSlugs, loader, mcVersion, null);
+    }
+
+    /**
+     * 深度依赖穿透 — 可指定"本次解析不使用哪一类知识库规则"。
+     *
+     * <p><b>为什么这个参数必须存在</b>：知识库规则同时决定两件事 —— 引擎决定"谁进包"，
+     * 预览决定"画哪条线"。两边用的规则集必须是同一份，否则会出现"规则把节点拉进来了、
+     * 但连向它的线不画"的割裂（用户来源规则默认不参考时，之前就是这个表现）。
+     *
+     * @param excludeRuleSource 要排除的来源，例如 {@code USER_FEEDBACK}；{@code null} = 全都用
+     */
+    public Set<String> resolveFullDependencies(Set<String> initialSlugs, String loader, String mcVersion,
+                                               KnowledgeRule.SourceType excludeRuleSource) {
+        return new LinkedHashSet<>(resolveCachedGraph(initialSlugs, loader, mcVersion, excludeRuleSource)
+                .getOrderedSlugs());
     }
 
     /**
@@ -77,8 +97,14 @@ public class DependencyEngine {
      * 这个额外给出"哪些前置没解析出来、哪些模组被剔除、是否触顶"。
      */
     public ResolutionResult resolveWithReport(Set<String> initialSlugs, String loader, String mcVersion) {
+        return resolveWithReport(initialSlugs, loader, mcVersion, null);
+    }
+
+    /** 同 {@link #resolveWithReport(Set, String, String)}，但可指定本次不使用的规则来源。 */
+    public ResolutionResult resolveWithReport(Set<String> initialSlugs, String loader, String mcVersion,
+                                              KnowledgeRule.SourceType excludeRuleSource) {
         // ... 实现见下方（原 resolveFullDependenciesWithGraph 的主体）
-        return doResolve(initialSlugs, loader, mcVersion);
+        return doResolve(initialSlugs, loader, mcVersion, excludeRuleSource);
     }
 
     /**
@@ -90,19 +116,31 @@ public class DependencyEngine {
      * <p>用途：删除模组时判定"谁依赖了它"（断链诊断），无需重新跑一次 BFS。
      */
     public DependencyGraph resolveCachedGraph(Set<String> initialSlugs, String loader, String mcVersion) {
-        return resolveCachedResult(initialSlugs, loader, mcVersion).graph();
+        return resolveCachedGraph(initialSlugs, loader, mcVersion, null);
+    }
+
+    /** 同 {@link #resolveCachedGraph(Set, String, String)}，但可指定本次不使用的规则来源。 */
+    public DependencyGraph resolveCachedGraph(Set<String> initialSlugs, String loader, String mcVersion,
+                                              KnowledgeRule.SourceType excludeRuleSource) {
+        return resolveCachedResult(initialSlugs, loader, mcVersion, excludeRuleSource).graph();
     }
 
     /** 带缓存的完整解析（含诊断），供 ChatController/preview 消费 */
     public ResolutionResult resolveCachedResult(Set<String> initialSlugs, String loader, String mcVersion) {
-        String key = loader + "|" + mcVersion + "|"
+        return resolveCachedResult(initialSlugs, loader, mcVersion, null);
+    }
+
+    /** 带缓存的完整解析，可指定本次不使用的规则来源（缓存按规则集隔离，见字段注释）。 */
+    public ResolutionResult resolveCachedResult(Set<String> initialSlugs, String loader, String mcVersion,
+                                                KnowledgeRule.SourceType excludeRuleSource) {
+        String key = loader + "|" + mcVersion + "|" + ruleScopeKey(excludeRuleSource) + "|"
                 + new java.util.TreeSet<>(initialSlugs);
         ResolveCacheHit hit = resolveCache.get(key);
         long now = System.currentTimeMillis();
         if (hit != null && now - hit.cachedAt < RESOLVE_CACHE_TTL_MS) {
             return hit.result;
         }
-        ResolutionResult result = doResolve(initialSlugs, loader, mcVersion);
+        ResolutionResult result = doResolve(initialSlugs, loader, mcVersion, excludeRuleSource);
         // 惰性清理 + 最旧优先淘汰。原来是"超过 50 条就整表 clear()"——多用户下 A 的插入会把 B
         // 刚算好的依赖图清掉（10 分钟 TTL 等于没用），于是重复 BFS、重复出网，而出口还要过令牌闸排队。
         resolveCache.entrySet().removeIf(e -> now - e.getValue().cachedAt() >= RESOLVE_CACHE_TTL_MS);
@@ -118,11 +156,23 @@ public class DependencyEngine {
         return result;
     }
 
+    /** 规则集在缓存 key 里的表示：null（全都用）与"排除某一类"必须落在不同的桶里。 */
+    private static String ruleScopeKey(KnowledgeRule.SourceType excludeRuleSource) {
+        return excludeRuleSource == null ? "rules-all" : "rules-without-" + excludeRuleSource.name();
+    }
+
     /**
      * 深度依赖穿透 — 返回带 DAG 图结构的 DependencyGraph
      */
     public DependencyGraph resolveFullDependenciesWithGraph(Set<String> initialSlugs, String loader, String mcVersion) {
-        return doResolve(initialSlugs, loader, mcVersion).graph();
+        return resolveFullDependenciesWithGraph(initialSlugs, loader, mcVersion, null);
+    }
+
+    /** 同 {@link #resolveFullDependenciesWithGraph(Set, String, String)}，但可指定本次不使用的规则来源。 */
+    public DependencyGraph resolveFullDependenciesWithGraph(Set<String> initialSlugs, String loader,
+                                                            String mcVersion,
+                                                            KnowledgeRule.SourceType excludeRuleSource) {
+        return doResolve(initialSlugs, loader, mcVersion, excludeRuleSource).graph();
     }
 
     // ==========================================
@@ -137,9 +187,12 @@ public class DependencyEngine {
     /** version_id 型依赖在队列里的前缀（区分"按项目解析"与"按精确版本解析"） */
     private static final String VID_PREFIX = "vid:";
 
-    private ResolutionResult doResolve(Set<String> initialSlugs, String loader, String mcVersion) {
+    private ResolutionResult doResolve(Set<String> initialSlugs, String loader, String mcVersion,
+                                       KnowledgeRule.SourceType excludeRuleSource) {
         String loadersParam = "[\"" + loader.toLowerCase() + "\"]";
-        List<KnowledgeRule> activeRules = knowledgeDb.getActiveRules(loader.toLowerCase() + "-" + mcVersion);
+        // 规则集只有这一处入口：预览画边时会传同样的 excludeRuleSource，两边不会再分裂
+        List<KnowledgeRule> activeRules = knowledgeDb.getActiveRules(
+                loader.toLowerCase() + "-" + mcVersion, excludeRuleSource);
         String ctxKey = MaaLog.userKey();
 
         DependencyGraph graph = new DependencyGraph();

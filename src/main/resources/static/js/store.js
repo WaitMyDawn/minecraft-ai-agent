@@ -3,10 +3,10 @@
 // 全部从 index.html 的 setup() 里搬出来：那边是一个巨大的闭包，220 个符号挤在一个作用域里，
 // 谁也说不清哪些状态被谁用。搬到这里之后，import 名就是契约。
 //
-// 注意：这里只按原样搬运，不重新分类。功能私有的状态（keEnvs、profileApiKey …）
+// 注意：这里只按原样搬运，不重新分类。功能私有的状态（keLoaderEnvs、profileApiKey …）
 // 会在后续步骤里从本文件挪进各自的功能模块——那属于局部小改，好验证。
 
-import {ref, reactive} from 'vue';
+import {ref, reactive, computed} from 'vue';
 
 export const currentView = ref('chat');    // 控制当前显示的视图: chat, lab, db, sync
 export const chatHistory = ref([]);        // 存储所有消息 [{role, content, thinkTime}]
@@ -115,8 +115,21 @@ export const blacklistSlugInput = ref('');
 export const blacklistMsg = ref('');
 export const enableBlacklist = ref(false);
 export const enableUserFeedbackRules = ref(false);
-export const keEnvs = ref(['neoforge-1.21.1']);
-export const keEnv = ref('neoforge-1.21.1');
+
+// ===== 知识库管理视图的筛选（全在前端过滤：规则量很小，不值得为它加后端查询）=====
+export const dbFilterLoader = ref('');   // '' = 全部加载器
+export const dbFilterVersion = ref('');  // '' = 全部版本（选项随加载器联动）
+export const dbFilterModA = ref('');     // 主模组 slug 的子串（大小写不敏感）
+export const dbVoteBusy = ref(false);    // 投票请求在飞：期间禁掉两个按钮，避免连点发出两个相反的票
+
+// ===== 模组关系规则编辑器：先选加载器，再选版本，环境串由两者拼出来 =====
+// 选项来自 loader-versions.json（加载器版本表的唯一权威源），不再是"已有规则里出现过的环境"
+// —— 那样只要知识库里还没有 forge 的规则，就永远选不出 forge。
+export const keLoaderEnvs = ref({});     // { neoforge: ['1.20.1', ...], forge: [...], fabric: [...] }
+export const keLoader = ref('neoforge');
+export const keVersion = ref('1.21.1');
+export const keEnv = computed(() => (keLoader.value && keVersion.value)
+    ? keLoader.value + '-' + keVersion.value : '');
 export const keRelation = ref('DEPENDS_ON');
 export const keModA = ref('');
 export const keModB = ref('');
@@ -125,3 +138,4 @@ export const keModBInfo = ref(null);
 export const keModAError = ref('');
 export const keModBError = ref('');
 export const keMsg = ref('');
+export const keMsgOk = ref(true);   // keMsg 是"成功"还是"出错"：靠文案里有没有"成功"两个字判断太脆了

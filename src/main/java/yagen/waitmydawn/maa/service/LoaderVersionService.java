@@ -22,6 +22,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -187,6 +188,54 @@ public class LoaderVersionService {
     /** 当前生效的版本表快照（只读排查用，例如 {@code GET /api/modpack/loader-versions}）。 */
     public JsonNode snapshot() {
         return current;
+    }
+
+    /**
+     * 已维护的加载器名（<b>用户侧</b>叫法：neoforge / forge / fabric），固定按这个顺序返回。
+     *
+     * <p>注意返回的是用户侧名字，不是快照里的键：fabric 在表里的键是 {@code fabric-loader}
+     * （mrpack 的依赖键也是它），这里必须走 {@link #normalizeLoader} 再查，否则 fabric 会被漏掉。
+     * 顺序写死是为了让规则编辑器的下拉排列稳定，不随 JSON 文件里键的先后变化。
+     */
+    public List<String> supportedLoaders() {
+        JsonNode loaders = current == null ? null : current.path("loaders");
+        List<String> out = new ArrayList<>();
+        for (String name : List.of("neoforge", "forge", "fabric")) {
+            String key = normalizeLoader(name);
+            if (loaders != null && key != null && loaders.has(key)) out.add(name);
+        }
+        return out;
+    }
+
+    /**
+     * 某个加载器可选的 MC 版本（规则编辑器的版本下拉用），升序。
+     *
+     * <p>neoforge / forge 的表里列的就是这个加载器维护过的 MC 版本。fabric 不同：Loader 与 MC
+     * 小版本无关，表里只有通配项 {@code "*"}，直接照搬的话 fabric 的版本下拉里就只剩一个 {@code *}
+     * 等于没法选。所以这种情况借其它加载器维护过的 MC 版本并集 —— MC 版本本身与加载器无关。
+     */
+    public List<String> availableMcVersions(String loader) {
+        String loaderKey = normalizeLoader(loader);
+        if (loaderKey == null || current == null) return List.of();
+        JsonNode loaders = current.path("loaders");
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        collectGameVersions(loaders.path(loaderKey), keys);
+        if (keys.isEmpty()) {
+            for (String other : supportedLoaders()) {
+                String otherKey = normalizeLoader(other);
+                if (otherKey != null) collectGameVersions(loaders.path(otherKey), keys);
+            }
+        }
+        List<String> out = new ArrayList<>(keys);
+        out.sort(LoaderVersionService::compareMcVersions);
+        return out;
+    }
+
+    /** 收集一个加载器表里出现过的 MC 版本（跳过 fabric 那种通配项 "*"）。 */
+    private static void collectGameVersions(JsonNode loaderNode, LinkedHashSet<String> out) {
+        for (String name : loaderNode.path("gameVersions").propertyNames()) {
+            if (!"*".equals(name)) out.add(name);
+        }
     }
 
     /** 这个环境我们有没有维护？（识别用户点名环境后，用它决定要不要真的切） */

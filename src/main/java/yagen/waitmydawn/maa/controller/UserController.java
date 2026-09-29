@@ -516,6 +516,26 @@ public class UserController {
     }
 
     /**
+     * 这次请求该不该"参考用户反馈规则"（{@code USER_FEEDBACK} 来源的知识库规则）。
+     *
+     * <p><b>口径只在这里一处</b>：未登录 / token 失效 = 不参考；登录了就看用户设置里的开关。
+     * 依赖穿透（chat）与预览画边都从这里取，两条链路才不会各拿一份规则集
+     * —— 之前"用户规则把节点拉进图里、却不画线"就是两边口径不一致造成的。
+     *
+     * <p>不再采信请求体里的 {@code excludeUserFeedbackRules}：那是客户端根据 localStorage 里的
+     * 旧快照算出来的，服务端设置改了它就过期了。
+     *
+     * @return true = 本次解析要排除 USER_FEEDBACK 来源
+     */
+    public boolean excludesUserFeedbackRules(String token) {
+        Long uid = sessions.touch(token);
+        if (uid == null) return true;
+        return userRepo.findById(uid)
+                .map(user -> !user.isEnableUserFeedbackRules())
+                .orElse(true);
+    }
+
+    /**
      * 退出登录：服务端立刻作废这个 token。
      *
      * <p>为什么要有：前端 {@code logout} 只删了 localStorage，token 本身还是有效的 ——

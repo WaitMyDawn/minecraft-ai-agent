@@ -9,6 +9,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -71,5 +72,16 @@ class SchemaSanityTest {
     void emailDerivedQueriesWork() {
         assertDoesNotThrow(() -> userRepo.existsByEmail("definitely-not-registered@example.com"));
         assertDoesNotThrow(() -> userRepo.findByEmail("definitely-not-registered@example.com"));
+    }
+
+    @Test
+    @DisplayName("知识库规则的认可名单仍绑在旧列 USERS 上（只改字段名不能把现网老数据的名单读丢）")
+    void knowledgeRuleVoteColumns() {
+        List<String> cols = columnsOf("KNOWLEDGE_RULES");
+        assertTrue(cols.contains("USERS"),
+                "认可名单沿用的是旧列 USERS，缺了说明 @Column(name=\"users\") 没生效、老票全读不到：" + cols);
+        assertFalse(cols.contains("APPROVEDUSERS"),
+                "不该另建 APPROVEDUSERS 列（会与 USERS 各存一半、数据看起来凭空少一半）：" + cols);
+        assertTrue(cols.contains("DISAPPROVEDUSERS"), "缺 DISAPPROVEDUSERS 列：" + cols);
     }
 }

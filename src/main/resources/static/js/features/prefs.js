@@ -1,5 +1,5 @@
 import {computed, nextTick, watch} from 'vue';
-import {addingModBySlug, authUser, bindForm, bindMsg, blacklistItems, blacklistJump, blacklistMsg, blacklistPage, blacklistSlugInput, categoryPrefs, currentView, editingBuildCountId, editingBuildCountVal, emailAction, emailHintDismissed, enableBlacklist, enableUserFeedbackRules, hasApiKey, keEnv, keEnvs, keModA, keModAError, keModAInfo, keModB, keModBError, keModBInfo, keMsg, keRelation, manualSlugInput, modInfoCache, modPrefJump, modPrefPage, modPrefs, modPrefSearch, modSlugAddMsg, newCatPref, profileApiKey, profileApiKeyMsg, profileUsername, profileWeight, pwCode, pwMsg, pwNew, pwOld, selectedSuggests, showSuggestBoard, suggestedMods, suggestMode} from '../store.js';
+import {addingModBySlug, authUser, bindForm, bindMsg, blacklistItems, blacklistJump, blacklistMsg, blacklistPage, blacklistSlugInput, categoryPrefs, currentView, dbRules, dbVoteBusy, editingBuildCountId, editingBuildCountVal, emailAction, emailHintDismissed, enableBlacklist, enableUserFeedbackRules, hasApiKey, keEnv, keLoader, keLoaderEnvs, keModA, keModAError, keModAInfo, keModB, keModBError, keModBInfo, keMsg, keMsgOk, keRelation, keVersion, manualSlugInput, modInfoCache, modPrefJump, modPrefPage, modPrefs, modPrefSearch, modSlugAddMsg, newCatPref, profileApiKey, profileApiKeyMsg, profileUsername, profileWeight, pwCode, pwMsg, pwNew, pwOld, selectedSuggests, showSuggestBoard, suggestedMods, suggestMode} from '../store.js';
 import {apiFetch, authHeader} from '../api.js';
 import {startCooldown} from '../utils/code-cooldown.js';
 
@@ -393,13 +393,33 @@ export const openSuggestBoardForBlacklist = () => {
 
 // ========== 知识规则编辑器 ==========
 
+/**
+ * 拉取编辑器的环境选项：{ 加载器: [该加载器的 MC 版本...] }，来自 maa_db/loader-versions.json。
+ *
+ * <p>以前这里拉的是"知识库里已出现过的 environment"，于是只有 neoforge-1.21.1 时编辑器就只能选它。
+ */
 export const loadKeEnvs = async () => {
     try {
-        const r = await fetch('/api/knowledge/feedback/environments');
-        const envs = await r.json();
-        if (envs.length > 0) { keEnvs.value = envs; keEnv.value = envs[0]; }
+        const r = await fetch('/api/knowledge/feedback/loader-envs');
+        keLoaderEnvs.value = (await r.json()) || {};
+        const loaders = Object.keys(keLoaderEnvs.value);
+        if (loaders.length === 0) return;
+        if (!loaders.includes(keLoader.value)) keLoader.value = loaders[0];
+        applyKeVersionForLoader(keLoader.value);
     } catch(e) {}
 };
+
+/** 切加载器时把版本落到该加载器真实存在的值（优先 1.21.1，否则最新的那个） */
+const applyKeVersionForLoader = (loader) => {
+    const versions = keLoaderEnvs.value[loader] || [];
+    if (versions.length === 0) { keVersion.value = ''; return; }
+    if (!versions.includes(keVersion.value)) {
+        keVersion.value = versions.includes('1.21.1') ? '1.21.1' : versions[versions.length - 1];
+    }
+};
+// 用户在编辑器里换了加载器 → 版本下拉立刻跟着换（否则会停在上一个加载器的版本上，
+// 拼出来的环境是 loaderA-versionB 这种不存在的组合）
+watch(keLoader, (v) => applyKeVersionForLoader(v));
 export const onKeSlugInput = async (which) => {
     const slug = (which === 'A' ? keModA.value : keModB.value).trim().toLowerCase();
     const setInfo = which === 'A' ? (v) => keModAInfo.value = v : (v) => keModBInfo.value = v;
@@ -427,11 +447,50 @@ export const submitKeRule = async () => {
             })
         });
         const d = await r.json();
-        if (d.error) { keMsg.value = d.error; return; }
+        if (d.error) { keMsgOk.value = false; keMsg.value = d.error; return; }
+        keMsgOk.value = true;
         keMsg.value = d.message || '规则已添加';
         if (d.ok) { keModA.value = ''; keModB.value = ''; keModAInfo.value = null; keModBInfo.value = null; }
         setTimeout(() => keMsg.value = '', 5000);
-    } catch(e) { if (e.message !== '未登录') keMsg.value = '提交失败'; }
+    } catch(e) {
+        // apiFetch 把"200 但 body 带 error"也收敛成异常，所以真正的失败原因在 e.message 上，
+        // 写死"提交失败"会把"该规则已存在且为官方规则"这种可操作的原因盖掉。
+        if (e.message !== '未登录') { keMsgOk.value = false; keMsg.value = e.message || '提交失败'; }
+    }
+};
+
+// ========== 知识库规则管理视图：认可 / 不认可 ==========
+
+/** 重新拉取规则列表（进入视图、投票后刷新共用这一处） */
+export const refreshDbRules = async () => {
+    const res = await apiFetch('/api/knowledge');
+    dbRules.value = await res.json();
+};
+
+/**
+ * 认可 / 不认可 / 取消投票。
+ *
+ * <p>再点一次已经按下的那个按钮 = 取消（后端收到 CLEAR），所以"我点了认可又想撤回"不需要刷新页面。
+ * 两个按钮的互斥由后端保证（投认可会把自己从不认可名单里摘掉），前端只负责发对动作。
+ */
+export const voteRule = async (rule, vote) => {
+    if (!authUser.value) { alert('登录后才能投票'); return; }
+    if (dbVoteBusy.value) return;
+    const action = rule.myVote === vote ? 'CLEAR' : vote;
+    dbVoteBusy.value = true;
+    try {
+        const r = await apiFetch('/api/knowledge/feedback/vote', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ruleId: rule.id, vote: action})
+        });
+        const d = await r.json();
+        if (d.error) { alert(d.error); return; }
+        await refreshDbRules();
+    } catch(e) {
+        if (e.message !== '未登录') alert(e.message || '投票失败');
+    } finally {
+        dbVoteBusy.value = false;
+    }
 };
 export const exportPrefs = async () => {
     const r = await fetch('/api/prefs/export', {headers: authHeader()});

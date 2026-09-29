@@ -296,6 +296,10 @@ public class ChatController {
 
         // 获取用户 ID (用于保存对话历史)
         Long userId = userIdFor(authToken);
+        // 🧠 本次构筑参考哪一类知识库规则：与预览（ModpackController.previewPack）共用同一处判定。
+        //    两边必须一致 —— 否则会出现"引擎按一份规则集把节点拉进包、预览按另一份不画那条线"。
+        KnowledgeRule.SourceType excludeRuleSource = userController.excludesUserFeedbackRules(authToken)
+                ? KnowledgeRule.SourceType.USER_FEEDBACK : null;
         String userKey = userLogKey(userId, uuid);
         MaaLog.setUserKey(userKey);
         MaaLog.app("请求开始 user=" + userKey
@@ -481,7 +485,8 @@ public class ChatController {
             }
 
             return processAndAssembleBlueprint(aiBlueprint, currentMods, prompt, effectiveApiKey, uuid, state,
-                    excludedSlugs, architectCall, payload.get("mcVersion"), payload.get("loader"), envIntent);
+                    excludedSlugs, excludeRuleSource, architectCall,
+                    payload.get("mcVersion"), payload.get("loader"), envIntent);
         } catch (Exception e) {
             String msg = e.getMessage() != null ? e.getMessage() : "";
             System.err.println("AI 调用异常: " + msg);
@@ -2041,6 +2046,7 @@ public class ChatController {
     private String processAndAssembleBlueprint(String aiBlueprint, String currentMods, String prompt,
                                                String effectiveApiKey, String uuid, PackSessionState state,
                                                 Set<String> excludedSlugs,
+                                                KnowledgeRule.SourceType excludeRuleSource,
                                                 AiAgentService.AgentCallResult architectCall,
                                                 String defaultMc, String defaultLoader,
                                                 yagen.waitmydawn.maa.model.EnvIntent envIntent) {
@@ -2455,7 +2461,8 @@ public class ChatController {
             // 取带 DAG 结构的结果（与 preview 共享同一份缓存），用于删除后的断链诊断
             long depT0 = System.currentTimeMillis();
             // P6：取带完整状态与诊断的解析结果（未解析项 / 被剔除项 / 是否触顶）
-            ResolutionResult resolution = dependencyEngine.resolveCachedResult(initialMods, loader, mcVersion);
+            ResolutionResult resolution = dependencyEngine.resolveCachedResult(
+                    initialMods, loader, mcVersion, excludeRuleSource);
             DependencyGraph resolvedGraph = resolution.graph();
             long dependencyMs = System.currentTimeMillis() - depT0;
             Set<String> finalPerfectMods = new LinkedHashSet<>(resolvedGraph.getOrderedSlugs());
