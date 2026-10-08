@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
  *
  * <p>为什么需要它：环境原本由模型输出的 {@code <mc>/<loader>} 决定，而提示词里只给了"当前环境"，
  * 没给"支持哪些环境"。于是用户说"Neoforge26.2"时，模型凭记忆判断"26.2 对应 MC 1.21.9+"并拒绝切换，
- * 整轮都按旧环境 1.21.1 跑（真实事故，见 logs/2026-09-26/user-1.log:2269-2294）。
+ * 整轮都按旧环境 1.21.1 跑（真实事故：用户点名了 1.21.5，回复与产物却仍是旧环境）。
  * 现在：**用户明确点名 > 模型回填 > 前端当前环境**，用户说了就切，本轮生效。
  *
  * <p>版本号形态（用户 2026-09 确认的官方命名规则）：
@@ -18,7 +18,7 @@ import java.util.regex.Pattern;
  *       {@code 26.2} = 2026 年第 2 季度，{@code 26.1.2} = 该季度第 2 个补丁</li>
  * </ul>
  *
- * <p>这里只做**形态识别**；"这个环境我们是否维护"由调用方拿 {@code LoaderVersionService} 校验
+ * <p>这里只做**形态识别**；"该环境是否有维护版本"由调用方拿 {@code LoaderVersionService} 校验
  * （见 ChatController），避免识别出一个其实不存在的版本就乱切。
  */
 public record EnvIntent(String mcVersion, String loader) {

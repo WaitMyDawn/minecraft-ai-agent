@@ -1,22 +1,14 @@
 // 取数委派：把 Modrinth 请求交给用户自己的浏览器。
 //
-// 服务器不再代所有用户发请求（那样必然撞 300 次/分钟/出口 IP 的限额），
+// 服务器不再代所有用户发请求（那样必然撞出口 IP 的限额），
 // 而是下发"要哪些事实"，由这里去取。配额算在用户自己的出口 IP 上。
 //
-// 并发和限速不是优化项，是必需品：单次委派只有 5 秒预算，串行取数会让
-// 一批 70 个事实花掉十几秒，服务器只好兜底自己抓——那就白做了。
+// 并发和限速不是优化项，是必需品：单次委派的取数预算有限（默认 30 秒，见
+// maa.delegation.per-call-budget-ms），串行取数会让一批 70 个事实花掉十几秒，
+// 服务器只好兜底自己抓——那就白做了。
 //
 // 自动检查：node eval/fe-delegation-check.mjs
 
-// ==========================================
-// 🚀 取数委派：把 Modrinth 请求交给用户自己的浏览器
-//
-// 服务器不再代所有用户发请求（那样必然撞 300 次/分钟/出口 IP 的限额），
-// 而是下发"要哪些事实"，由这里去取。配额算在用户自己的出口 IP 上。
-//
-// 并发和限速不是优化项，是必需品：单次委派只有 5 秒预算，串行取数会让
-// 一批 70 个事实花掉十几秒，服务器只好兜底自己抓——那就白做了。
-// ==========================================
 export const DELEGATION = {
     CONCURRENCY: 6,      // 浏览器单域名本来也就 ~6 条连接
     PER_MINUTE: 240,     // 比 300 的硬限额留 20% 余量，别把自己打到 429
@@ -48,7 +40,7 @@ export const fetchModrinth = async (url, bucket, stats, attempt) => {
     await bucket();
     stats.requests++;
     // 刻意不设 User-Agent：它属于 Fetch 规范的禁止头，浏览器会静默丢弃，
-    // 写上去只会让人误以为我们报了身份。Modrinth 会看到浏览器自己的 UA。
+    // 写上去只会造成"已声明身份"的误解。Modrinth 会看到浏览器自己的 UA。
     const res = await fetch(url);
     if (res.status === 429 && tries < 3) {
         stats.rateLimited++;
@@ -89,7 +81,7 @@ export const runPool = async (items, worker, limit) => {
  *   missing     = 上游明确没有（批量端点静默丢弃 / 版本列表为空）
  *   unavailable = 我没抓到（网络不通、被扩展拦了、整批请求失败）
  * missing 与 unavailable 混在一起是致命的：服务器会把"网络不通"读成
- * "这个模组不存在"，然后产出一个缺模组的包，而你要的服务器兜底也不会触发。
+ * "这个模组不存在"，然后产出一个缺模组的包，而服务器兜底也不会触发。
  */
 export const fulfilWanted = async (wanted) => {
     const stats = {requests: 0, rateLimited: 0};

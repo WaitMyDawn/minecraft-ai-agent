@@ -122,6 +122,15 @@ export const dbFilterVersion = ref('');  // '' = 全部版本（选项随加载�
 export const dbFilterModA = ref('');     // 主模组 slug 的子串（大小写不敏感）
 export const dbVoteBusy = ref(false);    // 投票请求在飞：期间禁掉两个按钮，避免连点发出两个相反的票
 
+// ===== 整合包版本（快照）=====
+// 每一版由"输入状态"决定：loader + mcVersion + modSlugs + excludedSlugs。版本号由服务端算
+// （PackSnapshotHash），前端只保存"已记录的那一版"，用于判断一次改动是否真的改变了内容，
+// 所以这里存的是状态对象而不是哈希本身 —— 比较按集合做，顺序不同不算改动。
+export const latestSnapshotId = ref('');    // 已记录的那一版的版本号（界面上显示 #xxxx）
+export const latestPackState = ref(null);   // 与它配套的状态对象
+export const labChangeNote = ref('');       // 装配台顶部的"最近一次改动"摘要
+export const labUnresolved = ref([]);       // 最近一次解析里没解析出来的项（提示"当前环境找不到"）
+
 // ===== 模组关系规则编辑器：先选加载器，再选版本，环境串由两者拼出来 =====
 // 选项来自 loader-versions.json（加载器版本表的唯一权威源），不再是"已有规则里出现过的环境"
 // —— 那样只要知识库里还没有 forge 的规则，就永远选不出 forge。

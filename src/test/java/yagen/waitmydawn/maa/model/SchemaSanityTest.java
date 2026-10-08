@@ -84,4 +84,14 @@ class SchemaSanityTest {
                 "不该另建 APPROVEDUSERS 列（会与 USERS 各存一半、数据看起来凭空少一半）：" + cols);
         assertTrue(cols.contains("DISAPPROVEDUSERS"), "缺 DISAPPROVEDUSERS 列：" + cols);
     }
+
+    @Test
+    @DisplayName("会话消息的版本化快照列真的存在（缺列 = 历史版本恢复变成静默失效）")
+    void chatMessageSnapshotColumns() {
+        List<String> cols = columnsOf("MAA_CHAT_MESSAGE");
+        assertTrue(cols.contains("SNAPSHOTID"),
+                "缺 SNAPSHOTID 列：消息上带不了版本号，所有历史按钮都会指向最新一版：" + cols);
+        assertTrue(cols.contains("PACKSTATE"),
+                "缺 PACKSTATE 列：只能恢复模组清单、恢复不了名称与环境：" + cols);
+    }
 }

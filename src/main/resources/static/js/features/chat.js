@@ -1,6 +1,6 @@
 // 聊天主流程：思考模拟器（计时器）→ 发送指令 → 委派取数循环 → 解析 AI 回复 → 落库。
 //
-// 从 index.html 的 setup 里整体搬出来的（原 1091-1092 与 1128-1354），逻辑原样保留。
+// 本模块只负责发送与收口，共享状态在 store.js，图谱渲染在 graph.js，删除流程在 delete-flow.js。
 // ⚠️ timerInterval 是模块级单例：本应用只 mount 一次，安全；重复 mount 会串表。
 // ⚠️ sendMessage 的落库在 finally 里 —— 覆盖"附件解析失败 / 纯附件建图 / 手动终止"三条早退路径。
 //
@@ -9,6 +9,7 @@ import {authHeader} from '../api.js';
 import {DELEGATION, fulfilWanted, readChatResponse} from '../modrinth-client.js';
 import {authUser, chatHistory, currentConvId, currentThought, currentView, enableUserFeedbackRules, isLoading, isResolving, packData, pendingMrpack, previewData, selectedMods, sessionUuid, thinkTime, userInput} from '../store.js';
 import {newConversation, saveMsg} from './auth.js';
+import {recordCurrentVersion} from './pack-snapshot.js';
 import {buildTreeData, renderGraph} from './graph.js';
 import {nextTick} from 'vue';
 
@@ -182,7 +183,7 @@ export const sendMessage = async () => {
             });
             let payload = await readChatResponse(res);
 
-            // 🔁 委派循环：服务器需要外部事实时会把清单发下来，我们取完再送回去，
+            // 🔁 委派循环：服务器需要外部事实时会把清单发下来，浏览器取完再回传，
             // 它继续跑并返回"下一份清单"或"最终回复"。不需要外部数据的轮次一次都不会进来
             // （响应直接就是 text/plain），所以开关关掉时这段等于不存在。
             let delegationRound = 0;
@@ -249,7 +250,9 @@ export const sendMessage = async () => {
             nextTick(() => {
                 const last = chatHistory.value[chatHistory.value.length - 1];
                 if (last && last.role === 'ai') {
-                    saveMsg('ai', last.content, last.hasData || false, last.thinkTime || '', packData.modSlugs);
+                    // 这一轮也构成"一版"：落库时带上完整状态，并把版本号挂到消息上，
+                    // 于是这条消息的"查看图谱"按钮以后永远指向这一版（而不是最新一版）
+                    recordCurrentVersion(last);
                 }
             });
         }

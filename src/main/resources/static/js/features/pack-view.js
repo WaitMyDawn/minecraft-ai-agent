@@ -1,6 +1,6 @@
 // 装配台打包（buildPack）+ 知识库视图（openDbView / groupedDbData）。
 //
-// 从 index.html 的 setup 里整体搬出来的（原 1356-1413），逻辑原样保留。
+// 本模块只管打包与知识库视图：图谱渲染在 graph.js，删除流程在 delete-flow.js。
 // ⚠️ buildPack 的偏好回填在 finally 里：失败或未选中任何模组时也会打 update-on-build ——
 //    这是原有行为（会把失败的一次也算成构建次数），本轮按"零行为变化"保留，要改请单独说。
 import {authHeader} from '../api.js';

@@ -2,6 +2,8 @@ package yagen.waitmydawn.maa.controller;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import yagen.waitmydawn.maa.model.*;
 import yagen.waitmydawn.maa.service.*;
 import yagen.waitmydawn.maa.runtime.ScopedExecutors;
@@ -25,12 +27,13 @@ public class PreferencesController {
     private final ConversationRepository convRepo;
     private final ChatMessageRepository msgRepo;
     private final ModrinthApiClient apiClient;
+    private final ObjectMapper objectMapper;
 
     public PreferencesController(UserRepository userRepo, UserController userController,
                                   CategoryPreferenceRepository catRepo, ModPreferenceRepository modRepo,
                                   ModBlacklistRepository blacklistRepo,
                                   ConversationRepository convRepo, ChatMessageRepository msgRepo,
-                                  ModrinthApiClient apiClient) {
+                                  ModrinthApiClient apiClient, ObjectMapper objectMapper) {
         this.userRepo = userRepo;
         this.userController = userController;
         this.catRepo = catRepo;
@@ -39,12 +42,13 @@ public class PreferencesController {
         this.convRepo = convRepo;
         this.msgRepo = msgRepo;
         this.apiClient = apiClient;
+        this.objectMapper = objectMapper;
     }
 
     private Long requireUser(String token) {
         Long uid = userController.validateToken(token);
         // 用 ResponseStatusException 而不是裸 RuntimeException：后者会被当成未处理异常返回 500，
-        // 前端拿到 500 只会显示"服务器错误"，而这里明明是"你没登录"（401）
+        // 前端拿到 500 只会显示"服务器错误"，而这里明明是未授权（401）
         if (uid == null) throw new org.springframework.web.server.ResponseStatusException(
                 org.springframework.http.HttpStatus.UNAUTHORIZED, "未登录");
         return uid;
@@ -102,6 +106,8 @@ public class PreferencesController {
                     mm.put("hasData", m.isHasData());
                     mm.put("thinkTime", m.getThinkTime() != null ? m.getThinkTime() : "");
                     mm.put("modSlugs", m.getModSlugs() != null ? m.getModSlugs() : "");
+                    mm.put("snapshotId", m.getSnapshotId() != null ? m.getSnapshotId() : "");
+                    mm.put("packState", m.getPackState() != null ? m.getPackState() : "");
                     return mm;
                 }).collect(Collectors.toList()));
     }
@@ -121,12 +127,44 @@ public class PreferencesController {
                 Boolean.TRUE.equals(body.get("hasData")),
                 body.getOrDefault("thinkTime", "").toString(),
                 body.getOrDefault("modSlugs", "").toString());
+        // 带打包状态的消息额外记一份"这一版长什么样"：版本号由状态算出（同一个状态永远是同一个号），
+        // 恢复历史版本时前端拿 packState 还原工作区，不必回放整段对话。
+        String snapshotId = null;
+        if (body.containsKey("packName") || body.containsKey("loader") || body.containsKey("mcVersion")) {
+            String packName = text(body.get("packName"));
+            String mcVersion = text(body.get("mcVersion"));
+            String loader = text(body.get("loader"));
+            String modSlugs = text(body.getOrDefault("modSlugs", ""));
+            String excludedSlugs = text(body.getOrDefault("excludedSlugs", ""));
+            msg.setPackState(packStateJson(packName, mcVersion, loader, modSlugs, excludedSlugs));
+            snapshotId = PackSnapshotHash.id(loader, mcVersion, modSlugs, excludedSlugs);
+            msg.setSnapshotId(snapshotId);
+        }
         msgRepo.save(msg);
         Conversation conv = convOpt.get();
         conv.setUpdatedAt(java.time.LocalDateTime.now());
         if (body.containsKey("title")) conv.setTitle(body.get("title").toString());
         convRepo.save(conv);
-        return ResponseEntity.ok(Map.of("ok", true));
+        Map<String, Object> ok = new LinkedHashMap<>();
+        ok.put("ok", true);
+        if (snapshotId != null) ok.put("snapshotId", snapshotId);
+        return ResponseEntity.ok(ok);
+    }
+
+    /** 打包输入状态存成一行 JSON：字段名与前端 packData 对齐，恢复时直接写回工作区 */
+    private String packStateJson(String name, String mcVersion, String loader,
+                                 String modSlugs, String excludedSlugs) {
+        ObjectNode state = objectMapper.createObjectNode();
+        state.put("name", name);
+        state.put("mcVersion", mcVersion);
+        state.put("loader", loader);
+        state.put("modSlugs", modSlugs);
+        state.put("excludedSlugs", excludedSlugs);
+        return objectMapper.writeValueAsString(state);
+    }
+
+    private static String text(Object value) {
+        return value == null ? "" : value.toString();
     }
 
     // ==================== 类别偏好 ====================

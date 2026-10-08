@@ -53,7 +53,7 @@ public class ChatController {
     private final ExpansionTracker expansionTracker;
     /** 委派任务表：把"发请求"交给用户浏览器做（详见 DelegationContext 类注释） */
     private final DelegationTasks delegationTasks;
-    /** 加载器版本表：用于"用户点名的环境我们是否维护"以及给提示词注入支持清单 */
+    /** 加载器版本表：用于"用户点名的环境是否有维护版本"以及给提示词注入支持清单 */
     private final LoaderVersionService loaderVersionService;
 
     /**
@@ -155,7 +155,7 @@ public class ChatController {
         return sb.toString();
     }
 
-    /** 标注这条调整是"你包里原有的"还是"本轮新增的"，让用户知道该找谁算账 */
+    /** 标注这条调整来自用户已有的包，还是本轮新增的 */
     private static String originOf(ModDelta d) {
         return d.fromPack() ? "（你包里原有的模组）" : "（本轮新增的模组）";
     }
@@ -265,7 +265,7 @@ public class ChatController {
      *
      * <p>从 {@code @PostMapping} 上摘下来了，因为现在有两条路进来：委派关闭时由下面的
      * {@link #chat} 直接调用（同步、老行为），开启时由 {@link DelegationTasks} 提交到虚拟线程跑——
-     * 因为挂起等浏览器的线程必须活得比这次 HTTP 请求长。方法体一行没动。
+     * 因为挂起等浏览器的线程必须活得比这次 HTTP 请求长。
      */
     private String doChat(Map<String, String> payload, String authToken,
                           String apiKeyOverride, Long convId) {
@@ -695,7 +695,7 @@ public class ChatController {
         // 归属校验：有主的任务只认主人。taskId 是不可猜的随机串，但它是**唯一凭据**——
         // 不做这一步，别有用心的登录用户拿到 taskId 就能往别人的轮次里塞伪造事实，
         // 还能从这个接口的响应里读到别人的最终结果（下面 continueOrReturn 会把回复返回）。
-        // 认不出归属时一律回 404 而不是 403：不告诉对方"这个任务确实存在，只是不是你的"。
+        // 认不出归属时一律回 404 而不是 403：不告诉对方"这个任务确实存在，只是不属于他"。
         if (task.ownerId() != null) {
             Long uid = userIdFor(authToken);
             if (uid == null || !uid.equals(task.ownerId())) {
@@ -711,7 +711,7 @@ public class ChatController {
     }
 
     /**
-     * 回执日志：要让"用户替我们做了多少、我们自己做多少"一眼看得见。
+     * 回执日志：要让"浏览器代做了多少、服务端自己做了多少"一眼看得见。
      *
      * <p>走 {@code MaaLog.runWithUser} 而不是直接 {@code MaaLog.user}：这次回调跑在
      * /facts 的请求线程上，那里没有用户上下文，直接写会落进总日志、丢归属。
@@ -751,7 +751,7 @@ public class ChatController {
         // 刷新过页面时 uuid 已经换成新的了：把该账号**所有**在跑的轮次都标记上，
         // 否则用户点了终止，老那一轮看不到标记，会带着残缺数据一路跑完（只有新 uuid 被标记）。
         for (String u : roundGuard.activeUuidsOf(uid)) abortedSessions.put(u, true);
-        // 挂起的线程最多要等 5 秒才自己醒来，用户点了终止不该再等——直接放行
+        // 挂起的线程最长要等一个委派预算（默认 30 秒）才自己醒来，用户点了终止不该再等——直接放行
         // 按账号找而不是按 userKey：userKey 里带 uuid，而 uuid 每次刷新都会换，
         // 刷新页面后点终止就永远打不中原来那个任务（这是修之前真实存在的问题）。
         int woken = uid != null
@@ -780,7 +780,7 @@ public class ChatController {
     }
 
     /**
-     * 结算日志：一轮构筑结束后，把"外包了多少 / 用户完成多少 / 我们自己兜了多少"一次报清。
+     * 结算日志：一轮构筑结束后，把"外包多少 / 浏览器完成多少 / 服务端自抓多少"一次报清。
      *
      * <p>这三个数正好对应关心的三件事，而且都能和 {@code <trace>.upstream} 对上：
      * <ul>
@@ -955,7 +955,7 @@ public class ChatController {
      * 结构与请求自洽吗。
      *
      * <p>注意这不是"验真"——下载地址、依赖列表这类内容客户端都能编。它只是挡住明显不对的东西，
-     * 免得脏数据把流程带偏。真伪这一层我们本来就不防：数据只在本次任务里用，既不进共享缓存
+     * 免得脏数据把流程带偏。真伪这一层本来就不防：数据只在本次任务里用，既不进共享缓存
      * 也不会传播给别人，最坏结果是发起者自己拿到一个错包。
      */
     static boolean selfConsistent(DelegationContext.Kind kind, String key, JsonNode data) {
@@ -1549,7 +1549,7 @@ public class ChatController {
      *
      * <p>类别归属离线取：① 调用方传入的本轮候选池标签（slug → categories）
      * ② 本地 modrinth 缓存的 categories 列。都取不到的归入 {@code 未分类}，**不计入缺口**
-     * —— 不能把"我们查不到"说成"包里没有"。
+     * —— 不能把"查不到"说成"包里没有"。
      */
     static Map<String, Integer> inPackCategoryCounts(Collection<String> packSlugs,
                                                      Map<String, Set<String>> poolCategories,
@@ -1614,7 +1614,7 @@ public class ChatController {
     /**
      * 阶段 0（真实性/版本闸门）对"点名模组"的处理流水，用于**给用户看得见的交代**与 trace 断言。
      *
-     * <p>为什么要有它：平替/剔除以前只写日志——用户看不到"你要的 X 被换成了 Y""你的 Z 被丢了"，
+     * <p>为什么要有它：平替/剔除以前只写日志——用户看不到"X 被换成了 Y""Z 被丢弃"，
      * 而这两件事都改变了用户的包（评测也无法断言"系统有没有如实告知"）。
      *
      * @param slug     被处理的模组（原名字）
@@ -1779,7 +1779,7 @@ public class ChatController {
      *   <li>排序原本把<b>词缀命中</b>放在<b>强词命中</b>之前——只要候选名里带 community/port 之类的词，
      *       哪怕与原名毫无关系也能排第一（thermal-expansion → doggy-talents-…）；现在词缀降级为次级优先。</li>
      *   <li>重复判定原本排在质量闸门<b>之前</b>，且是在"全 loader 桶"上扫描：当原名一个强词都没命中时，
-     *       循环会一路扫到"下载量最高又恰好在包里"的那个模组，把它当成"你要的其实已经在包里了"
+     *       循环会一路扫到"下载量最高又恰好在包里"的那个模组，把它当成"用户要的其实已经在包里了"
      *       （实测 iron-chests / ferritecore / biomesoplenty 被误判成 doggy-talents / cloth-config 的重复）。
      *       现在先预筛出"有辨识度强词命中"的候选，重复判定只在预筛之后进行。</li>
      * </ol>
@@ -2085,7 +2085,7 @@ public class ChatController {
             }
 
             Set<String> initialMods = new LinkedHashSet<>();
-            // 用户已有包的规范化集合：只用于标注"这条调整动的是你包里的东西，还是本轮新增的"
+            // 用户已有包的规范化集合：只用于标注"这条调整动的是包里原有的东西，还是本轮新增的"
             Set<String> userPackNorms = new HashSet<>();
             if (currentMods != null && !currentMods.trim().isEmpty()) {
                 List<String> packSlugs = cleanSlugs(currentMods);

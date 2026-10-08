@@ -23,7 +23,7 @@ import java.time.format.DateTimeFormatter;
  * 备份期间的 8073 次写入不影响结果；还原后的库 {@code CHECKPOINT} 通过，
  * 行数落在"备份开始"与"备份结束"之间——即一个时间点一致的快照，不是撕裂文件。
  *
- * <p>产出的 zip 里就是我们平时看到的那份 {@code knowledge.mv.db}，恢复 = 解压回 maa_db 里。
+ * <p>产出的 zip 里就是运行中数据库的那份 {@code knowledge.mv.db}，恢复 = 解压回 maa_db 里。
  */
 @Service
 public class BackupService {

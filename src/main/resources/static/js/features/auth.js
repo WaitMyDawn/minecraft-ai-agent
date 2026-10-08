@@ -4,11 +4,12 @@
 // 抽取前专门验过这一点——如果它反过来调用图谱/聊天里的函数，就会形成循环依赖，
 // 那样只能靠注入回调解决，代价大得多。以后再往这里加东西，先看这条。
 import {authError, authForm, authLoading, authMode, authSuccess, authUser, chatHistory,
-    conversationList, currentConvId, currentView, hasApiKey, packData,
+    conversationList, currentConvId, currentView, hasApiKey, latestPackState, latestSnapshotId, packData,
     authResetMode, resetForm, resetResult, showAuthModal,
     showSidebar, thinkTime} from '../store.js';
 import {authHeader} from '../api.js';
 import {startCooldown} from '../utils/code-cooldown.js';
+import {applyPackState, csv, parseCsv, readPackState} from '../utils/pack-state.js';
 import {ref} from 'vue';
 
 // 从 localStorage 恢复登录 — 先恢复再异步校验服务端是否有效
@@ -34,10 +35,13 @@ if (authUser.value && authUser.value.token) {
             // 不会撞上 loadConversations 这个 const 的暂时性死区。
             await loadConversations();
             // 再把自己正在编辑的那个对话恢复回来：一轮对话中途刷新（或者切走再回来）时，
-            // 用户期待看到的是"刚才那段"，不是空白页。id 是从 localStorage 里恢复的。
+            // 用户期待回到的是中断前的那段对话，而不是空白页。id 是从 localStorage 里恢复的。
             if (currentConvId.value) {
                 await loadConversation(currentConvId.value);
             }
+            // 最后保证"有一个可用会话"：指针对不上（被删/换账号）时 loadConversation 会把它清掉，
+            // 这里补建一个 —— 否则进页面后任何"要落库的功能"都没有可以记录的地方。
+            await ensureUsableConversation();
         }
     }).catch(() => {});
 }
@@ -74,6 +78,8 @@ export const doAuth = async () => {
             showAuthModal.value = false;
         }
         await loadConversations();
+        // 登录之后同样要保证有一个可用会话：否则用户第一件事点"生成空图谱"时没有会话可落库
+        await ensureUsableConversation();
     } catch(e) {
         console.error('Auth request failed:', e);
         authError.value = '网络错误: ' + (e.message || '请检查后端是否启动');
@@ -90,6 +96,12 @@ export const logout = () => {
     } catch (e) {}
     authUser.value = null; localStorage.removeItem('maa-auth');
     currentView.value = 'chat'; showSidebar.value = false; conversationList.value = [];
+    // 会话指针也要清：下一个人（或换个账号）登录时，这个 id 已经不属于他，
+    // 留着会让所有保存静默 404 —— 换账号登录是那条老 bug 最常见的触发方式。
+    currentConvId.value = null; localStorage.removeItem('maa-conv');
+    chatHistory.value = [];
+    latestPackState.value = null;
+    latestSnapshotId.value = '';
 };
 
 // ---------- 邮箱验证码：注册 / 忘记密码共用一套"发送 + 倒计时"逻辑 ----------
@@ -172,7 +184,7 @@ export const doResetPassword = async () => {
     } finally { authLoading.value = false; }
 };
 
-// ---------- 注册前的知情同意：构筑时的 Modrinth 取数由"你的浏览器"直连 ----------
+// ---------- 注册前的知情同意：构筑时的 Modrinth 取数由浏览器直连 ----------
 //
 // 为什么必须有这一步：查模组/版本/前置依赖的请求是**下放给用户浏览器直连 Modrinth** 的
 // （服务器不代劳，见后端 ModrinthApiClient 的委派逻辑）。真实读数：单轮构筑下放 145~200 项，
@@ -205,31 +217,101 @@ export const loadConversations = async () => {
 export const newConversation = async () => {
     if (!authUser.value) return;
     try {
-        const r = await fetch('/api/prefs/conversations', {
-            method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
-            body: JSON.stringify({title: '新对话 ' + new Date().toLocaleDateString()})
-        });
-        const d = await r.json();
-        currentConvId.value = d.id;
-        localStorage.setItem('maa-conv', String(d.id));   // 刷新后要能回到这个新对话
+        await createConversation(null);
         // 新对话 = 新包：清空清单与删除排除名单
         chatHistory.value = []; packData.modSlugs = []; packData.excludedSlugs = [];
+        // 版本游标也要归零：否则新对话里的第一次预览会以为"状态没变"，不记版本流水
+        latestPackState.value = null;
+        latestSnapshotId.value = '';
         await loadConversations();
     } catch(e) {}
+};
+
+/**
+ * 建一个会话并切换过去，但**不动工作区**（不清空 chatHistory / packData）。
+ *
+ * <p>为什么与 newConversation 分开：newConversation 是用户点"+ 新对话"的语义（换会话 = 换包），
+ * 会清空工作区；而"落库前发现没有会话"属于自愈路径，必须保留用户正在编辑的内容。
+ */
+const createConversation = async (title) => {
+    const r = await fetch('/api/prefs/conversations', {
+        method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
+        body: JSON.stringify({title: title || '新对话 ' + new Date().toLocaleDateString()})
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!d || !d.id) return null;
+    currentConvId.value = d.id;
+    localStorage.setItem('maa-conv', String(d.id));   // 刷新后要能回到这个对话
+    await loadConversations();
+    return d.id;
+};
+
+/**
+ * 进页面/登录后保证有一个可用会话。
+ *
+ * <p>为什么要做：localStorage 里的会话 id 可能已经失效（被删、换了账号登录）。以前这种
+ * 情况下界面看着正常，但所有消息保存都静默 404 —— "生成空图谱之后刷新就全没了"就是这个原因。
+ * 这里先复用最近一条**还是空的**会话（避免每次刷新都堆一个空对话），没有才新建。
+ */
+export const ensureUsableConversation = async () => {
+    if (!authUser.value) return null;
+    if (currentConvId.value) return currentConvId.value;
+    const recent = (conversationList.value || [])[0];   // 后端按 updatedAt 倒序返回
+    if (recent) {
+        try {
+            const r = await fetch('/api/prefs/conversations/' + recent.id + '/messages', {headers: authHeader()});
+            if (r.ok) {
+                const msgs = await r.json();
+                if (Array.isArray(msgs) && msgs.length === 0) {
+                    currentConvId.value = recent.id;
+                    localStorage.setItem('maa-conv', String(recent.id));
+                    return recent.id;
+                }
+            }
+        } catch (e) { /* 查不通就当空会话不可用，落到新建 */ }
+    }
+    return createConversation();
 };
 export const loadConversation = async (id) => {
     try {
         const r = await fetch('/api/prefs/conversations/' + id + '/messages', {headers: authHeader()});
+        if (r.status === 404) {
+            // 这条对话不属于当前账号（或已被删除）：绝不能当成"空对话"继续用 —— 旧实现就是这样，
+            // 之后所有保存都静默 404，用户刷新后内容全丢。清掉本地指针，让上层去建新会话。
+            if (currentConvId.value === id) {
+                currentConvId.value = null;
+                localStorage.removeItem('maa-conv');
+            }
+            chatHistory.value = [];
+            latestPackState.value = null;
+            latestSnapshotId.value = '';
+            return;
+        }
+        if (!r.ok) return;
         const msgs = await r.json();
         chatHistory.value = msgs.map(m => ({
             role: m.role, content: m.content, hasData: m.hasData,
-            thinkTime: m.thinkTime || undefined
+            thinkTime: m.thinkTime || undefined,
+            // 版本号与完整状态：历史按钮靠 snapshotId 区分版本，点开时用 packState 还原工作区
+            snapshotId: m.snapshotId || '', packState: m.packState || ''
         }));
-        if (msgs.length > 0 && msgs[msgs.length-1].modSlugs) {
-            packData.modSlugs = msgs[msgs.length-1].modSlugs.split(',');
+        // 恢复"这一版"：优先用完整的 packState（名称/环境/清单/排除项一起还原），
+        // 老消息没有它才退回"只恢复模组清单"。清单只认 AI 消息：用户消息保存时带的是空数组，
+        // 而一轮被中途终止时末尾就是用户消息 —— 取它会把包清空。
+        const withState = [...msgs].reverse().find(m => m.packState);
+        const state = readPackState(withState ? withState.packState : null);
+        if (state) {
+            applyPackState(packData, state);
+            latestPackState.value = state;
+            latestSnapshotId.value = withState.snapshotId || '';
+        } else {
+            const lastWithPack = [...msgs].reverse().find(m => m.role === 'ai');
+            if (lastWithPack) packData.modSlugs = parseCsv(lastWithPack.modSlugs);
+            // 老消息没存排除名单：切换历史对话时不继承上一个包的删除记录
+            packData.excludedSlugs = [];
+            latestPackState.value = null;
+            latestSnapshotId.value = '';
         }
-        // 切换历史对话 = 切换包：不继承上一个包的删除排除名单
-        packData.excludedSlugs = [];
         currentConvId.value = id;
         localStorage.setItem('maa-conv', String(id));
     } catch(e) {}
@@ -244,15 +326,48 @@ export const deleteConversation = async (id) => {
     }
     await loadConversations();
 };
-export const saveMsg = async (role, content, hasData, thinkTime, slugs) => {
-    if (!authUser.value || !currentConvId.value) return;
-    try {
-        const body = {role, content, hasData, thinkTime: thinkTime||'', modSlugs: (slugs||[]).join(',')};
-        const title = chatHistory.value.length <= 2 && role === 'user' ? content.substring(0, 30) : null;
-        if (title) body.title = title;
-        await fetch('/api/prefs/conversations/' + currentConvId.value + '/messages', {
-            method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
-            body: JSON.stringify(body)
-        });
-    } catch(e) {}
+/**
+ * 保存一条消息。
+ *
+ * <p>带 {@code packState} 时，服务端会额外记下"这一版"（完整输入状态 + 由状态算出的版本号），
+ * 并把版本号回传；调用方把它挂到消息上，历史按钮才能区分版本、点开时才能还原工作区。
+ *
+ * @returns 版本号；没带状态或未登录时为 null
+ */
+export const saveMsg = async (role, content, hasData, thinkTime, slugs, packState) => {
+    if (!authUser.value) return null;
+    // 最多两轮：会话失效（被删/换账号）时丢掉旧指针、建个新会话再存一次。
+    // 这条自愈路径是"消息不丢"的兜底 —— 以前是 catch(e){} 静默吞掉，用户只能靠刷新后发现少东西。
+    for (let attempt = 0; attempt < 2; attempt++) {
+        if (!currentConvId.value) {
+            const id = await createConversation();
+            if (!id) return null;          // 建会话失败（未登录/网络）就别再打接口了
+        }
+        try {
+            const body = {role, content, hasData, thinkTime: thinkTime||'', modSlugs: (slugs||[]).join(',')};
+            const title = chatHistory.value.length <= 2 && role === 'user' ? content.substring(0, 30) : null;
+            if (title) body.title = title;
+            if (packState) {
+                // 清单以状态里的为准：避免调用方传的 slugs 参数与状态不一致，导致版本号算错
+                body.packName = packState.name || '';
+                body.mcVersion = packState.mcVersion || '';
+                body.loader = packState.loader || '';
+                body.modSlugs = csv(packState.modSlugs);
+                body.excludedSlugs = csv(packState.excludedSlugs);
+            }
+            const r = await fetch('/api/prefs/conversations/' + currentConvId.value + '/messages', {
+                method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
+                body: JSON.stringify(body)
+            });
+            const d = await r.json().catch(() => ({}));
+            if (r.ok && !d.error) return d.snapshotId ? d.snapshotId : null;
+            const gone = r.status === 404 || String(d.error || '').includes('对话不存在');
+            if (!gone) return null;        // 其它错误（401/500）重试也没用
+            currentConvId.value = null;
+            localStorage.removeItem('maa-conv');
+        } catch(e) {
+            return null;
+        }
+    }
+    return null;
 };

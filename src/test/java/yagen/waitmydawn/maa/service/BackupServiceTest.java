@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 在线备份测试。
  *
  * <p>对着真实的 H2 文件库跑（不是 mock）：这个功能的价值全在"备出来的东西真能当库用"，
- * 用假对象测等于什么都没测。这里验四件事：zip 真的产出了、里面就是我们平时看到的那份
+ * 用假对象测等于什么都没测。这里验四件事：zip 真的产出了、里面就是运行中数据库的那份
  * {@code knowledge.mv.db}、同名不覆盖、目录名做了净化（挡住 {@code ../..} 这类穿目录）。
  *
  * <p>连接方式刻意与生产同构：Hikari 连接池 + {@code AUTO_SERVER=TRUE} 的文件库 ——

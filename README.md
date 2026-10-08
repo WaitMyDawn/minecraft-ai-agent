@@ -400,7 +400,7 @@ Minecraft-AI-Agent/
 | 邮件 | Resend / Brevo / SMTP | HTTP API 优先，SMTP 兜底，用 `.env` 切换 |
 | 前端 | **Vue 3 + Tailwind CSS（CDN）** | 原生 ES Modules + importmap，**无 npm / 无构建步骤** |
 | 图谱 | **Vis.js Network** | 依赖 DAG 交互 |
-| 测试 | JUnit 5 + Mockito | 247 个用例 + 前端三道静态门 |
+| 测试 | JUnit 5 + Mockito | 277 个用例 + 前端三道静态门 |
 | 部署 | Docker Compose | 健康检查、日志轮转、优雅停机、在线备份 |
 
 ---
@@ -410,7 +410,7 @@ Minecraft-AI-Agent/
 ### 跑测试
 
 ```bash
-./mvnw test                    # 247 个用例 + 前端三道静态门（它们挂在 test 阶段）
+./mvnw test                    # 277 个用例 + 前端三道静态门（它们挂在 test 阶段）
 ./mvnw clean package -DskipTests
 ```
 

@@ -24,6 +24,12 @@ public class ChatMessage {
     @Column(length = 10000)
     private String modSlugs;  // 当时的模组列表快照 (245个slug可达~4500字符)
 
+    @Column(length = 16)
+    private String snapshotId;  // 打包输入状态的内容哈希（10 位十六进制），"这是哪一版"
+
+    @Column(length = 10000)
+    private String packState;   // 当时的完整输入状态 JSON：{name, mcVersion, loader, modSlugs, excludedSlugs}
+
     @Column(nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -50,6 +56,10 @@ public class ChatMessage {
     public void setThinkTime(String v) { this.thinkTime = v; }
     public String getModSlugs() { return modSlugs; }
     public void setModSlugs(String v) { this.modSlugs = v; }
+    public String getSnapshotId() { return snapshotId; }
+    public void setSnapshotId(String v) { this.snapshotId = v; }
+    public String getPackState() { return packState; }
+    public void setPackState(String v) { this.packState = v; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime v) { this.createdAt = v; }
 }

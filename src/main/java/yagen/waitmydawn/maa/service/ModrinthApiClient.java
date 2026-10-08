@@ -17,7 +17,8 @@ import java.util.Map;
  * <ol>
  *   <li><b>用户浏览器</b>——当前线程挂着 {@link DelegationContext}（即正在一次委派任务里）时，
  *       登记需求并挂起，等 /api/chat/task/{id}/facts 把结果送回来。配额算在用户自己的出口 IP 上。</li>
- *   <li><b>服务器自己抓</b>——委派没开、等超时（单轮 5 秒）、或该键已被判定为"上游没有"时，
+ *   <li><b>服务器自己抓</b>——委派没开、等超时（预算见 {@code maa.delegation.per-call-budget-ms}）、
+ *       或该键已被判定为"上游没有"时，
  *       落到 {@link ModrinthFetcher}：令牌闸排队 + 429 指数退避 + Caffeine 缓存。</li>
  *   <li><b>缓存</b>——第 2 档内部的事，不在这里体现。</li>
  * </ol>
@@ -45,7 +46,7 @@ public class ModrinthApiClient {
      * 「无法确定」异常 —— 限流 429 / 5xx / 超时重试耗尽。
      *
      * <p>语义上必须与「确定查不到」(方法返回 null) 严格区分：
-     * 前者是网络故障，后者是 Modrinth 明确告诉你没有这个版本。
+     * 前者是网络故障，后者是 Modrinth 明确返回没有这个版本。
      * 把前者当成后者会写出错误的"该模组不支持此版本"结论。
      *
      * <p>位置刻意留在门面上、不跟着出网层走：调用方有一片

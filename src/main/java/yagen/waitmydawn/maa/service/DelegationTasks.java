@@ -34,7 +34,7 @@ public class DelegationTasks {
     /** 等待浏览器回传的静默窗口：最后一个需求登记之后再安静这么久，才认定"这批要完了" */
     private static final long QUIET_WINDOW_MS = 60;
     private final boolean enabled;
-    /** 单个挂起最多等多久，超时就退回服务器自抓（用户确认：单轮 5 秒） */
+    /** 单个挂起最多等多久，超时就退回服务器自抓（取值见 maa.delegation.per-call-budget-ms） */
     private final long callBudgetMs;
     private final Cache<String, Task> tasks = Caffeine.newBuilder()
             .expireAfterWrite(20, TimeUnit.MINUTES)

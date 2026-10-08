@@ -1,6 +1,6 @@
 // 删除流程：两段式删除确认 / 批量删除模式 / 右键菜单 / 执行删除 + 后台回填 / 键盘快捷键 / 装配台入口。
 //
-// 从 index.html 的 setup 里整体搬出来的（原 1099-1376 与 openLab），逻辑原样保留。
+// 本模块只管删除相关的交互与状态：图谱数据由 graph.js 渲染，打包入口在 pack-view.js。
 //
 // ⚠️ provideDeleteContract() 必须在 setup() 里【同步】调用。
 //    Vue 的 provide 依赖"当前组件实例"，模块顶层调用拿不到实例 —— 拿不到时不报错，
@@ -13,6 +13,7 @@
 import {childrenMap, conflictIds, ctxMenu, currentView, deleteBusy, deleteConflicts, deleteDialog, deleteMarked, deleteMode, enableUserFeedbackRules, globalHighlightId, isRefreshing, isResolving, nodesMap, packData, previewData, selectedMods} from '../store.js';
 import {authHeader} from '../api.js';
 import {buildTreeData, getGraphPositions, locateTreeNode, renderGraph, repaintAllGraphNodes, toggleDeleteMark, toggleModState} from './graph.js';
+import {packStateOf} from '../utils/pack-state.js';
 import {computed, nextTick, provide} from 'vue';
 
 /** 把删除能力注入给递归树组件（TreeNode.js）。只能在 setup() 里同步调用。 */
@@ -238,6 +239,8 @@ const refreshPreviewInBackground = async () => {
         });
         const data = await res.json();
         if (!data || !data.nodes) return;
+        lastUnresolved = Array.isArray(data.unresolved) ? data.unresolved : [];
+        lastDropped = Array.isArray(data.dropped) ? data.dropped : [];
 
         // 勾选状态继承：原有节点沿用，新增节点默认勾选，已消失的忽略
         const oldNodes = nodesMap.value;
@@ -259,6 +262,8 @@ const refreshPreviewInBackground = async () => {
         selectedMods.value = nextSel;
         buildTreeData(data);
         nextTick(() => renderGraph(positions));
+        // 删除/批量删除同样要留一条版本流水（批量 = 一条，这正是产品的口径）
+        await notifyPreviewHook(data.nodes);
     } catch (e) {
         console.warn('后台依赖校验失败，保留本地结果', e);
     } finally {
@@ -291,7 +296,47 @@ window.addEventListener('keydown', onGlobalKeyDown);
 // ---------- 装配台入口 ----------
 // 放在本模块，是因为它第一件事就是 exitDeleteMode() + 清断链提示；
 // 它调用的 buildTreeData/renderGraph 来自 graph.js。将来把 lab 视图整体搬成模块时，它应该跟着走。
+//
+// 同一时刻只允许一份 preview 在飞：装配台里"加一个模组"就是重跑一次全量 preview
+// （每个新的 slug 组合都是新的解析缓存键，会真的打上游），连点几下就会同时压出几十个请求。
+// 期间到达的调用合并成一次补跑，画面最终仍是最新清单。
+let labRunning = false;
+let labQueued = false;
+
+// 预览完成后的扩展点：版本流水（"这一版改了什么"）由 pack-snapshot 注册进来。
+// 用注册回调而不是互相 import —— pack-snapshot 需要本模块的 openLab，直接互引会成环。
+let previewHook = null;
+export const setPreviewHook = (fn) => { previewHook = fn; };
+
+/** 最近一次预览的解析诊断：runLabOnce 与后台校验都会刷新它 */
+let lastUnresolved = [];
+let lastDropped = [];
+
+const notifyPreviewHook = async (nodes) => {
+    if (!previewHook) return;
+    try {
+        await previewHook({state: packStateOf(packData), nodes: nodes || [],
+            unresolved: lastUnresolved, dropped: lastDropped});
+    } catch (e) {
+        // 记流水失败不该影响看图：图谱这时已经渲染完了
+        console.warn('预览后处理失败', e);
+    }
+};
+
 export const openLab = async () => {
+    if (labRunning) { labQueued = true; return; }
+    labRunning = true;
+    try {
+        do {
+            labQueued = false;
+            await runLabOnce();
+        } while (labQueued);
+    } finally {
+        labRunning = false;
+    }
+};
+
+const runLabOnce = async () => {
     currentView.value = 'lab';
     isResolving.value = true;
     // 重新进入图谱：退出删除模式并清掉上一轮的断链提示
@@ -304,10 +349,21 @@ export const openLab = async () => {
             body: JSON.stringify({...packData, excludeUserFeedbackRules: !enableUserFeedbackRules.value})
         });
         const data = await res.json();
+        // 环境非法 / 参数缺失时后端会回 400 + JSON error：直接显示原因，
+        // 否则用户只看到"图谱没出来"，不知道是环境选错了
+        if (!res.ok || data.error) {
+            alert(data.error || ('生成图谱失败（HTTP ' + res.status + '）'));
+            return;
+        }
+        lastUnresolved = Array.isArray(data.unresolved) ? data.unresolved : [];
+        lastDropped = Array.isArray(data.dropped) ? data.dropped : [];
         previewData.value = data;
         selectedMods.value = new Set(data.nodes.map(n => n.id));
         buildTreeData(data);
         setTimeout(() => renderGraph(), 100);
+        await notifyPreviewHook(data.nodes);
+    } catch (e) {
+        alert('生成图谱失败：' + (e.message || '未知错误'));
     } finally {
         isResolving.value = false;
     }

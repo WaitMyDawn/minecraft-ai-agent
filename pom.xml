@@ -166,6 +166,20 @@
                             <skip>${skipFrontendChecks}</skip>
                         </configuration>
                     </execution>
+                    <!-- 整合包版本（快照）状态层检查：真实事故是"每个『查看图谱』按钮都指向最新一版"，
+                          界面能显示 #hash 但点击读不到状态 → 悄悄退化成"打开当前图谱"。
+                          结构检查查不出（import 都在），因为它错在数据上，所以要单独钉住。 -->
+                    <execution>
+                        <id>frontend-pack-version-check</id>
+                        <phase>test</phase>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <executable>node</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments><argument>eval/fe-pack-version-check.mjs</argument></arguments>
+                            <skip>${skipFrontendChecks}</skip>
+                        </configuration>
+                    </execution>
                 </executions>
             </plugin>
         </plugins>

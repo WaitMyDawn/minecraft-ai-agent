@@ -21,7 +21,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 「这条数据是不是你的」的测试。
+ * 数据归属校验的测试：不属于自己的数据一律当作不存在。
  *
  * <p>为什么专门测它：对话 id / 偏好 id 都是**自增数字**，能枚举。少了归属校验，
  * 任何一个登录用户换个 id 就能读别人的对话历史、往别人的对话里写消息、删别人的偏好 ——
@@ -57,7 +57,7 @@ class ConversationOwnershipTest {
         when(userController.validateToken(TOKEN_B)).thenReturn(USER_B);
 
         controller = new PreferencesController(mock(UserRepository.class), userController,
-                catRepo, modRepo, blacklistRepo, convRepo, msgRepo, null);
+                catRepo, modRepo, blacklistRepo, convRepo, msgRepo, null, new tools.jackson.databind.ObjectMapper());
     }
 
     /** 一个属于 1 号用户的对话 */

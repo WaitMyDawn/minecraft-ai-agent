@@ -541,7 +541,7 @@ public class UserController {
      * <p>为什么要有：前端 {@code logout} 只删了 localStorage，token 本身还是有效的 ——
      * 网络抓包、共用电脑、浏览器同步都会把它带出去。没有这个端点，"退出登录"是假的。
      *
-     * <p>token 缺失也返回 ok：调用方唯一想听的就是"你已经退出了"，为此报错没有意义。
+     * <p>token 缺失也返回 ok：调用方唯一期望的结果就是"已退出"，为此报错没有意义。
      */
     @PostMapping("/logout")
     public ResponseEntity<Map<String, Object>> logout(

@@ -238,7 +238,7 @@ public class LoaderVersionService {
         }
     }
 
-    /** 这个环境我们有没有维护？（识别用户点名环境后，用它决定要不要真的切） */
+    /** 该环境是否有维护的加载器版本（识别用户点名环境后，用它决定要不要真的切） */
     public boolean supports(String loader, String mcVersion) {
         try {
             resolve(loader, mcVersion);

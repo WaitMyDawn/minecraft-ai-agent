@@ -26,7 +26,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@code POST /api/chat/task/{id}/facts} 把结果送回来。挂起是虚拟线程的 park，
  * 一次构筑挂几十上百个也不占 OS 线程。
  *
- * <p><b>超时即自抓</b>：每个挂起最多等 {@code budgetMs}（默认 5 秒）。等不到就返回
+ * <p><b>超时即自抓</b>：每个挂起最多等 {@code budgetMs}（取值见
+ * {@code maa.delegation.per-call-budget-ms}）。等不到就返回
  * {@link Outcome#TIMEOUT}，调用方照常自己发请求。所以"浏览器没来"不会拖死流程，
  * 只会退化成改造前的行为——这也是这条链路上唯一的兜底，必须有。
  *
@@ -77,7 +78,7 @@ public final class DelegationContext {
     public enum Outcome {
         /** 客户端带回了数据 */
         GOT,
-        /** 客户端明确告诉我们上游没有这个东西（≠ 没抓到） */
+        /** 客户端明确回报上游没有这个东西（≠ 没抓到） */
         ABSENT,
         /** 等超时了，调用方自己抓 */
         TIMEOUT,

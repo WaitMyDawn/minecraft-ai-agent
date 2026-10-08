@@ -169,7 +169,7 @@ public class MailService {
     public Quota quota() {
         if ("resend".equals(provider)) {
             // Resend 没有额度查询接口。明确说出来，而不是让运维以为"查不到 = 没配好"。
-            // 真实额度只能从发信响应看：发满了它返回 429，我们把它翻译成"额度用完"。
+            // 真实额度只能从发信响应看：发满了它返回 429，由服务端翻译成"额度用完"。
             return new Quota("resend", null,
                     "Resend 不提供额度查询接口；发满免费额度时发信会返回 429（会被翻译成「额度已用完」）",
                     System.currentTimeMillis());

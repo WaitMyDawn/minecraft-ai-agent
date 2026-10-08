@@ -14,7 +14,7 @@ import tools.jackson.databind.node.ObjectNode;
  * Brevo（原 Sendinblue）发信客户端：HTTP API 发信 + 查额度。
  *
  * <p>为什么用 API 而不是把 Brevo 也当 SMTP：<b>SMTP 查不到剩余额度</b>，而免费额度（300 封/天）
- * 用完之后再发就会被拒 —— 我们要的是"提前知道还剩多少、用完了干脆不发并给出明确提示"，
+ * 用完之后再发就会被拒 —— 这里需要的是"提前知道还剩多少、用完了干脆不发并给出明确提示"，
  * 这只有 API 能做到（{@code GET /v3/account} 里的 {@code plan[].credits}）。
  *
  * <p>复用项目里那把 {@code RestClient}（8 秒连接 / 15 秒读取超时）：HTTP 客户端统一走同一套超时，

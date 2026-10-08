@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import yagen.waitmydawn.maa.service.*;
 import yagen.waitmydawn.maa.model.KnowledgeRule;
+import yagen.waitmydawn.maa.model.ResolutionResult;
 import yagen.waitmydawn.maa.runtime.ScopedExecutors;
 
 import java.io.ByteArrayOutputStream;
@@ -20,6 +21,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -39,6 +41,17 @@ public class ModpackController {
     private final PackManifestService manifestService;
     /** 判定"这次要不要参考用户反馈规则"：口径只此一处，依赖穿透与预览共用 */
     private final UserController userController;
+
+    /**
+     * 正在跑的"侦测/建池"任务：key = 登录用户 id，未登录用前端传的 clientId。
+     *
+     * <p>值是取消标志：前端把按钮变成"取消"后置位，建池循环在每页之间检查它并提前收工。
+     * 条目在任务结束时移除，所以同一用户随后还能再侦测。
+     *
+     * <p>为什么服务端也要拦：前端禁用按钮只挡得住当前标签页。连点（同一 tick 内发出多个请求）、
+     * 多标签页、刷新后重发都会绕过前端守卫，而每次建池都要往上挖几十页 Modrinth。
+     */
+    private final Map<String, AtomicBoolean> suggestTasks = new ConcurrentHashMap<>();
 
     public ModpackController(DependencyEngine dependencyEngine, ModrinthApiClient apiClient, ObjectMapper objectMapper,
                              KnowledgeDb knowledgeDb, RestClient restClient, MrpackParser mrpackParser,
@@ -91,9 +104,11 @@ public class ModpackController {
         public List<String> categories;
         public int minDownloads;
         public int maxDownloads;
-        public int page; // 新增：当前页码
+        public int page; // 当前页码
         public String sortMethod; // "relevance" 顺序, "random" 随机
         public List<String> currentSlugs; // 用于排重
+        /** 未登录时的建池任务归属键（前端用每标签页一个的 sessionUuid），避免两个匿名请求互相挡 */
+        public String clientId;
     }
 
     @PostMapping("/preview")
@@ -102,23 +117,44 @@ public class ModpackController {
             @RequestBody ModpackRequest request) {
         long startTime = System.currentTimeMillis();
 
+        // 环境与清单先归一化。空清单是**合法输入**（"生成空图谱"就是拿一张空图进去手动拼模组），
+        // 但环境缺失或不受支持必须当场报错：否则会安静地返回一张空图，用户以为创建成功了。
+        if (request.loader == null || request.loader.isBlank()) {
+            return jsonBadRequest("缺少加载器（支持 neoforge / forge / fabric）");
+        }
+        String loader = request.loader.trim().toLowerCase();
+        String mcVersion = request.mcVersion == null ? "" : request.mcVersion.trim();
+        if (mcVersion.isEmpty()) {
+            return jsonBadRequest("缺少游戏版本");
+        }
+        String envError = validatePackEnvironment(loader, mcVersion);
+        if (envError != null) {
+            return jsonBadRequest(envError);
+        }
+        List<String> excludedSlugs = request.excludedSlugs == null ? List.of() : request.excludedSlugs;
+        // 手写为 null 时按空清单处理：新建的空图谱、以及只带 excludedSlugs 的调用方都会走到这里
+        Set<String> initialSlugs = request.modSlugs == null
+                ? new LinkedHashSet<>() : new LinkedHashSet<>(request.modSlugs);
+
         ObjectNode responseJson = objectMapper.createObjectNode();
         ArrayNode nodesArray = responseJson.putArray("nodes");
         ArrayNode edgesArray = responseJson.putArray("edges");
 
-        String loadersParam = "[\"" + request.loader.toLowerCase() + "\"]";
+        String loadersParam = "[\"" + loader + "\"]";
         // 「参考用户反馈规则」的开关由服务端按登录用户判定，不再看请求体（见 ModpackRequest 的注释）
         KnowledgeRule.SourceType exclude = userController.excludesUserFeedbackRules(token)
                 ? KnowledgeRule.SourceType.USER_FEEDBACK : null;
         List<KnowledgeRule> activeRules = knowledgeDb.getActiveRules(
-                request.loader.toLowerCase() + "-" + request.mcVersion, exclude);
+                loader + "-" + mcVersion, exclude);
 
         // 🔥 核心修复：就算是从手动添加来的孤儿模组，这里也要走一次深度依赖穿透，把它们的前置全部挖出来！
-        Set<String> initialSlugs = new LinkedHashSet<>(request.modSlugs);
         // ⚠️ 必须和上面 activeRules 用同一份规则集：引擎决定"谁进图"（节点），
         //    下面的循环决定"画哪条线"，两边分裂就会出现"有节点、没连线"
-        Set<String> fullResolvedSlugs = dependencyEngine.resolveFullDependencies(
-                initialSlugs, request.loader.toLowerCase(), request.mcVersion, exclude);
+        // 用带诊断的那份解析结果（与 resolveFullDependencies 命中同一个缓存条目，不额外出网）：
+        // 前端要靠 unresolved/dropped 告诉用户"这个 slug 在当前环境找不到"，而不是让它默默消失。
+        ResolutionResult resolution = dependencyEngine.resolveCachedResult(
+                initialSlugs, loader, mcVersion, exclude);
+        Set<String> fullResolvedSlugs = new LinkedHashSet<>(resolution.graph().getOrderedSlugs());
 
         // 🚀 批量预取：把整张图的项目元数据一次取回（100 个/请求），下面的逐节点循环随即变成缓存命中。
         // 依赖引擎 BFS 已经把大部分灌进缓存了，这里只补它没覆盖到的（例如用户手动加的孤立模组）。
@@ -141,7 +177,7 @@ public class ModpackController {
                         String projectId = projectInfo.path("id").asText();
                         if (!processedProjectIds.add(projectId)) return;
 
-                        JsonNode latestVersion = apiClient.getLatestVersion(projectId, request.mcVersion, loadersParam);
+                        JsonNode latestVersion = apiClient.getLatestVersion(projectId, mcVersion, loadersParam);
                         if (latestVersion == null || !latestVersion.has("version_number") || !latestVersion.has("files"))
                             return;
 
@@ -198,10 +234,27 @@ public class ModpackController {
 
         // 🗑️ 应用用户在图谱里的显式删除，并回填断链诊断（P2）
         ArrayNode conflictsArray = responseJson.putArray("conflicts");
-        int conflictCount = applyExcludedSlugs(nodesArray, edgesArray, conflictsArray, request.excludedSlugs);
-        responseJson.put("excludedCount", request.excludedSlugs == null ? 0 : request.excludedSlugs.size());
+        int conflictCount = applyExcludedSlugs(nodesArray, edgesArray, conflictsArray, excludedSlugs);
+        responseJson.put("excludedCount", excludedSlugs.size());
         if (conflictCount > 0) {
             System.out.println("🗑️ 删除诊断: " + conflictCount + " 项保留模组缺少必需前置（已被用户删除）");
+        }
+
+        // 解析诊断：哪些请求的模组/前置没解析出来、哪些被剔除、为什么
+        ArrayNode unresolvedArray = responseJson.putArray("unresolved");
+        for (ResolutionResult.Unresolved u : resolution.unresolved()) {
+            ObjectNode item = unresolvedArray.addObject();
+            item.put("slug", u.slug());
+            item.put("requiredBy", u.requiredBy() == null ? "" : u.requiredBy());
+            item.put("reason", u.reason().name());
+            item.put("detail", u.detail() == null ? "" : u.detail());
+        }
+        ArrayNode droppedArray = responseJson.putArray("dropped");
+        for (ResolutionResult.Dropped d : resolution.dropped()) {
+            ObjectNode item = droppedArray.addObject();
+            item.put("slug", d.slug());
+            item.put("reason", d.reason().name());
+            item.put("detail", d.detail() == null ? "" : d.detail());
         }
 
         responseJson.put("timeMs", System.currentTimeMillis() - startTime);
@@ -221,7 +274,7 @@ public class ModpackController {
             nodeFiles.add(n.path("fileInfo"));
         }
         String manifestId = manifestService.register(nodeIds, nodeFiles,
-                request.loader.toLowerCase(), request.mcVersion);
+                loader, mcVersion);
         responseJson.put("manifestId", manifestId);
         responseJson.put("manifestSize", manifestService.sizeOf(manifestId));
         return ResponseEntity.ok(responseJson);
@@ -317,6 +370,43 @@ public class ModpackController {
     }
 
     /**
+     * 预览/打包共用的环境校验。
+     *
+     * <p>以前传什么环境都照单全收：{@code neoforge-9.9.9} 会安静地返回一张空图，
+     * 用户以为创建成功，之后每次都拿不到任何模组。现在按加载器版本表判定，
+     * 非法环境直接 400 并把可选值写进消息里。
+     *
+     * <p>版本表尚未加载（快照为空）时只校验加载器名：启动瞬间或文件缺失时
+     * 不该把所有请求都判死，宁可放行让上游自己暴露问题。
+     *
+     * @return null 表示环境合法；否则是给用户看的原因
+     */
+    private String validatePackEnvironment(String loader, String mcVersion) {
+        List<String> supported = loaderVersionService.supportedLoaders();
+        if (!supported.isEmpty() && !supported.contains(loader)) {
+            return "不支持的加载器: " + loader + "（支持 " + String.join(" / ", supported) + "）";
+        }
+        List<String> versions = loaderVersionService.availableMcVersions(loader);
+        if (!versions.isEmpty() && !versions.contains(mcVersion)) {
+            List<String> sample = versions.size() <= 6 ? versions : versions.subList(0, 6);
+            String tail = versions.size() > sample.size() ? " …" : "";
+            return "没有 " + loader + " 在 MC " + mcVersion + " 下维护的版本（可选：" 
+                    + String.join(", ", sample) + tail + "）";
+        }
+        return null;
+    }
+
+    /**
+     * JSON 形态的 400：{@code /preview} 的调用方（前端）一律 {@code res.json()}，
+     * 返回 text/plain 会让它解析失败，只能看到"未知错误"。
+     */
+    private ResponseEntity<JsonNode> jsonBadRequest(String message) {
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("error", message);
+        return ResponseEntity.badRequest().body(body);
+    }
+
+    /**
      * 只读：当前生效的加载器版本表。
      * 排查"某个 MC 版本为什么打包失败"时先看这里（表里没有 = 上游没有可用版本，或键名不一致）。
      */
@@ -400,7 +490,16 @@ public class ModpackController {
 
     // 🔥 智能衍生过滤引擎 (Python 爬虫建池算法 Java 版)
     @PostMapping("/suggest")
-    public ResponseEntity<List<JsonNode>> suggestMods(@RequestBody SuggestionRequest req) {
+    public ResponseEntity<Map<String, Object>> suggestMods(
+            @RequestHeader(value = "X-Auth-Token", required = false) String token,
+            @RequestBody SuggestionRequest req) {
+        String taskKey = suggestTaskKey(token, req);
+        AtomicBoolean cancelFlag = new AtomicBoolean(false);
+        // 同一用户已有建池在跑：直接拒绝，不启动第二个（返回 409 而不是排队，前端据此把按钮切成取消态）
+        if (suggestTasks.putIfAbsent(taskKey, cancelFlag) != null) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("error", "已有一个侦测任务在进行中", "busy", true));
+        }
         try {
             List<String> facets = new ArrayList<>();
             facets.add("[\"project_type:mod\"]");
@@ -424,7 +523,7 @@ public class ModpackController {
             int itemsPerPage = 15; // 按照 3x5=15 的标准
 
             // 如果是顺序翻页，目标就是要搜集到足够填充当前页的数量
-            // 例如：前端请求第 2 页 (下标为2，即第3页)，我们需要 3 * 15 = 45 个有效模组
+            // 例如：前端请求第 2 页 (下标为2，即第3页)，需要 3 * 15 = 45 个有效模组
             int targetTotalNeeded = isRandom ? itemsPerPage : (req.page + 1) * itemsPerPage;
 
             // 最多往深处挖多少页？随机盲抽挖 30 页(3000个)，顺序查最多挖 60 页(6000个)防止死循环
@@ -434,7 +533,14 @@ public class ModpackController {
             System.out.println("====== 启动模组过滤池建造引擎 ======");
             System.out.println("目标页码: " + req.page + " | 需要有效模组数: " + targetTotalNeeded);
 
+            boolean cancelled = false;
             for (int i = 0; i < maxApiRequests; i++) {
+                // 取消检查放在每页开头：取消后不再发起新的上游请求，直接把已经建好的池子交出去
+                if (cancelFlag.get()) {
+                    cancelled = true;
+                    System.out.println("侦测已被用户取消，返回已建成的池子（" + validPool.size() + " 条）");
+                    break;
+                }
                 int currentOffset = i * apiLimit;
 
                 // 旧实现是 Thread.sleep(100) 的"礼貌休眠"——既挡不住 429，也不能跨调用点生效。
@@ -474,7 +580,7 @@ public class ModpackController {
 
             List<JsonNode> finalResults = new ArrayList<>();
             if (isRandom) {
-                // 🎲 随机模式：在刚刚建好的庞大合格池子里，尽情洗牌，切出 15 个！
+                // 🎲 随机模式：在已建好的合格池子里洗牌，切出 15 个
                 Collections.shuffle(validPool);
                 finalResults = validPool.subList(0, Math.min(itemsPerPage, validPool.size()));
             } else {
@@ -485,12 +591,52 @@ public class ModpackController {
                 }
             }
 
-            return ResponseEntity.ok(finalResults);
+            Map<String, Object> ok = new LinkedHashMap<>();
+            ok.put("mods", finalResults);
+            ok.put("cancelled", cancelled);
+            ok.put("poolSize", validPool.size());
+            return ResponseEntity.ok(ok);
 
         } catch (Exception e) {
             e.printStackTrace();
             return ResponseEntity.status(500).build();
+        } finally {
+            // 无论正常结束、被取消还是抛异常都要摘牌：否则这个用户以后再点"开始侦测"会一直被 409 挡住
+            suggestTasks.remove(taskKey, cancelFlag);
         }
+    }
+
+    /**
+     * 取消正在进行的建池。没有在跑的任务也算成功（前端可能刚好错过了窗口）。
+     */
+    @PostMapping("/suggest/cancel")
+    public ResponseEntity<Map<String, Object>> cancelSuggest(
+            @RequestHeader(value = "X-Auth-Token", required = false) String token,
+            @RequestBody(required = false) SuggestionRequest req) {
+        AtomicBoolean flag = suggestTasks.get(suggestTaskKey(token, req));
+        if (flag == null) return ResponseEntity.ok(Map.of("ok", true, "running", false));
+        flag.set(true);
+        return ResponseEntity.ok(Map.of("ok", true, "running", true));
+    }
+
+    /**
+     * 建池任务的归属键：登录用账号，未登录退回前端生成的 clientId（每个标签页一个）。
+     *
+     * <p>未登录且没带 clientId 时落到同一个 "anon" 桶里：这时宁可让两个匿名用户相互挡一次
+     * （点一下会被告知"已有任务在进行"），也不要放它们同时挖几十页上游。
+     */
+    String suggestTaskKey(String token, SuggestionRequest req) {
+        // 空 token 直接走匿名分支：不要拿它去问会话表（也避免"0 号用户"这种哨兵值混进键里）
+        if (token != null && !token.isBlank()) {
+            try {
+                Long uid = userController.validateToken(token);
+                if (uid != null && uid > 0) return "u" + uid;
+            } catch (Exception e) {
+                // token 无效就当匿名处理，不因为鉴权异常把建池打成 500
+            }
+        }
+        String clientId = req == null || req.clientId == null ? "" : req.clientId.replaceAll("[^A-Za-z0-9._-]", "");
+        return clientId.isEmpty() ? "anon" : "a" + (clientId.length() > 32 ? clientId.substring(0, 32) : clientId);
     }
 
     /** 解析上传的 .mrpack 文件, 返回其中的 slug 列表 */

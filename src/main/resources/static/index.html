@@ -301,11 +301,16 @@
                     </ul>
                 </div>
 
-                <div v-if="msg.role === 'ai' && msg.hasData" class="mt-3">
-                    <button @click="openLab"
-                            class="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-6 rounded-lg shadow transition flex items-center gap-2">
-                        <span>🔍</span> 查看当前构筑图谱
+                <div v-if="msg.role === 'ai' && msg.hasData" class="mt-3 flex items-center gap-2 flex-wrap">
+                    <!-- 每条带版本的消息各自指向"那一版"：点开 = 把工作区切到那一版继续做 -->
+                    <button @click="switchToVersion(msg)"
+                            :title="msg.snapshotId ? '打开这一版（会切换到该版本继续编辑）' : '旧记录：打开当前图谱'"
+                            class="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-6 rounded-lg shadow transition flex items-center gap-2"
+                            :class="msg.snapshotId && msg.snapshotId === latestSnapshotId ? 'ring-2 ring-indigo-300' : ''">
+                        <span>🔍</span> 查看图谱<span v-if="msg.snapshotId" class="font-mono text-xs opacity-90">#{{ msg.snapshotId }}</span>
                     </button>
+                    <span v-if="msg.snapshotId && msg.snapshotId === latestSnapshotId"
+                          class="text-xs text-indigo-500 font-bold">当前工作版本</span>
                 </div>
             </div>
 
@@ -349,6 +354,13 @@
                 </button>
                 <input type="file" ref="mrpackUpload" accept=".mrpack" @change="onMrpackUpload" class="hidden">
 
+                <!-- 🧱 生成空图谱：不调用 AI，先定名称与环境，再进装配台手动拼（需登录，会记进对话历史） -->
+                <button @click="openEmptyGraphModal" :disabled="isLoading"
+                        class="bg-slate-200 hover:bg-indigo-100 disabled:opacity-40 px-3 py-3 rounded-lg transition text-sm font-bold text-slate-700 whitespace-nowrap"
+                        title="不调用 AI：手动拼一个整合包">
+                    🧱 生成空图谱
+                </button>
+
                 <input v-model="userInput" @keyup.enter="sendMessage" type="text"
                        class="flex-1 border-2 border-slate-200 rounded-lg px-4 py-3 focus:outline-none focus:border-indigo-500 transition"
                        placeholder="上传mrpack展开构筑图谱，或输入指令..." :disabled="isLoading">
@@ -377,6 +389,18 @@
             <div class="flex items-center gap-4">
                 <span class="text-slate-400 font-mono text-sm"
                       v-if="previewData">耗时: {{ (previewData.timeMs / 1000).toFixed(2) }}s</span>
+                <!-- 当前整合包：名称可直接改（改名也是一版，会记进对话流水） -->
+                <span class="flex items-center gap-1.5 text-sm">
+                    <span class="text-slate-400 text-xs">整合包</span>
+                    <input v-if="editingPackName" v-model="packNameDraft" @keyup.enter="commitPackName"
+                           @blur="commitPackName" ref="packNameInput" autofocus
+                           class="bg-slate-700 text-white rounded px-2 py-0.5 text-sm font-bold w-48 outline-none focus:ring-2 focus:ring-indigo-400">
+                    <button v-else @click="startEditPackName" title="点击修改整合包名称"
+                            class="font-bold text-white hover:text-indigo-300 transition">{{ packData.name }}</button>
+                    <span class="text-xs text-slate-400 font-mono">{{ packData.loader }} {{ packData.mcVersion }}</span>
+                    <span v-if="latestSnapshotId" class="text-xs text-slate-500 font-mono">#{{ latestSnapshotId }}</span>
+                </span>
+                <span v-if="labChangeNote" class="text-xs text-amber-300/90 font-mono">{{ labChangeNote }}</span>
                 <span v-if="isRefreshing" class="text-amber-300 font-mono text-xs flex items-center gap-1.5">
                     <span class="w-3 h-3 border-2 border-amber-300 border-t-transparent rounded-full animate-spin inline-block"></span>
                     后台校验依赖…
@@ -449,16 +473,38 @@
                         <button @click="directAddMod" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 rounded text-xs font-bold transition">添加</button>
                         <button @click="openSuggestBoard" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 rounded text-xs font-bold transition whitespace-nowrap">💡 智能抽卡</button>
                     </div>
+                    <!-- 解析诊断：加错的 slug 以前会"默默消失"，这里把原因写在输入框下面 -->
+                    <div v-if="unresolvedRows.length" class="mt-1 space-y-0.5">
+                        <p v-for="row in unresolvedRows" :key="row.slug" class="text-[11px] leading-snug"
+                           :class="row.hard ? 'text-red-500' : 'text-amber-600'">
+                            {{ row.hard ? '⚠ 当前环境找不到 ' : '⏳ 暂时没查到 ' }}<b class="font-mono">{{ row.slug }}</b> —— {{ row.reason }}
+                        </p>
+                    </div>
                 </div>
                 <div class="flex-1 overflow-y-auto p-4" id="tree-container">
                     <tree-node v-for="node in filteredRootNodes" :key="node.id" :node="node" :path="node.id"
                                :visited="[]"></tree-node>
+                    <!-- 空图谱/删空之后的引导：不写这句，用户看到的就是一片空白，会以为坏了 -->
+                    <div v-if="filteredRootNodes.length === 0"
+                         class="text-xs text-slate-400 leading-relaxed p-3 border border-dashed border-slate-200 rounded-lg">
+                        <b class="text-slate-500">还没有模组</b><br>
+                        在上面输入 slug 后点「添加」，或点「💡 智能抽卡」批量挑选。<br>
+                        加进来之后会自动补齐前置依赖并画出连线。
+                    </div>
                 </div>
             </div>
 
             <!-- 右侧：DAG 图谱 -->
             <div class="flex-1 relative bg-[#f8fafc]">
                 <div id="network-canvas" class="absolute inset-0 outline-none"></div>
+                <div v-if="previewData && previewData.nodes.length === 0"
+                     class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div class="text-center text-slate-400 text-sm leading-relaxed">
+                        <div class="text-3xl mb-2">🗺️</div>
+                        空图谱已就绪<br>
+                        <span class="text-xs">用左侧输入框或「💡 智能抽卡」往里加模组</span>
+                    </div>
+                </div>
                 <!-- 🖱️ 右键菜单（在 DAG 节点上右键弹出） -->
                 <div v-if="ctxMenu.visible"
                      :style="{left: ctxMenu.x + 'px', top: ctxMenu.y + 'px'}"
@@ -745,7 +791,7 @@
         </div>
     </div>
 
-    <!-- 📶 注册前的知情同意：构筑时的 Modrinth 取数由你的浏览器直连（勾选后才能注册） -->
+    <!-- 📶 注册前的知情同意：构筑时的 Modrinth 取数由浏览器直连（勾选后才能注册） -->
     <div v-if="showRegConsent"
          class="fixed inset-0 z-[90] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
         <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6">
@@ -770,6 +816,58 @@
                         class="px-5 py-2 rounded-lg font-bold bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white shadow-md transition">
                     {{ authLoading ? '注册中...' : '同意并注册' }}
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🧱 生成空图谱：名称 + 加载器 + 版本；确认后等价于"在对话里说一句生成空图谱" -->
+    <div v-if="showEmptyGraphModal"
+         class="fixed inset-0 z-[80] bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-[420px] max-w-full p-6">
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="text-lg font-bold text-slate-800">🧱 生成空图谱</h3>
+                <button @click="closeEmptyGraphModal"
+                        class="text-slate-400 hover:text-red-500 text-2xl leading-none">&times;</button>
+            </div>
+            <p class="text-xs text-slate-500 mb-4 leading-relaxed">
+                不调用 AI，直接开一张空图手动拼整合包：填好名称与环境后进入装配台，
+                用左侧输入框加模组、或用「💡 智能抽卡」批量挑；依赖补全与冲突校验照样生效。
+                <br>（会记进当前对话历史，之后可以继续对话调优）
+            </p>
+            <div class="space-y-3">
+                <div>
+                    <label class="text-sm font-bold text-slate-700 mb-1 block">整合包名称</label>
+                    <input v-model="emptyGraphForm.name" @keyup.enter="confirmEmptyGraph"
+                           placeholder="例如 铁魔法冒险纪"
+                           class="w-full border rounded px-3 py-2 text-sm outline-none focus:border-indigo-500">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-sm font-bold text-slate-700 mb-1 block">加载器</label>
+                        <select v-model="emptyGraphForm.loader" @change="onEmptyGraphLoaderChange"
+                                class="w-full border rounded px-3 py-2 text-sm outline-none focus:border-indigo-500">
+                            <option v-for="l in Object.keys(emptyGraphEnvs)" :value="l" :key="l">{{ l }}</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-sm font-bold text-slate-700 mb-1 block">游戏版本</label>
+                        <select v-model="emptyGraphForm.version"
+                                class="w-full border rounded px-3 py-2 text-sm outline-none focus:border-indigo-500">
+                            <option v-for="v in emptyGraphVersions" :value="v" :key="v">{{ v }}</option>
+                        </select>
+                    </div>
+                </div>
+                <p v-if="emptyGraphError" class="text-xs text-red-500">{{ emptyGraphError }}</p>
+                <div class="flex gap-3 pt-1">
+                    <button @click="closeEmptyGraphModal"
+                            class="flex-1 px-4 py-2 rounded-lg font-bold text-slate-600 hover:bg-slate-100 transition">
+                        取消
+                    </button>
+                    <button @click="confirmEmptyGraph" :disabled="emptyGraphBusy"
+                            class="flex-1 px-4 py-2 rounded-lg font-bold bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white transition">
+                        {{ emptyGraphBusy ? '生成中…' : '生成并进入装配台' }}
+                    </button>
+                </div>
             </div>
         </div>
     </div>
@@ -1227,8 +1325,14 @@
                         </div>
                     </div>
 
-                    <button @click="fetchSuggestions" class="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold py-2 px-8 rounded-lg shadow-sm transition">
-                        {{ isSuggesting ? '深潜网络建池搜寻中...' : '开始侦测' }}
+                    <!-- 建池期间这个按钮变成"取消"：同一时刻只允许一个建池任务（服务端也会拦） -->
+                    <button v-if="!isSuggesting" @click="fetchSuggestions"
+                            class="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold py-2 px-8 rounded-lg shadow-sm transition">
+                        开始侦测
+                    </button>
+                    <button v-else @click="cancelSuggestions"
+                            class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-8 rounded-lg shadow-sm transition animate-pulse">
+                        ✖ 取消侦测
                     </button>
                 </div>
             </div>
@@ -1291,7 +1395,7 @@
             <div class="flex-1 overflow-hidden">
                 <div class="flex items-center flex-wrap gap-1">
                     <h4 class="font-bold text-sm text-slate-800 truncate" :title="node.title">{{ node.title }}</h4>
-                    <!-- 🔥 这是你要的 Slug 超链接，点击新标签页打开，且阻止冒泡 -->
+                    <!-- slug 超链接：点击在新标签页打开并阻止冒泡，避免触发行点击 -->
                     <a :href="'https://modrinth.com/mod/' + node.slug" target="_blank" @click.stop
                        class="text-[11px] text-blue-500 hover:text-blue-700 hover:underline px-1 bg-blue-50 rounded cursor-pointer">
                         #{{ node.slug }}
@@ -1319,7 +1423,7 @@
     import TreeNodeComponent from './js/components/TreeNode.js';
     import {
         currentView, chatHistory, userInput, searchQuery, thinkTime,
-        currentThought, isLoading, isResolving, isBuilding, previewData,
+        currentThought, isLoading, isResolving, isBuilding, previewData, packData,
         selectedMods, rootTreeNodes, globalHighlightId, dbRules,
         deleteMode, deleteMarked, deleteBusy, isRefreshing, deleteConflicts,
         ctxMenu, deleteDialog, pendingMrpack, manualAddSlug, showSuggestBoard, isSuggesting,
@@ -1331,6 +1435,7 @@
         pwMsg, categoryPrefs, modPrefs, modPrefSearch, newCatPref, modPrefPage,
         modPrefJump, blacklistPage, blacklistJump, modInfoCache, manualSlugInput, addingModBySlug,
         modSlugAddMsg, editingBuildCountId, editingBuildCountVal, blacklistItems, blacklistSlugInput, blacklistMsg,
+        latestSnapshotId, labChangeNote,
         enableBlacklist, enableUserFeedbackRules, keLoaderEnvs, keLoader, keVersion, keEnv, keRelation, keModA,
         keModB, keModAInfo, keModBInfo, keModAError, keModBError, keMsg, keMsgOk,
         dbFilterLoader, dbFilterVersion, dbFilterModA, dbVoteBusy,
@@ -1353,7 +1458,9 @@
     } from './js/features/prefs.js';
     import {filteredRootNodes} from './js/features/graph.js';
     import {acceptCascade, acceptPrerequisites, acceptSeedOnly, closeDeleteDialog, confirmBatchDelete, conflictSummary, ctxDelete, ctxLocate, ctxMenuLabel, ctxOpenModrinth, enterDeleteMode, exitDeleteMode, idLabel, openLab, provideDeleteContract, seedLabels, stillNeeded} from './js/features/delete-flow.js';
-    import {confirmAddSuggestedMods, directAddMod, fetchSuggestions, jumpToPage, openSuggestBoard, openSuggestBoardForPref, resetSuggestPage, suggestPageDown, suggestPageUp, toggleSuggestCategory, toggleSuggestSelection} from './js/features/gacha.js';
+    import {closeEmptyGraphModal, confirmEmptyGraph, emptyGraphBusy, emptyGraphEnvs, emptyGraphError, emptyGraphForm, emptyGraphVersions, onEmptyGraphLoaderChange, openEmptyGraphModal, showEmptyGraphModal} from './js/features/empty-graph.js';
+    import {commitPackName, editingPackName, packNameDraft, startEditPackName, switchToVersion, unresolvedRows} from './js/features/pack-snapshot.js';
+    import {cancelSuggestions, confirmAddSuggestedMods, directAddMod, fetchSuggestions, jumpToPage, openSuggestBoard, openSuggestBoardForPref, resetSuggestPage, suggestPageDown, suggestPageUp, toggleSuggestCategory, toggleSuggestSelection} from './js/features/gacha.js';
     import {buildPack, dbLoaderOptions, dbVersionOptions, groupModAStyle, groupState, groupedDbData, openDbView, resetDbFilters, ruleStyle} from './js/features/pack-view.js';
     import {abortThinking, onMrpackUpload, sendMessage} from './js/features/chat.js';
 
@@ -1385,7 +1492,15 @@
                 pageJumpInput,
                 sendMessage, openLab, buildPack, openDbView, abortThinking, onMrpackUpload, pendingMrpack,
                 directAddMod, openSuggestBoard, openSuggestBoardForPref, suggestMode, toggleSuggestSelection, fetchSuggestions, confirmAddSuggestedMods,
+                cancelSuggestions,
                 jumpToPage, toggleSuggestCategory,suggestPageUp,suggestPageDown,resetSuggestPage,
+                // 🧱 生成空图谱（不调用 AI 的手动建包入口）
+                showEmptyGraphModal, emptyGraphForm, emptyGraphEnvs, emptyGraphVersions,
+                emptyGraphError, emptyGraphBusy, openEmptyGraphModal, closeEmptyGraphModal,
+                onEmptyGraphLoaderChange, confirmEmptyGraph,
+                // 🧾 整合包版本：当前版本号 / 变更横幅 / 名称编辑 / 历史版本切换 / 解析诊断
+                latestSnapshotId, labChangeNote, unresolvedRows, switchToVersion,
+                editingPackName, packNameDraft, startEditPackName, commitPackName, packData,
                 // 🔐 auth
                 showAuthModal, authMode, authForm, authError, authSuccess, authLoading, authUser, showSidebar,
                 doAuth, logout, authResetMode, resetForm, resetResult, bindForm, bindMsg, emailAction, pwCode,

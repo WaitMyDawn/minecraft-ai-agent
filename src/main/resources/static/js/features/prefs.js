@@ -2,6 +2,7 @@ import {computed, nextTick, watch} from 'vue';
 import {addingModBySlug, authUser, bindForm, bindMsg, blacklistItems, blacklistJump, blacklistMsg, blacklistPage, blacklistSlugInput, categoryPrefs, currentView, dbRules, dbVoteBusy, editingBuildCountId, editingBuildCountVal, emailAction, emailHintDismissed, enableBlacklist, enableUserFeedbackRules, hasApiKey, keEnv, keLoader, keLoaderEnvs, keModA, keModAError, keModAInfo, keModB, keModBError, keModBInfo, keMsg, keMsgOk, keRelation, keVersion, manualSlugInput, modInfoCache, modPrefJump, modPrefPage, modPrefs, modPrefSearch, modSlugAddMsg, newCatPref, profileApiKey, profileApiKeyMsg, profileUsername, profileWeight, pwCode, pwMsg, pwNew, pwOld, selectedSuggests, showSuggestBoard, suggestedMods, suggestMode} from '../store.js';
 import {apiFetch, authHeader} from '../api.js';
 import {startCooldown} from '../utils/code-cooldown.js';
+import {loadLoaderEnvs} from '../utils/loader-envs.js';
 
 // 设置页：个人 API Key、改密码、改用户名、偏好影响权重。
 //
@@ -399,14 +400,11 @@ export const openSuggestBoardForBlacklist = () => {
  * <p>以前这里拉的是"知识库里已出现过的 environment"，于是只有 neoforge-1.21.1 时编辑器就只能选它。
  */
 export const loadKeEnvs = async () => {
-    try {
-        const r = await fetch('/api/knowledge/feedback/loader-envs');
-        keLoaderEnvs.value = (await r.json()) || {};
-        const loaders = Object.keys(keLoaderEnvs.value);
-        if (loaders.length === 0) return;
-        if (!loaders.includes(keLoader.value)) keLoader.value = loaders[0];
-        applyKeVersionForLoader(keLoader.value);
-    } catch(e) {}
+    keLoaderEnvs.value = await loadLoaderEnvs();
+    const loaders = Object.keys(keLoaderEnvs.value);
+    if (loaders.length === 0) return;
+    if (!loaders.includes(keLoader.value)) keLoader.value = loaders[0];
+    applyKeVersionForLoader(keLoader.value);
 };
 
 /** 切加载器时把版本落到该加载器真实存在的值（优先 1.21.1，否则最新的那个） */
