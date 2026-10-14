@@ -11,7 +11,7 @@
 // 因为它就是"改 store + paintGraphNode"，和 paintGraphNode 不可分。
 
 import {childrenMap, conflictIds, ctxMenu, currentView, deleteBusy, deleteConflicts, deleteDialog, deleteMarked, deleteMode, enableUserFeedbackRules, globalHighlightId, isRefreshing, isResolving, nodesMap, packData, previewData, selectedMods} from '../store.js';
-import {authHeader} from '../api.js';
+import {apiFetch, authHeader} from '../api.js';
 import {buildTreeData, getGraphPositions, locateTreeNode, renderGraph, repaintAllGraphNodes, toggleDeleteMark, toggleModState} from './graph.js';
 import {packStateOf} from '../utils/pack-state.js';
 import {computed, nextTick, provide} from 'vue';
@@ -212,7 +212,19 @@ const performDelete = async (ids) => {
     previewData.value = {...previewData.value, nodes: remainNodes, edges: remainEdges};
     // 同步整合包清单 + 记入排除名单（后续 preview/chat 都不会把它补回来）
     packData.modSlugs = packData.modSlugs.filter(s => !removedSlugs.includes(s));
+    if (packData.importedPack) packData.importedPack.files = packData.importedPack.files.filter(f => !removedSlugs.includes(f.slug));
     packData.excludedSlugs = [...new Set([...(packData.excludedSlugs || []), ...removedSlugs])];
+    if (packData.constraints) {
+        packData.constraints.mustHave = packData.constraints.mustHave.filter(s => !removedSlugs.includes(s));
+        packData.constraints.exclude = [...new Set([...packData.constraints.exclude, ...removedSlugs])].sort();
+        if (packData.constraints.requirements) {
+            packData.constraints.requirements = packData.constraints.requirements.filter(r =>
+                !(r.kind === 'PROJECTS' && r.projects.length && r.projects.every(s => removedSlugs.includes(s)))
+                && !(r.addonCores?.length && r.addonCores.every(s => removedSlugs.includes(s))))
+                .map(r => ({...r, projects: r.projects.filter(s => !removedSlugs.includes(s)),
+                    addonCores: (r.addonCores || []).filter(s => !removedSlugs.includes(s))}));
+        }
+    }
 
     const newSelected = new Set(selectedMods.value);
     ids.forEach(id => newSelected.delete(id));
@@ -233,7 +245,7 @@ const refreshPreviewInBackground = async () => {
     if (isRefreshing.value) return;
     isRefreshing.value = true;
     try {
-        const res = await fetch('/api/modpack/preview', {
+        const res = await apiFetch('/api/modpack/preview', {
             method: 'POST', headers: {'Content-Type': 'application/json', ...authHeader()},
             body: JSON.stringify({...packData, excludeUserFeedbackRules: !enableUserFeedbackRules.value})
         });
@@ -259,6 +271,7 @@ const refreshPreviewInBackground = async () => {
 
         const positions = getGraphPositions();
         previewData.value = data;
+        if (data.assembly) packData.assembly = data.assembly;
         selectedMods.value = nextSel;
         buildTreeData(data);
         nextTick(() => renderGraph(positions));
@@ -316,7 +329,7 @@ const notifyPreviewHook = async (nodes) => {
     if (!previewHook) return;
     try {
         await previewHook({state: packStateOf(packData), nodes: nodes || [],
-            unresolved: lastUnresolved, dropped: lastDropped});
+            unresolved: lastUnresolved, dropped: lastDropped, buildReport: previewData.value?.buildReport});
     } catch (e) {
         // 记流水失败不该影响看图：图谱这时已经渲染完了
         console.warn('预览后处理失败', e);
@@ -344,7 +357,7 @@ const runLabOnce = async () => {
     deleteConflicts.value = [];
     conflictIds.value = new Set();
     try {
-        const res = await fetch('/api/modpack/preview', {
+        const res = await apiFetch('/api/modpack/preview', {
             method: 'POST', headers: {'Content-Type': 'application/json', ...authHeader()},
             body: JSON.stringify({...packData, excludeUserFeedbackRules: !enableUserFeedbackRules.value})
         });
@@ -358,6 +371,7 @@ const runLabOnce = async () => {
         lastUnresolved = Array.isArray(data.unresolved) ? data.unresolved : [];
         lastDropped = Array.isArray(data.dropped) ? data.dropped : [];
         previewData.value = data;
+        if (data.assembly) packData.assembly = data.assembly;
         selectedMods.value = new Set(data.nodes.map(n => n.id));
         buildTreeData(data);
         setTimeout(() => renderGraph(), 100);

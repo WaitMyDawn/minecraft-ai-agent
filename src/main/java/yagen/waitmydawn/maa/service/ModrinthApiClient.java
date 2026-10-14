@@ -18,7 +18,7 @@ import java.util.Map;
  *   <li><b>用户浏览器</b>——当前线程挂着 {@link DelegationContext}（即正在一次委派任务里）时，
  *       登记需求并挂起，等 /api/chat/task/{id}/facts 把结果送回来。配额算在用户自己的出口 IP 上。</li>
  *   <li><b>服务器自己抓</b>——委派没开、等超时（预算见 {@code maa.delegation.per-call-budget-ms}）、
- *       或该键已被判定为"上游没有"时，
+ *       或浏览器明确回报无法获取时，
  *       落到 {@link ModrinthFetcher}：令牌闸排队 + 429 指数退避 + Caffeine 缓存。</li>
  *   <li><b>缓存</b>——第 2 档内部的事，不在这里体现。</li>
  * </ol>
@@ -28,8 +28,8 @@ import java.util.Map;
  * 依赖列表足以让<b>别人</b>生成的整合包变成断链包，那是跨用户污染，不是"他改自己的包自伤"。
  * 所以把带缓存的出网整体下沉到 {@link ModrinthFetcher}，本层在进入它之前就分流。
  *
- * <p>委派只在任务上下文内生效：没有 {@link DelegationContext} 的调用（偏好学习、mrpack 解析、
- * 离线工具）行为与改造前完全一致。
+ * <p>网站构筑、预览、抽卡、导入、偏好和卡片查询均在委派任务中执行。
+ * 没有浏览器参与的离线工具仍使用受限流保护的服务器访问层。
  */
 @Service
 public class ModrinthApiClient {
@@ -87,6 +87,11 @@ public class ModrinthApiClient {
         if (answeredByClient(answer)) return answer.data();
         return fetcher.getLatestVersion(projectId, mcVersion, loaders);
     }
+    public JsonNode getCompatibleVersions(String projectId, String mcVersion, String loaders) {
+        DelegationContext.Answer answer = askClient(Kind.ENV_VERSIONS, envKey(projectId, mcVersion, loaders));
+        if (answeredByClient(answer)) return answer.data();
+        return fetcher.getCompatibleVersions(projectId, mcVersion, loaders);
+    }
 
     /** 按 slug 查最新兼容版本；slug 路由失败时退回 projectInfo + id 的那一步在出网层内部完成，不再二次委派 */
     public JsonNode getLatestCompatibleVersionBySlug(String slug, String mcVersion, String loader) {
@@ -127,13 +132,13 @@ public class ModrinthApiClient {
      * 本来就会各自去问浏览器、由浏览器批量——两条批量机制叠在一起只会白发一次服务器请求。
      */
     public void prefetchProjects(Collection<String> idsOrSlugs) {
-        if (DelegationContext.current() != null) return;
+        if (DelegationContext.current() != null && delegationTasks.isEnabled()) return;
         fetcher.prefetchProjects(idsOrSlugs);
     }
 
     /** 同上 */
     public void prefetchVersions(Collection<String> versionIds) {
-        if (DelegationContext.current() != null) return;
+        if (DelegationContext.current() != null && delegationTasks.isEnabled()) return;
         fetcher.prefetchVersions(versionIds);
     }
 
@@ -141,16 +146,23 @@ public class ModrinthApiClient {
      * 批量取项目元数据。
      *
      * <p>委派上下文里退回逐键处理（走委派）：批量端点属于"服务器自己抓"那一档。
-     * 这条路只有偏好学习在用，不在构筑热路径上，逐键的开销可以接受。
+     * 并发登记项目需求，由浏览器合并成批量查询，避免逐键产生 HTTP 往返。
      */
     public Map<String, JsonNode> getProjectsBatch(Collection<String> idsOrSlugs) {
         Map<String, JsonNode> out = new LinkedHashMap<>();
         if (idsOrSlugs == null || idsOrSlugs.isEmpty()) return out;
         if (DelegationContext.current() != null) {
-            for (String key : idsOrSlugs) {
-                JsonNode v = getProjectInfo(key);
-                if (v != null) out.put(key, v);
+            // 同时登记需求，使浏览器能使用批量端点；串行等待会产生每项目一次往返。
+            var results = new java.util.concurrent.ConcurrentHashMap<String, JsonNode>();
+            try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+                var futures = idsOrSlugs.stream().distinct().map(key ->
+                        yagen.waitmydawn.maa.runtime.ScopedExecutors.runAsync(() -> {
+                            JsonNode value = getProjectInfo(key);
+                            if (value != null) results.put(key, value);
+                        }, executor)).toList();
+                java.util.concurrent.CompletableFuture.allOf(futures.toArray(java.util.concurrent.CompletableFuture[]::new)).join();
             }
+            for (String key : idsOrSlugs) if (results.containsKey(key)) out.put(key, results.get(key));
             return out;
         }
         return fetcher.getProjectsBatch(idsOrSlugs);
@@ -165,12 +177,17 @@ public class ModrinthApiClient {
      *
      * @return null 表示"这次没走委派"（开关关闭 / 不在任务里），调用方应自己抓；非 null 时看
      *         {@link Outcome}：GOT 用它的数据，ABSENT 就是"上游确实没有"，
-     *         TIMEOUT / CANCELLED 仍然要自己抓。
+     *         TIMEOUT 可退回服务器取数；取消任务必须直接结束。
      */
     private DelegationContext.Answer askClient(Kind kind, String key) {
         DelegationContext ctx = DelegationContext.current();
-        if (ctx == null || !delegationTasks.isEnabled()) return null;
-        return ctx.await(kind, key, delegationTasks.callBudgetMs());
+        if (ctx == null) return null;
+        ctx.checkActive();
+        if (!delegationTasks.isEnabled()) return null;
+        ctx.checkActive();
+        DelegationContext.Answer answer = ctx.await(kind, key, delegationTasks.callBudgetMs());
+        ctx.checkActive();
+        return answer;
     }
 
     /** true 表示"这个键的结果已经由浏览器给出"（数据可能为 null = 上游确实没有） */

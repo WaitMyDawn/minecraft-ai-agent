@@ -31,7 +31,6 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = "*")
 public class HealthController {
 
     private final DbHealthProbe dbProbe;

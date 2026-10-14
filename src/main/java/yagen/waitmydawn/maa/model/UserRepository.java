@@ -22,4 +22,13 @@ public interface UserRepository extends JpaRepository<User, Long> {
             value = "SELECT MAX(CAST(accountNumber AS BIGINT)) FROM maa_user",
             nativeQuery = true)
     Long findMaxAccountNumber();
+
+    /** 只迁移读取到的旧密文；并发改 Key 后不得把新值覆盖回去。 */
+    @org.springframework.transaction.annotation.Transactional
+    @org.springframework.data.jpa.repository.Modifying
+    @org.springframework.data.jpa.repository.Query("update User u set u.encryptedApiKey = :replacement, u.revision = u.revision + 1 "
+            + "where u.id = :id and u.encryptedApiKey = :previous")
+    int upgradeApiKeyCiphertext(@org.springframework.data.repository.query.Param("id") Long id,
+            @org.springframework.data.repository.query.Param("previous") String previous,
+            @org.springframework.data.repository.query.Param("replacement") String replacement);
 }

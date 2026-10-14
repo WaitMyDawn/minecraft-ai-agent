@@ -7,7 +7,7 @@ import {authError, authForm, authLoading, authMode, authSuccess, authUser, chatH
     conversationList, currentConvId, currentView, hasApiKey, latestPackState, latestSnapshotId, packData,
     authResetMode, resetForm, resetResult, showAuthModal,
     showSidebar, thinkTime} from '../store.js';
-import {authHeader} from '../api.js';
+import {apiFetch, authHeader} from '../api.js';
 import {startCooldown} from '../utils/code-cooldown.js';
 import {applyPackState, csv, parseCsv, readPackState} from '../utils/pack-state.js';
 import {ref} from 'vue';
@@ -17,7 +17,7 @@ const savedAuth = localStorage.getItem('maa-auth');
 if (savedAuth) { try { authUser.value = JSON.parse(savedAuth); } catch(e){} }
 // 异步校验 token 有效性，同步前后端状态
 if (authUser.value && authUser.value.token) {
-    fetch('/api/user/check-token', {
+    apiFetch('/api/user/check-token', {
         headers: {'X-Auth-Token': authUser.value.token}
     }).then(r => r.json()).then(async d => {   // async：下面要 await 拉列表、恢复当前对话
         if (!d.valid) {
@@ -58,7 +58,7 @@ export const doAuth = async () => {
         : { username: authForm.username, password: authForm.password,
             email: authForm.email, code: authForm.code, acceptedDelegation: 'true' };
     try {
-        const r = await fetch(url, {  // url 已是 /api/user/login 格式，浏览器自动拼域名
+        const r = await apiFetch(url, {  // url 已是 /api/user/login 格式，浏览器自动拼域名
             method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
         });
         // 非 JSON 响应 = 后端未启动或用 file:// 打开，给明确提示
@@ -115,7 +115,7 @@ export const sendAuthCode = async () => {
     if (!email) { authError.value = '请先填写邮箱'; return; }
     authLoading.value = true;
     try {
-        const r = await fetch('/api/user/email-code', {
+        const r = await apiFetch('/api/user/email-code', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({email, purpose: 'register'})
         });
@@ -149,7 +149,7 @@ export const sendResetCode = async () => {
     if (!email) { authError.value = '请先填写邮箱'; return; }
     authLoading.value = true;
     try {
-        const r = await fetch('/api/user/email-code', {
+        const r = await apiFetch('/api/user/email-code', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({email, purpose: 'reset'})
         });
@@ -169,7 +169,7 @@ export const doResetPassword = async () => {
     }
     authLoading.value = true;
     try {
-        const r = await fetch('/api/user/reset-password', {
+        const r = await apiFetch('/api/user/reset-password', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({email: resetForm.email, code: resetForm.code,
                                   newPassword: resetForm.newPassword})
@@ -210,7 +210,7 @@ export const acceptRegConsent = async () => {
 export const loadConversations = async () => {
     if (!authUser.value) return;
     try {
-        const r = await fetch('/api/prefs/conversations', {headers: authHeader()});
+        const r = await apiFetch('/api/prefs/conversations', {headers: authHeader()});
         conversationList.value = await r.json();
     } catch(e) {}
 };
@@ -219,7 +219,7 @@ export const newConversation = async () => {
     try {
         await createConversation(null);
         // 新对话 = 新包：清空清单与删除排除名单
-        chatHistory.value = []; packData.modSlugs = []; packData.excludedSlugs = [];
+        chatHistory.value = []; packData.modSlugs = []; packData.excludedSlugs = []; packData.constraints = null; packData.importedPack = null; packData.assembly = null;
         // 版本游标也要归零：否则新对话里的第一次预览会以为"状态没变"，不记版本流水
         latestPackState.value = null;
         latestSnapshotId.value = '';
@@ -234,7 +234,7 @@ export const newConversation = async () => {
  * 会清空工作区；而"落库前发现没有会话"属于自愈路径，必须保留用户正在编辑的内容。
  */
 const createConversation = async (title) => {
-    const r = await fetch('/api/prefs/conversations', {
+    const r = await apiFetch('/api/prefs/conversations', {
         method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
         body: JSON.stringify({title: title || '新对话 ' + new Date().toLocaleDateString()})
     });
@@ -259,7 +259,7 @@ export const ensureUsableConversation = async () => {
     const recent = (conversationList.value || [])[0];   // 后端按 updatedAt 倒序返回
     if (recent) {
         try {
-            const r = await fetch('/api/prefs/conversations/' + recent.id + '/messages', {headers: authHeader()});
+            const r = await apiFetch('/api/prefs/conversations/' + recent.id + '/messages', {headers: authHeader()});
             if (r.ok) {
                 const msgs = await r.json();
                 if (Array.isArray(msgs) && msgs.length === 0) {
@@ -274,7 +274,7 @@ export const ensureUsableConversation = async () => {
 };
 export const loadConversation = async (id) => {
     try {
-        const r = await fetch('/api/prefs/conversations/' + id + '/messages', {headers: authHeader()});
+        const r = await apiFetch('/api/prefs/conversations/' + id + '/messages', {headers: authHeader()});
         if (r.status === 404) {
             // 这条对话不属于当前账号（或已被删除）：绝不能当成"空对话"继续用 —— 旧实现就是这样，
             // 之后所有保存都静默 404，用户刷新后内容全丢。清掉本地指针，让上层去建新会话。
@@ -309,6 +309,7 @@ export const loadConversation = async (id) => {
             if (lastWithPack) packData.modSlugs = parseCsv(lastWithPack.modSlugs);
             // 老消息没存排除名单：切换历史对话时不继承上一个包的删除记录
             packData.excludedSlugs = [];
+            packData.constraints = null; packData.importedPack = null; packData.assembly = null;
             latestPackState.value = null;
             latestSnapshotId.value = '';
         }
@@ -317,7 +318,7 @@ export const loadConversation = async (id) => {
     } catch(e) {}
 };
 export const deleteConversation = async (id) => {
-    await fetch('/api/prefs/conversations/' + id, {
+    await apiFetch('/api/prefs/conversations/' + id, {
         method: 'DELETE', headers: authHeader()
     });
     if (currentConvId.value === id) {
@@ -354,8 +355,11 @@ export const saveMsg = async (role, content, hasData, thinkTime, slugs, packStat
                 body.loader = packState.loader || '';
                 body.modSlugs = csv(packState.modSlugs);
                 body.excludedSlugs = csv(packState.excludedSlugs);
+                body.constraints = packState.constraints || null;
+                body.importedPack = packState.importedPack || null;
+                body.assembly = packState.assembly || null;
             }
-            const r = await fetch('/api/prefs/conversations/' + currentConvId.value + '/messages', {
+            const r = await apiFetch('/api/prefs/conversations/' + currentConvId.value + '/messages', {
                 method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
                 body: JSON.stringify(body)
             });

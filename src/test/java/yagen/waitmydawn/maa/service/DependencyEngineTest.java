@@ -31,6 +31,44 @@ import static org.mockito.Mockito.when;
  * 只能用固定元数据（stub 掉 ModrinthApiClient）来断言。
  */
 class DependencyEngineTest {
+    @Test
+    void taskFactsCannotPopulateOrConsumeSharedResolutionCache() {
+        register("a", "PA", List.of());
+        yagen.waitmydawn.maa.runtime.DelegationContext.runWith(new yagen.waitmydawn.maa.runtime.DelegationContext(),
+                () -> engine.resolveCachedResult(Set.of("a"), NEOFORGE, MC));
+        register("a", "PA", List.of("required:PB"));
+        register("b", "PB", List.of());
+        var trusted = engine.resolveCachedResult(Set.of("a"), NEOFORGE, MC);
+        assertTrue(trusted.orderedSlugs().contains("b"));
+        register("a", "PA", List.of());
+        var own = new java.util.concurrent.atomic.AtomicReference<ResolutionResult>();
+        yagen.waitmydawn.maa.runtime.DelegationContext.runWith(new yagen.waitmydawn.maa.runtime.DelegationContext(),
+                () -> own.set(engine.resolveCachedResult(Set.of("a"), NEOFORGE, MC)));
+        assertFalse(own.get().orderedSlugs().contains("b"));
+    }
+
+    @Test
+    void exactVersionTakesPriorityWhenUpstreamProvidesBothIdentifiers() {
+        register("a", "PA", List.of());
+        when(api.getLatestVersion(eq("PA"), eq(MC), anyString())).thenReturn(json(
+                "{\"id\":\"A1\",\"dependencies\":[{\"project_id\":\"PB\",\"version_id\":\"V9\",\"dependency_type\":\"required\"}]}"));
+        register("b", "PB", List.of());
+        when(api.getVersionById("V9")).thenReturn(json("{\"id\":\"V9\",\"project_id\":\"PB\","
+                + "\"game_versions\":[\"" + MC + "\"],\"loaders\":[\"" + NEOFORGE + "\"],\"dependencies\":[]}"));
+        var result = resolve("a");
+        assertTrue(result.isComplete());
+        assertEquals("V9", result.graph().selectedVersions.get("b").path("id").asText());
+        assertEquals(Set.of("b"), result.graph().getDependenciesOf("a"));
+    }
+
+    @Test
+    void upstreamIncompatibilityIsReportedForTwoRoots() {
+        register("a", "PA", List.of("incompatible:PB"));
+        register("b", "PB", List.of());
+        var result = resolve("a", "b");
+        assertFalse(result.isComplete());
+        assertTrue(result.unresolved().stream().anyMatch(u -> u.reason() == ResolutionResult.Reason.CONFLICT_BETWEEN_ROOTS));
+    }
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String MC = "1.21.1";
@@ -195,6 +233,9 @@ class DependencyEngineTest {
 
         assertTrue(r.orderedSlugs().containsAll(Set.of("a", "b")),
                 "version_id 型前置必须被解析，实际=" + r.orderedSlugs());
+        assertTrue(r.isComplete());
+        assertEquals(Set.of("b"), r.graph().getDependenciesOf("a"));
+        assertEquals("V9", r.graph().selectedVersions.get("b").path("id").asText());
     }
 
     @Test

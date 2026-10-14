@@ -17,6 +17,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>计时断言只卡下界、上界放得很宽——过紧的时间断言在 CI 上必然翻车。
  */
 class ModrinthThrottleTest {
+    @Test
+    void upstreamCooldownAppliesToAllSubsequentRequests() {
+        ModrinthThrottle throttle = new ModrinthThrottle(240, 40, 0);
+        assertTrue(throttle.acquire());
+        throttle.deferSeconds(1);
+        assertFalse(throttle.acquire());
+    }
 
     @Test
     @DisplayName("突发额度内：连续取用不等待")

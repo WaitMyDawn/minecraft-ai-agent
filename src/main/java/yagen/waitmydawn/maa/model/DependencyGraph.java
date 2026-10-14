@@ -16,6 +16,9 @@ public class DependencyGraph {
     public Set<String> allSlugs;
     public Map<String, Set<String>> dependentsOf;
     public Map<String, Set<String>> depsOf;
+    public final Map<String, tools.jackson.databind.JsonNode> selectedVersions = new ConcurrentHashMap<>();
+    public final Set<String> pinnedSlugs = ConcurrentHashMap.newKeySet();
+    public final Set<String> versionConflicts = ConcurrentHashMap.newKeySet();
 
     public DependencyGraph() {
         this.allSlugs = ConcurrentHashMap.newKeySet();
@@ -40,6 +43,6 @@ public class DependencyGraph {
 
     /** 深拷贝 allSlugs 为有序集合 */
     public Set<String> getOrderedSlugs() {
-        return new LinkedHashSet<>(allSlugs);
+        return new LinkedHashSet<>(new java.util.TreeSet<>(allSlugs));
     }
 }

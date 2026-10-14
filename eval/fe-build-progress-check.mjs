@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {mergeBuildProgress, readBuildProgress} from '../src/main/resources/static/js/utils/build-progress.js';
+import {renderMarkdownSafe} from '../src/main/resources/static/js/utils/format.js';
+
+const first = {sequence: 1, title: '解析需求', startedAt: 100, endedAt: null};
+const second = {sequence: 2, title: '召回候选', startedAt: 200, endedAt: null};
+let rows = mergeBuildProgress([], 'task-one', [first]);
+rows = mergeBuildProgress(rows, 'task-one', [{...first, endedAt: 200}, second]);
+rows = mergeBuildProgress(rows, 'task-one', [first]);
+assert.equal(rows.length, 2);
+assert.equal(rows[0].endedAt, 200);
+rows = mergeBuildProgress(rows, 'task-two', [first]);
+assert.deepEqual(rows.map(r => r.taskId), ['task-one', 'task-one', 'task-two']);
+const protocol = '<build_progress>' + JSON.stringify({history: [{taskId: 'task-one', entries: [{...first, endedAt: 200}, second]}, {taskId: 'task-two', entries: [first]}]}) + '</build_progress>';
+assert.equal(readBuildProgress(protocol).length, 3);
+assert.doesNotMatch(renderMarkdownSafe(protocol), /build_progress|解析需求/);
+assert.deepEqual(readBuildProgress('<build_progress>{broken}</build_progress>'), []);
+const chat = await readFile(new URL('../src/main/resources/static/js/features/chat.js', import.meta.url), 'utf8');
+assert.doesNotMatch(chat, /elapsed >|阶段[1-4]\/4|思维模拟器/);
+const page = await readFile(new URL('../src/main/resources/static/index.html', import.meta.url), 'utf8');
+assert.match(page, /v-for="\(stage, index\) in buildProgress"/);
+assert.doesNotMatch(page, /animate-pulse[^>]*>\{\{ currentThought/);
+console.log('阶段记录检查通过：去重、旧快照防回退、确认续建累积、历史渲染与取消模拟阶段。');

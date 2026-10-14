@@ -8,7 +8,6 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.util.LinkedHashSet;
 import java.util.Set;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -19,132 +18,128 @@ public class MrpackParser {
     private final ObjectMapper objectMapper;
     private final ModrinthApiClient apiClient;
 
-    // 匹配版本后缀: -1.0.0, -2.1, -1.21.1, -1.0.0+1.21.1, -neoforge, -fabric 等
-    private static final Pattern VERSION_SUFFIX = Pattern.compile(
-            "-\\d+\\.\\d+(\\.\\d+)?([+-].*)?$");
-
     public MrpackParser(ModrinthApiClient apiClient) {
         this.objectMapper = new ObjectMapper();
         this.apiClient = apiClient;
     }
 
     /**
-     * 从 .mrpack 文件中提取模组项目 slug
-     * .mrpack 本质是一个 ZIP, 内含 modrinth.index.json
+     * 在请求结束前读取有界索引，不进行外部网络访问。
      */
-    public Set<String> extractProjectSlugs(MultipartFile file) throws IOException {
-        Set<String> slugs = new LinkedHashSet<>();
+    public JsonNode readIndex(MultipartFile file) throws IOException {
+        JsonNode index = null;
+        long decompressed = 0;
+        int entries = 0;
 
         try (ZipInputStream zis = new ZipInputStream(file.getInputStream())) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
-                if ("modrinth.index.json".equals(entry.getName())) {
-                    byte[] bytes = zis.readAllBytes();
-                    JsonNode root = objectMapper.readTree(bytes);
-                    JsonNode files = root.path("files");
-
-                    if (files.isArray()) {
-                        for (JsonNode fileNode : files) {
-                            // 1. 优先从 filename 提取
-                            String filename = fileNode.path("filename").asText();
-                            String derivedSlug = deriveSlugFromFilename(filename);
-
-                            // 2. 尝试验证
-                            String confirmed = confirmSlug(derivedSlug);
-                            if (confirmed != null) {
-                                slugs.add(confirmed);
-                            } else {
-                                // 3. 回退: 尝试从 download URL 提取 project ID
-                                String downloadUrl = getDownloadUrl(fileNode);
-                                if (downloadUrl != null) {
-                                    String fromUrl = extractSlugFromUrl(downloadUrl);
-                                    if (fromUrl != null) {
-                                        // 用 project ID 查 slug
-                                        JsonNode proj = apiClient.getProjectInfo(fromUrl);
-                                        if (proj != null) {
-                                            String realSlug = proj.path("slug").asText();
-                                            if (realSlug != null && !realSlug.isEmpty()) {
-                                                slugs.add(realSlug);
-                                                continue;
-                                            }
-                                        }
-                                    }
-                                }
-                                // 4. 无法确认, 直接加入 tentative slug
-                                System.err.println("⚠️ 无法验证 slug, 直接使用推测值: " + derivedSlug);
-                                slugs.add(derivedSlug);
-                            }
-                        }
+                if (++entries > 1000) throw new IOException("整合包 ZIP 条目过多");
+                if (!entry.isDirectory() && !"modrinth.index.json".equals(entry.getName()) && !"maa-diagnostics.json".equals(entry.getName()))
+                    throw new IOException("该包含覆盖文件；本站仅组合 Modrinth 模组，不能无损导入覆盖内容");
+                java.io.ByteArrayOutputStream content = new java.io.ByteArrayOutputStream();
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = zis.read(buffer)) != -1) {
+                    decompressed += read;
+                    if (decompressed > 16 * 1024 * 1024L) throw new IOException("整合包解压数据超过 16MB 限额");
+                    if ("modrinth.index.json".equals(entry.getName())) {
+                        if (content.size() + read > 2 * 1024 * 1024) throw new IOException("整合包索引超过 2MB 限额");
+                        content.write(buffer, 0, read);
                     }
-                    break;
+                }
+                if ("modrinth.index.json".equals(entry.getName())) {
+                    byte[] bytes = content.toByteArray();
+                    JsonNode root;
+                    try { root = objectMapper.readTree(bytes); }
+                    catch (RuntimeException invalid) { throw new IOException("整合包索引 JSON 无效"); }
+                    if (root == null || !root.isObject()) throw new IOException("整合包索引必须为 JSON 对象");
+                    JsonNode files = root.path("files");
+                    if (!"minecraft".equals(root.path("game").asText()) || !root.path("formatVersion").isIntegralNumber() || root.path("formatVersion").asInt() != 1
+                            || !files.isArray() || files.size() > 500) throw new IOException("整合包索引格式无效或模组超过 500 个");
+
+                    if (index != null) throw new IOException("整合包含重复索引");
+                    index = root;
                 }
                 zis.closeEntry();
             }
         }
-        return slugs;
+        if (index == null) throw new IOException("整合包缺少 modrinth.index.json");
+        return index;
     }
 
-    /**
-     * 从文件名衍生推测 slug
-     * 例如: "irons-spells-n-spellbooks-1.21.1-3.4.0.5.jar" → "irons-spells-n-spellbooks"
-     */
-    private String deriveSlugFromFilename(String filename) {
-        if (filename == null) return "unknown";
-        // 去掉 .jar 后缀
-        String name = filename;
-        if (name.endsWith(".jar")) {
-            name = name.substring(0, name.length() - 4);
-        }
+    public record Result(String name, java.util.List<String> slugs, int count, yagen.waitmydawn.maa.model.ImportedPack importedPack) {}
 
-        // 尝试去掉版本后缀
-        Matcher m = VERSION_SUFFIX.matcher(name);
-        if (m.find()) {
-            String candidate = name.substring(0, m.start());
-            // 确保剩下的看起来像 slug (小写字母+连字符)
-            if (candidate.matches("[a-z][a-z0-9-]*[a-z0-9]")) {
-                return candidate;
+    /** 精确版本及项目查询在委派上下文中执行，不按文件名猜测项目。 */
+    public Result parse(JsonNode index) {
+        String name = index.path("name").asText("");
+        if (name.isBlank() || name.length() > 128 || name.chars().anyMatch(Character::isISOControl))
+            throw new IllegalArgumentException("索引中的整合包名称无效");
+        var deps = index.path("dependencies");
+        String key = null;
+        for (String candidate : java.util.List.of("fabric-loader", "forge", "neoforge")) if (deps.has(candidate)) {
+            if (key != null) throw new IllegalArgumentException("整合包指定多个加载器");
+            key = candidate;
+        }
+        if (key == null || deps.size() != 2 || !deps.has("minecraft"))
+            throw new IllegalArgumentException("不支持该整合包的加载器依赖");
+        String loader = "fabric-loader".equals(key) ? "fabric" : key;
+        String mc = deps.path("minecraft").asText("");
+        new yagen.waitmydawn.maa.model.ImportedPack(loader, mc, deps.path(key).asText(), java.util.List.of());
+        var files = new java.util.ArrayList<yagen.waitmydawn.maa.model.ImportedPack.File>();
+        var pattern = Pattern.compile("^https://cdn\\.modrinth\\.com/data/([A-Za-z0-9_-]{1,128})/versions/([A-Za-z0-9_-]{1,128})/[^/?#]+$");
+        var versions = new LinkedHashSet<String>();
+        var projects = new LinkedHashSet<String>();
+        for (JsonNode file : index.path("files")) {
+            var downloads = file.path("downloads");
+            if (!downloads.isArray() || downloads.size() != 1 || !downloads.get(0).isString())
+                throw new IllegalArgumentException("仅支持单一 Modrinth CDN 来源，不能无损导入其他文件或镜像");
+            var match = pattern.matcher(downloads.get(0).asText());
+            if (!match.matches()) throw new IllegalArgumentException("文件不含可核实的 Modrinth 精确版本，不能按文件名猜测");
+            versions.add(match.group(2));
+            projects.add(match.group(1));
+        }
+        apiClient.prefetchVersions(new java.util.ArrayList<>(versions));
+        apiClient.getProjectsBatch(projects);
+        for (JsonNode file : index.path("files")) {
+            String url = file.path("downloads").get(0).asText();
+            var match = pattern.matcher(url); match.matches();
+            String projectId = match.group(1), versionId = match.group(2);
+            JsonNode version = apiClient.getVersionById(versionId);
+            JsonNode project = apiClient.getProjectInfo(projectId);
+            if (version == null || project == null || !projectId.equals(version.path("project_id").asText())
+                    || !supports(version.path("game_versions"), mc) || !supports(version.path("loaders"), loader))
+                throw new IllegalArgumentException("导入文件的精确版本无法核实或不支持包环境，请重试或检查原包");
+            String path = file.path("path").asText("");
+            if (!path.startsWith("mods/") || path.substring(5).contains("/"))
+                throw new IllegalArgumentException("仅支持 mods 目录中的模组文件");
+            var env = new java.util.LinkedHashMap<String, String>();
+            if (file.has("env")) {
+                if (!file.path("env").isObject()) throw new IllegalArgumentException("文件环境格式无效");
+                file.path("env").properties().forEach(e -> env.put(e.getKey(), e.getValue().asText()));
             }
+            if (!file.path("fileSize").isIntegralNumber()) throw new IllegalArgumentException("文件大小格式无效");
+            var imported = new yagen.waitmydawn.maa.model.ImportedPack.File(project.path("slug").asText(), projectId, versionId,
+                    path.substring(5), url, file.path("hashes").path("sha1").asText(), file.path("hashes").path("sha512").asText(),
+                    file.path("fileSize").asLong(-1), env);
+            boolean found = false;
+            for (JsonNode metadata : version.path("files")) if (imported.matches(metadata)) found = true;
+            if (!found) throw new IllegalArgumentException("导入文件的哈希、名称或大小与精确版本不一致");
+            files.add(imported);
         }
-        return name;
+        var imported = new yagen.waitmydawn.maa.model.ImportedPack(loader, mc, deps.path(key).asText(), files);
+        var slugs = files.stream().map(yagen.waitmydawn.maa.model.ImportedPack.File::slug).toList();
+        return new Result(name, slugs, slugs.size(), imported);
+    }
+    private boolean supports(JsonNode values, String target) {
+        for (JsonNode value : values) if (target.equals(value.asText())) return true;
+        return false;
     }
 
-    /**
-     * 验证推测 slug 是否在 Modrinth 上存在
-     */
-    private String confirmSlug(String tentative) {
-        try {
-            JsonNode proj = apiClient.getProjectInfo(tentative);
-            if (proj != null) {
-                String slug = proj.path("slug").asText();
-                return (slug != null && !slug.isEmpty()) ? slug : null;
-            }
-        } catch (Exception ignored) {}
-        return null;
+    public Set<String> extractProjectSlugs(MultipartFile file) throws IOException {
+        return extractProjectSlugs(readIndex(file));
     }
-
-    private String getDownloadUrl(JsonNode fileNode) {
-        // 查找 URL
-        String url = fileNode.path("url").asText(null);
-        if (url != null && !url.isBlank()) return url;
-        // .mrpack 格式可能把 URL 存在 downloads 数组里
-        JsonNode downloads = fileNode.path("downloads");
-        if (downloads.isArray() && !downloads.isEmpty()) {
-            return downloads.get(0).asText(null);
-        }
-        return null;
-    }
-
-    /**
-     * 从 Modrinth CDN URL 中提取 project ID 或 slug
-     * URL 格式如: https://cdn.modrinth.com/data/XXXX/versions/YYYY/file.jar
-     */
-    private String extractSlugFromUrl(String url) {
-        if (url == null) return null;
-        Pattern p = Pattern.compile("modrinth\\.com/data/([^/]+)/");
-        Matcher m = p.matcher(url);
-        if (m.find()) {
-            return m.group(1);
-        }
-        return null;
+    public Set<String> extractProjectSlugs(JsonNode index) {
+        return new LinkedHashSet<>(parse(index).slugs());
     }
 }

@@ -16,12 +16,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>它存在的理由是一个真实误导：某轮 37 个模组里只有 12 个是"以 类别(X) 身份入包"，
  * 另外 24 个是"附属(核心)"、1 个是补位 —— 而配额表只统计前者，于是显示 `magic 0/7`
  * 并配上"候选不足或审核员未选中"，可包里魔法内容其实有 8 个（铁魔法本体 + 7 个附属）。
- * 这里盯死三件事：池标签优先、多标签各算一次、"查不到归未分类且不计入缺口"。
+ * 完整元数据优先，缺失时使用池标签；多标签各算一次，未知信息归入未分类。
  */
 class InPackCategoryTest {
+    @Test void completeMetadataCategoriesTakePriorityOverSingleRecallLabel() {
+        var cache = org.mockito.Mockito.mock(yagen.waitmydawn.maa.cache.ModrinthCacheService.class);
+        org.mockito.Mockito.when(cache.isAvailable()).thenReturn(true);
+        org.mockito.Mockito.when(cache.find("some-mod")).thenReturn(new yagen.waitmydawn.maa.cache.ModrinthCacheService.ModEntry(
+                "some-mod", "Some Mod", "", 1, List.of("magic", "adventure"), List.of("neoforge")));
+        var counts = ChatController.inPackCategoryCounts(List.of("some-mod"), Map.of("some-mod", Set.of("library")), cache);
+        assertEquals(Map.of("magic", 1, "adventure", 1), counts);
+    }
 
     @Test
-    @DisplayName("池标签优先：以\"附属\"入包的模组也按其池类别计入")
+    @DisplayName("无缓存时：以\"附属\"入包的模组也按其池类别计入")
     void usesPoolLabels() {
         Map<String, Set<String>> pool = Map.of(
                 "irons-spells-n-spellbooks", Set.of("magic"),

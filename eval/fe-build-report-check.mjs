@@ -1,0 +1,105 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {readBuildReport, readReplacementChoices, readRequirementReport, requirementStatus, issueReason, modProjectLink} from '../src/main/resources/static/js/utils/build-report.js';
+import {renderMarkdownSafe, cleanChatReply} from '../src/main/resources/static/js/utils/format.js';
+
+assert.equal(cleanChatReply('构建完成<mods>a,b</mods><trace>{}</trace><constraints>{}</constraints><build_report>{}</build_report>'), '构建完成<build_report>{}</build_report>');
+
+const text = '已生成整合包\n<build_report>' + JSON.stringify({schemaVersion: 1, total: 10,
+    categories: {magic: 8, adventure: 7}, issues: [{mod: 'addon', dependency: 'core', versionId: 'V1', reason: 'VERSION_CONFLICT', dropped: false}]}) + '</build_report>';
+const report = readBuildReport(text);
+assert.equal(report.categories[0].percentage, 80);
+assert.equal(report.categories[1].percentage, 70);
+assert.equal(report.issues[0].dependency, 'core');
+assert.equal(readBuildReport('<build_report>{bad}</build_report>'), null);
+assert.equal(readBuildReport('<build_report>{"schemaVersion":2,"total":10}</build_report>'), null);
+assert.doesNotMatch(renderMarkdownSafe(text), /build_report|VERSION_CONFLICT/);
+assert.match(issueReason('VERSION_CONFLICT'), /精确版本/);
+assert.equal(modProjectLink('bad/slug'), 'https://modrinth.com/mod/bad%2Fslug');
+const choices = '<replacement_choices>' + JSON.stringify({schemaVersion: 1, choices: {
+    'alexs-mobs': ['alexs-mobs-continued', 'alexs-mobs-1.21.1'], 'alexs-caves': []
+}}) + '</replacement_choices>';
+assert.equal(readReplacementChoices(choices)[0].selected.length, 2);
+assert.equal(readReplacementChoices(choices)[1].selected.length, 0);
+assert.doesNotMatch(renderMarkdownSafe(choices), /replacement_choices|alexs-mobs/);
+assert.equal(renderMarkdownSafe('请确认<clarification_context>{"ticket":"fixture-private-ticket"}</clarification_context>'), '请确认');
+assert.deepEqual(readReplacementChoices('<replacement_choices>{"schemaVersion":1,"choices":{"javascript:bad":["bad"]}}</replacement_choices>'), []);
+const coverageText = '<requirement_report>' + JSON.stringify({schemaVersion: 1, repairStatus: 'NO_QUALIFIED_CANDIDATE', repaired: [],
+    requirements: [{id: 'r-0000000000000000', source: '自动化和物流', status: 'PARTIAL',
+        mods: [{slug: 'factory', purpose: '提供工厂自动化', quote: 'factory automation'}], missing: [], note: '物流尚未核实'},
+        {id: 'r-1111111111111111', source: '包名', status: 'CONTEXT', mods: [], missing: [], note: ''}]}) + '</requirement_report>';
+assert.equal(readRequirementReport(coverageText).requirements.length, 1);
+assert.equal(readRequirementReport(coverageText).requirements[0].mods[0].purpose, '提供工厂自动化');
+assert.equal(requirementStatus('PARTIAL'), '部分覆盖');
+assert.doesNotMatch(renderMarkdownSafe(coverageText), /requirement_report|factory automation/);
+assert.equal(readRequirementReport('<requirement_report>{"schemaVersion":2}</requirement_report>'), null);
+const childCoverage = JSON.parse(coverageText.match(/<requirement_report>(.*?)<\/requirement_report>/s)[1]);
+childCoverage.requirements[0].criteria = [
+    {id: 'r-2222222222222222', source: '自动化', status: 'SUPPORTING_EVIDENCE', mods: childCoverage.requirements[0].mods, missing: [], note: '有用途依据'},
+    {id: 'r-3333333333333333', source: '物流', status: 'UNVERIFIED', mods: [], missing: [], note: '尚缺物流依据'},
+    {id: 'invalid', source: '无效', status: 'PARTIAL', mods: [], missing: [], note: ''}
+];
+const readChildren = readRequirementReport('<requirement_report>' + JSON.stringify(childCoverage) + '</requirement_report>').requirements[0];
+assert.equal(readChildren.criteria.length, 2);
+assert.equal(readChildren.criteria[1].status, 'UNVERIFIED');
+assert.equal(readRequirementReport(coverageText).requirements[0].criteria.length, 0);
+
+// 运行生产预览收口，验证关系错误不会删除仍在最终图中的核心。
+const snapshot = await readFile(new URL('../src/main/resources/static/js/features/pack-snapshot.js', import.meta.url), 'utf8');
+const section = snapshot.slice(snapshot.indexOf('const HARD_FAIL_REASONS'), snapshot.indexOf('/**\n * 点历史消息'));
+const fixture = {authUser: {value: true}, labUnresolved: {value: []}, labChangeNote: {value: ''},
+    latestPackState: {value: {name: '', modSlugs: ['core', 'gone']}}, latestSnapshotId: {value: ''},
+    packData: {name: '', modSlugs: ['core', 'gone']}, chatHistory: {value: []},
+    stateEquals: () => false, packStateOf: pack => ({...pack, modSlugs: [...pack.modSlugs]}),
+    saveMsg: async () => 'fixture', attachVersion: () => {}};
+globalThis.previewNoteFixture = fixture;
+const preview = await import('data:text/javascript;base64,' + Buffer.from(
+    'const {authUser,labUnresolved,labChangeNote,latestPackState,latestSnapshotId,packData,chatHistory,stateEquals,packStateOf,saveMsg,attachVersion}=globalThis.previewNoteFixture;\n' + section).toString('base64'));
+await preview.handlePreviewResult({state: fixture.packStateOf(fixture.packData), nodes: [{slug: 'core'}],
+    unresolved: [{slug: 'core', reason: 'VERSION_CONFLICT'}, {slug: 'core', reason: 'NO_VERSION_FOR_ENV'},
+        {slug: 'gone', reason: 'PROJECT_NOT_FOUND'}], dropped: [{slug: 'core', reason: 'VERSION_CONFLICT'}]});
+assert.deepEqual(fixture.packData.modSlugs, ['core']);
+assert.doesNotMatch(fixture.chatHistory.value[0].content, /移除：core|依赖剔除：core/);
+assert.match(fixture.chatHistory.value[0].content, /已移除：gone/);
+fixture.packData.modSlugs = ['core'];
+fixture.latestPackState.value = {name: '', modSlugs: ['core']};
+await preview.handlePreviewResult({state: fixture.packStateOf(fixture.packData), nodes: [],
+    unresolved: [{slug: 'core', reason: 'VERSION_CONFLICT'}], dropped: []});
+assert.deepEqual(fixture.packData.modSlugs, ['core'], '精确版本冲突本身不能授予删除权限');
+
+// 执行生产元数据加载函数，验证并行调用不会重复发送同一项目请求。
+const prefs = await readFile(new URL('../src/main/resources/static/js/features/prefs.js', import.meta.url), 'utf8');
+const cacheSource = prefs.slice(prefs.indexOf('const pendingModInfo'), prefs.indexOf('// 手动 slug 输入添加'));
+let requests = 0;
+globalThis.reportCacheFixture = {modInfoCache: {value: {}}, apiFetch: async url => {
+    requests++;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    if (url.endsWith('/broken')) throw new Error('fixture failure');
+    return {json: async () => ({slug: 'core', icon: 'https://cdn.modrinth.com/fixture.png'})};
+}};
+const {loadModInfoCache} = await import('data:text/javascript;base64,' + Buffer.from(
+    'const {modInfoCache,apiFetch}=globalThis.reportCacheFixture;\n' + cacheSource).toString('base64'));
+await Promise.all([loadModInfoCache(['core']), loadModInfoCache(['core'])]);
+assert.equal(requests, 1);
+await loadModInfoCache(['broken']);
+await loadModInfoCache(['broken']);
+assert.equal(requests, 2, '失败冷却期间不重复请求');
+console.log('构建展示检查通过：多标签占比、JSON 历史、隐藏协议文本、原因翻译、链接编码、图标请求合并及失败冷却。');
+
+const optimizationFixture = {schemaVersion: 1, total: 100, categories: {}, issues: [], optimization: {
+    schemaVersion: 1, totalFiles: 100, modCount: 1, referenceActive: true, rootsKnown: true,
+    percentage: 999, covered: ['MEMORY'], suggestedMissing: ['RENDERER'],
+    targets: [{id: 'r-0000000000000001', source: '服务器内存优化', side: 'SERVER', desired: ['MEMORY'], covered: ['MEMORY'], missing: [], modCount: 1}],
+    entries: [{slug: 'memory-mod', versionId: 'V1', side: 'BOTH', roles: {MEMORY: 'Reduces memory usage'}}]
+}};
+const optimizerText = data => '<build_report>' + JSON.stringify(data) + '</build_report>';
+assert.equal(readBuildReport(optimizerText(optimizationFixture)).optimization.percentage, 1);
+assert.equal(readBuildReport(text).optimization, null, '旧历史无需额外字段');
+const corruptPortfolio = structuredClone(optimizationFixture);
+corruptPortfolio.optimization.entries[0].roles.UNKNOWN = 'bad';
+assert.equal(readBuildReport(optimizerText(corruptPortfolio)).optimization, null);
+assert.equal(readBuildReport(optimizerText(corruptPortfolio)).total, 100, '无效组合字段不影响其它报告');
+const badLinkPortfolio = structuredClone(optimizationFixture);
+badLinkPortfolio.optimization.entries[0].slug = 'javascript:bad';
+assert.equal(readBuildReport(optimizerText(badLinkPortfolio)).optimization, null);
+assert.doesNotMatch(renderMarkdownSafe(optimizerText(optimizationFixture)), /build_report|Reduces memory/);

@@ -164,7 +164,7 @@ export const saveUsername = async () => {
 };
 export const saveProfileWeight = async () => {
     if (!authUser.value) return;
-    await fetch('/api/user/profile', {
+    await apiFetch('/api/user/profile', {
         method: 'PUT', headers: {...authHeader(), 'Content-Type': 'application/json'},
         body: JSON.stringify({preferenceWeight: String(profileWeight.value)})
     });
@@ -211,14 +211,23 @@ export const jumpBlacklistPageFn = () => {
 };
 
 // Modrinth 数据缓存 (仅渲染时获取，不存储在导出文件)
+const pendingModInfo = new Map();
+const failedModInfo = new Map();
 export const loadModInfoCache = async (slugs) => {
     for (const slug of slugs) {
-        if (modInfoCache.value[slug]) continue;
-        try {
-            const r = await fetch('/api/prefs/mod-info/' + slug);
-            const d = await r.json();
-            if (!d.error) modInfoCache.value[slug] = d;
-        } catch(e) {}
+        if (modInfoCache.value[slug] || (failedModInfo.get(slug) || 0) > Date.now()) continue;
+        if (!pendingModInfo.has(slug)) pendingModInfo.set(slug, (async () => {
+            try {
+                const r = await apiFetch('/api/prefs/mod-info/' + encodeURIComponent(slug));
+                const d = await r.json();
+                if (!d.error) modInfoCache.value[slug] = d;
+                else throw new Error('模组元数据暂不可用');
+            } catch {
+                if (failedModInfo.size >= 500) failedModInfo.delete(failedModInfo.keys().next().value);
+                failedModInfo.set(slug, Date.now() + 60_000);
+            } finally { pendingModInfo.delete(slug); }
+        })());
+        await pendingModInfo.get(slug);
     }
 };
 
@@ -229,7 +238,7 @@ export const addModBySlug = async () => {
     addingModBySlug.value = true; modSlugAddMsg.value = '';
     try {
         // 先验证 slug 有效
-        const infoR = await fetch('/api/prefs/mod-info/' + slug);
+        const infoR = await apiFetch('/api/prefs/mod-info/' + slug);
         const info = await infoR.json();
         if (info.error) { modSlugAddMsg.value = '该 slug 不存在于 Modrinth'; return; }
         // 添加到偏好
@@ -287,12 +296,12 @@ export const toggleModSource = async (mp) => {
 export const loadPrefs = async () => {
     if (!authUser.value) return;
     try {
-        const cr = await fetch('/api/prefs/categories', {headers: authHeader()});
+        const cr = await apiFetch('/api/prefs/categories', {headers: authHeader()});
         categoryPrefs.value = await cr.json();
-        const mr = await fetch('/api/prefs/mods', {headers: authHeader()});
+        const mr = await apiFetch('/api/prefs/mods', {headers: authHeader()});
         modPrefs.value = await mr.json();
         // 异步加载 Modrinth 卡片数据
-        loadModInfoCache(modPrefs.value.map(m => m.slug));
+        if (currentView.value === 'profile') loadModInfoCache(modPrefs.value.map(m => m.slug));
     } catch(e) {}
 };
 // 进入设置页时自动加载偏好
@@ -309,21 +318,21 @@ watch(currentView, (v) => {
 });
 
 export const addCategoryPref = async () => {
-    await fetch('/api/prefs/categories', {
+    await apiFetch('/api/prefs/categories', {
         method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
         body: JSON.stringify({category: newCatPref.category, rank: String(newCatPref.rank)})
     }); loadPrefs();
 };
 export const removeCategoryPref = async (id) => {
-    await fetch('/api/prefs/categories/' + id, {method: 'DELETE', headers: authHeader()});
+    await apiFetch('/api/prefs/categories/' + id, {method: 'DELETE', headers: authHeader()});
     loadPrefs();
 };
 export const removeModPref = async (id) => {
-    await fetch('/api/prefs/mods/' + id, {method: 'DELETE', headers: authHeader()});
+    await apiFetch('/api/prefs/mods/' + id, {method: 'DELETE', headers: authHeader()});
     loadPrefs();
 };
 export const clearPrefs = async () => {
-    await fetch('/api/prefs/clear', {method: 'POST', headers: authHeader()});
+    await apiFetch('/api/prefs/clear', {method: 'POST', headers: authHeader()});
     loadPrefs();
 };
 
@@ -332,7 +341,7 @@ export const clearPrefs = async () => {
 export const loadBlacklist = async () => {
     if (!authUser.value) return;
     try {
-        const r = await fetch('/api/prefs/blacklist', {headers: authHeader()});
+        const r = await apiFetch('/api/prefs/blacklist', {headers: authHeader()});
         blacklistItems.value = await r.json();
         loadModInfoCache(blacklistItems.value.map(b => b.slug).filter(s => !modInfoCache.value[s]));
     } catch(e) {}
@@ -343,7 +352,7 @@ export const addBlacklistBySlug = async () => {
     blacklistMsg.value = '';
     try {
         // 先验证 slug 存在于 Modrinth
-        const infoR = await fetch('/api/prefs/mod-info/' + slug);
+        const infoR = await apiFetch('/api/prefs/mod-info/' + slug);
         const info = await infoR.json();
         if (info.error) { blacklistMsg.value = '该 slug 在 Modrinth 不存在'; return; }
         modInfoCache.value[slug] = info;
@@ -360,16 +369,16 @@ export const addBlacklistBySlug = async () => {
     } catch(e) { if (e.message !== '未登录') blacklistMsg.value = '添加失败'; }
 };
 export const removeBlacklistItem = async (id) => {
-    await fetch('/api/prefs/blacklist/' + id, {method: 'DELETE', headers: authHeader()});
+    await apiFetch('/api/prefs/blacklist/' + id, {method: 'DELETE', headers: authHeader()});
     loadBlacklist();
 };
 export const clearBlacklist = async () => {
-    await fetch('/api/prefs/blacklist/clear', {method: 'POST', headers: authHeader()});
+    await apiFetch('/api/prefs/blacklist/clear', {method: 'POST', headers: authHeader()});
     loadBlacklist();
 };
 export const saveBlacklistToggle = async () => {
     if (!authUser.value) return;
-    await fetch('/api/user/profile', {
+    await apiFetch('/api/user/profile', {
         method: 'PUT', headers: {...authHeader(), 'Content-Type': 'application/json'},
         body: JSON.stringify({enableBlacklist: String(enableBlacklist.value)})
     });
@@ -378,7 +387,7 @@ export const saveBlacklistToggle = async () => {
 };
 export const saveFeedbackRulesToggle = async () => {
     if (!authUser.value) return;
-    await fetch('/api/user/profile', {
+    await apiFetch('/api/user/profile', {
         method: 'PUT', headers: {...authHeader(), 'Content-Type': 'application/json'},
         body: JSON.stringify({enableUserFeedbackRules: String(enableUserFeedbackRules.value)})
     });
@@ -425,7 +434,7 @@ export const onKeSlugInput = async (which) => {
     if (!slug) { setInfo(null); setError(''); return; }
     setError('');
     try {
-        const r = await fetch('/api/prefs/mod-info/' + slug);
+        const r = await apiFetch('/api/prefs/mod-info/' + slug);
         const d = await r.json();
         if (d.error) { setInfo(null); setError('该 slug 在 Modrinth 不存在'); }
         else { setInfo(d); setError(''); }
@@ -491,7 +500,7 @@ export const voteRule = async (rule, vote) => {
     }
 };
 export const exportPrefs = async () => {
-    const r = await fetch('/api/prefs/export', {headers: authHeader()});
+    const r = await apiFetch('/api/prefs/export', {headers: authHeader()});
     const blob = await r.blob();
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -501,7 +510,7 @@ export const exportPrefs = async () => {
 export const importPrefs = async (e) => {
     const file = e.target.files[0]; if (!file) return;
     const text = await file.text();
-    await fetch('/api/prefs/import', {
+    await apiFetch('/api/prefs/import', {
         method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'}, body: text
     });
     loadPrefs(); e.target.value = '';

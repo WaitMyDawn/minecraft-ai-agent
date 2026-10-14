@@ -180,6 +180,61 @@
                             <skip>${skipFrontendChecks}</skip>
                         </configuration>
                     </execution>
+                    <execution>
+                        <id>frontend-security-check</id>
+                        <phase>test</phase>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <executable>node</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments><argument>eval/fe-security-check.mjs</argument></arguments>
+                            <skip>${skipFrontendChecks}</skip>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>frontend-api-queue-check</id>
+                        <phase>test</phase>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <executable>node</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments><argument>eval/fe-api-queue-check.mjs</argument></arguments>
+                            <skip>${skipFrontendChecks}</skip>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>frontend-replacement-check</id>
+                        <phase>test</phase>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <executable>node</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments><argument>eval/fe-replacement-check.mjs</argument></arguments>
+                            <skip>${skipFrontendChecks}</skip>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>frontend-build-report-check</id>
+                        <phase>test</phase>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <executable>node</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments><argument>eval/fe-build-report-check.mjs</argument></arguments>
+                            <skip>${skipFrontendChecks}</skip>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>frontend-build-progress-check</id>
+                        <phase>test</phase>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <executable>node</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments><argument>eval/fe-build-progress-check.mjs</argument></arguments>
+                            <skip>${skipFrontendChecks}</skip>
+                        </configuration>
+                    </execution>
                 </executions>
             </plugin>
         </plugins>

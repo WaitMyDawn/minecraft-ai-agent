@@ -12,6 +12,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.ArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -92,7 +93,7 @@ class DelegationContextTest {
     }
 
     @Test
-    @DisplayName("回传早于询问：结果留在已满足表，下次问同一键直接命中、不再挂起")
+    @DisplayName("未请求或过期回执不能预填任务事实")
     void lateArrivalIsReused() throws Exception {
         DelegationContext ctx = new DelegationContext();
         JsonNode data = obj();
@@ -100,10 +101,9 @@ class DelegationContextTest {
         ctx.deliver(Kind.PROJECT, "create", data);   // 没人等着
 
         Answer answer = ctx.await(Kind.PROJECT, "create", 50);
-        assertEquals(Outcome.GOT, answer.outcome());
-        assertNotNull(answer.data());
-        assertEquals(1, ctx.servedCount());
-        assertEquals(0, ctx.timedOutCount(), "命中已满足表不应产生超时");
+        assertEquals(Outcome.TIMEOUT, answer.outcome());
+        assertNull(answer.data());
+        assertEquals(0, ctx.servedCount());
     }
 
     @Test
@@ -155,7 +155,7 @@ class DelegationContextTest {
     void sameKeyAskedTwiceIsServedFromStash() throws Exception {
         DelegationContext ctx = new DelegationContext();
 
-        ctx.deliver(Kind.PROJECT, "create", obj());
+        seed(ctx, "create", obj());
 
         // 第一次问：命中
         assertEquals(Outcome.GOT, ctx.await(Kind.PROJECT, "create", 50).outcome());
@@ -164,19 +164,93 @@ class DelegationContextTest {
         assertEquals(Outcome.GOT, ctx.await(Kind.PROJECT, "create", 50).outcome(),
                 "同一个键第二次必须命中缓存，否则会重复下发给客户端且回执必然被拒");
         assertFalse(ctx.hasPending(), "第二次不该登记任何新需求");
-        assertEquals(2, ctx.servedCount());
+        assertEquals(3, ctx.servedCount());
         assertEquals(0, ctx.timedOutCount());
     }
 
     @Test
     @DisplayName("同一个键的 ABSENT 结论同样只取一次")
-    void absentIsAlsoMemoized() {
+    void absentIsAlsoMemoized() throws Exception {
         DelegationContext ctx = new DelegationContext();
 
-        ctx.deliver(Kind.PROJECT, "ghost", null);
+        seed(ctx, "ghost", null);
 
         assertEquals(Outcome.ABSENT, ctx.await(Kind.PROJECT, "ghost", 50).outcome());
         assertEquals(Outcome.ABSENT, ctx.await(Kind.PROJECT, "ghost", 50).outcome());
         assertFalse(ctx.hasPending());
+    }
+    private void seed(DelegationContext ctx, String key, JsonNode data) throws Exception {
+        try (ExecutorService ex = Executors.newVirtualThreadPerTaskExecutor()) {
+            var pending = ex.submit(() -> ctx.await(Kind.PROJECT, key, 3000));
+            for (int i = 0; i < 400 && !ctx.isPending(Kind.PROJECT, key); i++) Thread.sleep(5);
+            assertTrue(ctx.isPending(Kind.PROJECT, key));
+            ctx.deliver(Kind.PROJECT, key, data);
+            pending.get(2, TimeUnit.SECONDS);
+        }
+    }
+    @Test void queuedWavesDoNotSpendTheirBrowserBudgetOrRepeatInFlightRequests() throws Exception {
+        var ctx = new DelegationContext(5000);
+        try (ExecutorService ex = Executors.newVirtualThreadPerTaskExecutor()) {
+            var pending = new ArrayList<Future<Answer>>();
+            for (int i = 0; i < 18; i++) {
+                String key = "mod-" + i;
+                pending.add(ex.submit(() -> ctx.await(Kind.ENV_VERSION, key, 500)));
+            }
+            for (int i = 0; i < 400 && ctx.pendingWants().size() < 18; i++) Thread.sleep(5);
+            Thread.sleep(600);
+            assertEquals(0, ctx.timedOutCount());
+            var data = obj();
+            for (int wave = 0; wave < 3; wave++) {
+                var batch = ctx.dispatchWants();
+                assertEquals(6, batch.size());
+                assertTrue(ctx.dispatchWants().isEmpty());
+                batch.forEach(w -> ctx.deliver(w.kind(), w.key(), data));
+            }
+            for (var result : pending) assertEquals(Outcome.GOT, result.get(2, TimeUnit.SECONDS).outcome());
+            assertTrue(ctx.dispatchWants().isEmpty());
+            assertEquals(0, ctx.timedOutCount());
+        }
+    }
+    @Test void dispatchedTimeoutRejectsLateDataAndCancellationWakesUndispatchedWaiters() throws Exception {
+        var ctx = new DelegationContext(5000);
+        try (ExecutorService ex = Executors.newVirtualThreadPerTaskExecutor()) {
+            var first = ex.submit(() -> ctx.await(Kind.PROJECT, "late", 80));
+            for (int i = 0; i < 400 && !ctx.hasPending(); i++) Thread.sleep(5);
+            assertEquals(1, ctx.dispatchWants().size());
+            assertTrue(ctx.dispatchWants().isEmpty());
+            assertEquals(Outcome.TIMEOUT, first.get(2, TimeUnit.SECONDS).outcome());
+            assertEquals(1, ctx.browserTimeoutCount());
+            ctx.deliver(Kind.PROJECT, "late", obj());
+            var retry = ex.submit(() -> ctx.await(Kind.PROJECT, "late", 500));
+            for (int i = 0; i < 400 && !ctx.hasPending(); i++) Thread.sleep(5);
+            ctx.cancelAll();
+            assertEquals(Outcome.CANCELLED, retry.get(2, TimeUnit.SECONDS).outcome());
+        }
+    }
+    @Test void all153VersionFactsCompleteInWavesWithoutFalseServerFallback() throws Exception {
+        var ctx = new DelegationContext(5000);
+        try (ExecutorService ex = Executors.newVirtualThreadPerTaskExecutor()) {
+            var futures = new ArrayList<Future<Answer>>();
+            for (int i = 0; i < 153; i++) {
+                String key = "fixture-" + i;
+                futures.add(ex.submit(() -> ctx.await(Kind.ENV_VERSION, key, 250)));
+            }
+            for (int i = 0; i < 400 && ctx.pendingWants().size() < 153; i++) Thread.sleep(5);
+            assertEquals(153, ctx.pendingWants().size());
+            Thread.sleep(300);
+            int completed = 0, waves = 0;
+            var data = obj();
+            while (completed < 153) {
+                var batch = ctx.dispatchWants();
+                assertTrue(batch.size() >= 1 && batch.size() <= 6);
+                Thread.sleep(20);
+                batch.forEach(w -> ctx.deliver(w.kind(), w.key(), data));
+                completed += batch.size(); waves++;
+            }
+            assertEquals(26, waves);
+            for (var f : futures) assertEquals(Outcome.GOT, f.get(2, TimeUnit.SECONDS).outcome());
+            assertEquals(0, ctx.timedOutCount());
+            assertEquals(153, ctx.servedCount());
+        }
     }
 }

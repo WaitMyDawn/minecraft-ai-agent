@@ -23,7 +23,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * 于是最多 {@code burst} 个请求可以连发，之后回到稳态速率。没有这个信用，冷启动时第一个请求之后
  * 每一步都要等一个完整间隔，99 个候选要排队 25 秒——比"并发冲一把再退避"还慢，等于白做。
  *
- * <p>与 429 退避的分工：令牌闸负责"不冲出去"，{@code ModrinthApiClient} 里那套
+ * <p>与 429 退避的分工：令牌闸负责"不冲出去"，{@code ModrinthFetcher} 里的
  * {@code X-Ratelimit-Reset} + 指数退避负责"万一冲出去了怎么回来"。两者是两层保险，
  * 令牌闸<b>不能替代</b>退避——多实例部署时每个实例各有一把闸，出口 IP 却是共享的。
  *
@@ -45,6 +45,17 @@ public class ModrinthThrottle {
     private final ReentrantLock lock = new ReentrantLock();
     /** 下一个可出发的时刻（System.nanoTime 基准） */
     private long nextSlotNanos;
+    private volatile long blockedUntilNanos;
+
+    /** 同一出口收到 429 时，所有调用点共同遵守上游的恢复窗口。 */
+    public void deferSeconds(long seconds) {
+        lock.lock();
+        try {
+            long until = System.nanoTime() + Math.max(1, Math.min(60, seconds)) * NANOS_PER_SECOND;
+            blockedUntilNanos = Math.max(blockedUntilNanos, until);
+            nextSlotNanos = Math.max(nextSlotNanos, blockedUntilNanos);
+        } finally { lock.unlock(); }
+    }
 
     /** 观测用：累计排队时间与次数（闸门压不住时会明显增长） */
     private final AtomicLong totalWaitMs = new AtomicLong();
@@ -66,6 +77,11 @@ public class ModrinthThrottle {
      * @return true = 可以发；false = 排队超出预算或线程被中断，本次不发
      */
     public boolean acquire() {
+        return acquire(maxWaitMs);
+    }
+    public boolean acquire(long budgetMs) {
+        long permittedMs = Math.min(maxWaitMs, Math.max(0, budgetMs));
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(permittedMs);
         long waitNanos;
         lock.lock();
         try {
@@ -79,7 +95,7 @@ public class ModrinthThrottle {
             waitNanos = nextSlotNanos - now;
             nextSlotNanos += intervalNanos;
 
-            if (waitNanos > maxWaitMs * 1_000_000L) {
+            if (waitNanos > permittedMs * 1_000_000L) {
                 // 队伍太长：放弃，并把刚占的时隙还回去（否则会连累后面的请求）
                 nextSlotNanos -= intervalNanos;
                 rejectedCount.incrementAndGet();
@@ -95,13 +111,29 @@ public class ModrinthThrottle {
             waitCount.incrementAndGet();
             RequestScope.addThrottleWait(ms);
             try {
-                TimeUnit.NANOSECONDS.sleep(waitNanos);
+                sleepActive(waitNanos);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return false;
             }
         }
+        long embargo = blockedUntilNanos - System.nanoTime();
+        if (embargo > 0) {
+            if (embargo > deadline - System.nanoTime()) return false;
+            try { sleepActive(embargo); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); return false; }
+            // 窗口可能在等待期间被另一个 429 延长；不得提前放行。
+            if (System.nanoTime() < blockedUntilNanos) return false;
+        }
         return true;
+    }
+    private static void sleepActive(long nanos) throws InterruptedException {
+        long until = System.nanoTime() + nanos;
+        for (long left = nanos; left > 0; left = until - System.nanoTime()) {
+            var context = yagen.waitmydawn.maa.runtime.DelegationContext.current();
+            if (context != null) context.checkActive();
+            TimeUnit.NANOSECONDS.sleep(Math.min(left, TimeUnit.MILLISECONDS.toNanos(250)));
+        }
     }
 
     /** 观测快照：{[排队次数, 累计排队毫秒, 因队伍过长被拒次数]} */

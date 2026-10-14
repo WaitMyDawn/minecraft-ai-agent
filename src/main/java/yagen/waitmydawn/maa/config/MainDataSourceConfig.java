@@ -51,6 +51,8 @@ public class MainDataSourceConfig {
     /** 拿连接的等待上限（毫秒）：宁可快速失败并给出明确错误，也不要让请求挂 30 秒 */
     @Value("${maa.db.connection-timeout-ms:10000}")
     private long connectionTimeoutMs;
+    @Value("${maa.db.schema-mode:update}")
+    private String schemaMode;
 
     @Bean
     @Primary
@@ -76,12 +78,12 @@ public class MainDataSourceConfig {
         em.setPersistenceUnitName("mainPU");
 
         HibernateJpaVendorAdapter vendorAdapter = new HibernateJpaVendorAdapter();
-        vendorAdapter.setGenerateDdl(true);
+        vendorAdapter.setGenerateDdl(false);
         vendorAdapter.setShowSql(false);
         em.setJpaVendorAdapter(vendorAdapter);
 
         Map<String, Object> properties = new HashMap<>();
-        properties.put("hibernate.hbm2ddl.auto", "update");
+        properties.put("hibernate.hbm2ddl.auto", schemaMode);
         properties.put("hibernate.dialect", "org.hibernate.dialect.H2Dialect");
         em.setJpaPropertyMap(properties);
 

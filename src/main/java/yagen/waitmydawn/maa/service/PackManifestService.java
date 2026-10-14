@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
+import yagen.waitmydawn.maa.model.DependencyClosure;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -26,7 +27,7 @@ import java.util.UUID;
  * 于是导出必然等于用户当时看到的那一份。
  *
  * <p>内存实现（有界 + TTL）足够：单体应用、快照只在一次编辑会话内有效。
- * 进程重启或快照过期时 build 走兼容路径（前端仍可传 selectedFiles）。
+ * 进程重启或快照过期时必须重新预览；不得采信客户端直传文件绕过快照校验。
  */
 @Service
 public class PackManifestService {
@@ -44,8 +45,9 @@ public class PackManifestService {
      */
     private static final int MAX_MANIFESTS = 200;
 
-    private record Manifest(long createdAt, String loader, String mcVersion,
-                            Map<String, JsonNode> fileByNodeId) {
+    private record Manifest(long createdAt, String loader, String mcVersion, Long ownerId,
+                            Map<String, JsonNode> fileByNodeId, Map<String, String> slugByNodeId, DependencyClosure closure,
+                            Map<String, String> dependencies) {
     }
 
     /** 用 LinkedHashMap + 手工 LRU：快照小、量少，不值得引入额外依赖 */
@@ -65,16 +67,33 @@ public class PackManifestService {
      */
     public synchronized String register(List<String> nodeIds, List<JsonNode> files,
                                         String loader, String mcVersion) {
+        return register(nodeIds, files, loader, mcVersion, null);
+    }
+
+    public synchronized String register(List<String> nodeIds, List<JsonNode> files,
+                                        String loader, String mcVersion, Long ownerId) {
+        return register(nodeIds, files, loader, mcVersion, ownerId, Map.of(), null);
+    }
+
+    public synchronized String register(List<String> nodeIds, List<JsonNode> files,
+                                        String loader, String mcVersion, Long ownerId,
+                                        Map<String, String> slugByNodeId, DependencyClosure closure) {
+        return register(nodeIds, files, loader, mcVersion, ownerId, slugByNodeId, closure, Map.of());
+    }
+
+    public synchronized String register(List<String> nodeIds, List<JsonNode> files,
+                                        String loader, String mcVersion, Long ownerId,
+                                        Map<String, String> slugByNodeId, DependencyClosure closure, Map<String, String> dependencies) {
         Map<String, JsonNode> map = new LinkedHashMap<>();
         int n = Math.min(nodeIds.size(), files.size());
         for (int i = 0; i < n; i++) {
             JsonNode f = files.get(i);
             if (f != null && !f.isNull() && f.hasNonNull("filename")) {
-                map.put(nodeIds.get(i), f);
+                map.put(nodeIds.get(i), f.deepCopy());
             }
         }
-        String id = UUID.randomUUID().toString().substring(0, 8);
-        manifests.put(id, new Manifest(System.currentTimeMillis(), loader, mcVersion, map));
+        String id = UUID.randomUUID().toString();
+        manifests.put(id, new Manifest(System.currentTimeMillis(), loader, mcVersion, ownerId, map, Map.copyOf(slugByNodeId), closure, Map.copyOf(dependencies)));
         return id;
     }
 
@@ -82,7 +101,7 @@ public class PackManifestService {
      * 按选择取出快照里的文件。
      *
      * @param selectedIds 用户勾选的节点 id；为空表示全选
-     * @return 文件列表；快照不存在/已过期返回 {@code null}（调用方应回退兼容路径）
+     * @return 文件列表；快照不存在/已过期返回 {@code null}（调用方应要求重新预览）
      */
     public synchronized List<JsonNode> filesFor(String manifestId, List<String> selectedIds) {
         Manifest m = manifests.get(manifestId);
@@ -93,16 +112,48 @@ public class PackManifestService {
         }
         List<JsonNode> out = new ArrayList<>();
         if (selectedIds == null || selectedIds.isEmpty()) {
-            out.addAll(m.fileByNodeId().values());
+            m.fileByNodeId().values().forEach(f -> out.add(f.deepCopy()));
         } else {
-            for (String id : selectedIds) {
+            for (String id : new java.util.LinkedHashSet<>(selectedIds)) {
                 JsonNode f = m.fileByNodeId().get(id);
-                if (f != null) out.add(f);
+                if (f == null) throw new IllegalArgumentException("勾选项不属于当前清单快照");
+                out.add(f.deepCopy());
             }
         }
         log.debug("manifest {} 取件 {} 个（loader={}, mc={}）", manifestId, out.size(),
                 m.loader(), m.mcVersion());
         return out;
+    }
+
+    public synchronized List<JsonNode> filesFor(String id, List<String> selectedIds, String loader, String mc) {
+        Manifest manifest = manifests.get(id);
+        if (manifest != null && (!manifest.loader().equals(loader) || !manifest.mcVersion().equals(mc))) {
+            throw new IllegalArgumentException("环境与清单快照不一致，请重新预览");
+        }
+        return filesFor(id, selectedIds);
+    }
+
+    public synchronized List<JsonNode> filesFor(String id, List<String> selectedIds, String loader, String mc, Long ownerId) {
+        Manifest manifest = manifests.get(id);
+        if (manifest != null && !java.util.Objects.equals(manifest.ownerId(), ownerId)) return null;
+        return filesFor(id, selectedIds, loader, mc);
+    }
+
+    public record Selection(List<JsonNode> files, DependencyClosure.Report closure, Map<String, String> dependencies) {}
+
+    /** 文件和依赖要求取自同一快照；检查不发起网络请求，也不自动改变勾选项。 */
+    public synchronized Selection selectionFor(String id, List<String> selectedIds, String loader, String mc, Long ownerId) {
+        var files = filesFor(id, selectedIds, loader, mc, ownerId);
+        if (files == null) return null;
+        Manifest manifest = manifests.get(id);
+        var selected = selectedIds == null || selectedIds.isEmpty() ? manifest.fileByNodeId().keySet() : selectedIds;
+        var slugs = new java.util.LinkedHashSet<String>();
+        for (String nodeId : selected) slugs.add(manifest.slugByNodeId().getOrDefault(nodeId, nodeId));
+        var report = manifest.closure() == null
+                ? new DependencyClosure.Report(DependencyClosure.Status.UNVERIFIED,
+                    List.of(new DependencyClosure.Issue("", "", "UNVERIFIED_METADATA", DependencyClosure.Severity.UNKNOWN)))
+                : manifest.closure().inspect(slugs);
+        return new Selection(files, report, manifest.dependencies());
     }
 
     /** 快照里登记了多少个可导出的文件（用于诊断） */

@@ -1,6 +1,6 @@
 // 打包输入状态（界面上说的"这一版"）的读写与比较。
 //
-// 状态形状 = {name, mcVersion, loader, modSlugs[], excludedSlugs[]}，与后端 packState 列的
+// 状态形状包含清单、环境、显式排除及 constraints，与后端 packState 列的
 // JSON 完全一致。放在 utils 而不是某个 feature 里：对话历史（auth）、装配台（delete-flow）、
 // 版本流水（pack-snapshot）都要用它，而这几个模块之间不该互相 import。
 
@@ -12,6 +12,37 @@ export const csv = (list) => (Array.isArray(list) ? list : [])
 export const parseCsv = (text) => String(text || '')
     .split(',').map(s => s.trim()).filter(Boolean);
 
+/** 独立拷贝约束，防止修改当前版本时连带改写历史快照。旧版本没有约束时使用 null。 */
+const copyConstraints = (value) => value ? JSON.parse(JSON.stringify(value)) : null;
+const copyAssembly = value => {
+    const copy = copyConstraints(value);
+    if (!copy) return null;
+    copy.roots = [...new Set(copy.roots || [])].sort();
+    copy.versions = Object.fromEntries(Object.entries(copy.versions || {}).sort(([a], [b]) => a.localeCompare(b)));
+    copy.origins = Object.fromEntries(Object.entries(copy.origins || {}).sort(([a], [b]) => a.localeCompare(b))
+        .map(([slug, roles]) => [slug, [...new Set(roles)].sort()]));
+    return copy;
+};
+/** 手动选择授予根身份；已有依赖被点名时提升为显式根，不改其选版。 */
+export const markExplicitRoots = (work, slugs) => {
+    if (!work.assembly) return false;
+    const assembly = copyAssembly(work.assembly);
+    let changed = false;
+    for (const slug of slugs) {
+        if (!assembly.roots.includes(slug)) { assembly.roots.push(slug); changed = true; }
+        assembly.origins[slug] = [...new Set([...(assembly.origins[slug] || []).filter(r => r !== 'DEPENDENCY'), 'EXPLICIT_ADD'])].sort();
+    }
+    work.assembly = copyAssembly(assembly);
+    return changed;
+};
+const copyImported = (value) => {
+    const copy = copyConstraints(value);
+    if (copy?.files) copy.files = copy.files.map(file => ({...file,
+        env: Object.fromEntries(Object.entries(file.env || {}).sort(([a], [b]) => a.localeCompare(b)))}))
+        .sort((a, b) => a.slug.localeCompare(b.slug));
+    return copy;
+};
+
 /** 工作区对象 → 状态对象（拷贝，别把 reactive 引用存进历史） */
 export const packStateOf = (work) => ({
     name: work.name || '',
@@ -19,6 +50,9 @@ export const packStateOf = (work) => ({
     loader: work.loader || '',
     modSlugs: [...(work.modSlugs || [])],
     excludedSlugs: [...(work.excludedSlugs || [])],
+    constraints: copyConstraints(work.constraints),
+    importedPack: copyImported(work.importedPack),
+    assembly: copyAssembly(work.assembly),
 });
 
 /** 后端 packState（JSON 串或对象）→ 状态对象；解析不了返回 null（调用方退回旧行为） */
@@ -33,6 +67,9 @@ export const readPackState = (json) => {
             loader: raw.loader || '',
             modSlugs: Array.isArray(raw.modSlugs) ? raw.modSlugs.map(String) : parseCsv(raw.modSlugs),
             excludedSlugs: Array.isArray(raw.excludedSlugs) ? raw.excludedSlugs.map(String) : parseCsv(raw.excludedSlugs),
+            constraints: copyConstraints(raw.constraints),
+            importedPack: copyImported(raw.importedPack),
+            assembly: copyAssembly(raw.assembly),
         };
     } catch (e) {
         return null;
@@ -49,7 +86,10 @@ export const stateEquals = (a, b) => {
         && a.mcVersion === b.mcVersion
         && a.loader === b.loader
         && sameSet(a.modSlugs, b.modSlugs)
-        && sameSet(a.excludedSlugs, b.excludedSlugs);
+        && sameSet(a.excludedSlugs, b.excludedSlugs)
+        && JSON.stringify(a.constraints || null) === JSON.stringify(b.constraints || null)
+        && JSON.stringify(copyImported(a.importedPack)) === JSON.stringify(copyImported(b.importedPack))
+        && JSON.stringify(copyAssembly(a.assembly)) === JSON.stringify(copyAssembly(b.assembly));
 };
 
 const sameSet = (x, y) => {
@@ -66,6 +106,9 @@ export const applyPackState = (work, state) => {
     if (state.loader) work.loader = state.loader;
     work.modSlugs = [...(state.modSlugs || [])];
     work.excludedSlugs = [...(state.excludedSlugs || [])];
+    work.constraints = copyConstraints(state.constraints);
+    work.importedPack = copyImported(state.importedPack);
+    work.assembly = copyAssembly(state.assembly);
 };
 
 /**

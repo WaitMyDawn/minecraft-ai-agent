@@ -20,8 +20,11 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/user")
-@CrossOrigin(origins = "*")
 public class UserController {
+    private record LoginWindow(long startedAt, int count) {}
+    private final com.github.benmanes.caffeine.cache.Cache<String, LoginWindow> loginAttempts =
+            com.github.benmanes.caffeine.cache.Caffeine.newBuilder().maximumSize(20_000)
+                    .expireAfterWrite(java.time.Duration.ofMinutes(5)).build();
 
     private final UserRepository userRepo;
     private final ConversationRepository convRepo;
@@ -138,23 +141,23 @@ public class UserController {
             return ResponseEntity.ok(Map.of("error", "邮件服务不可用：" + mailService.diagnose()));
         }
 
-        String code;
+        EmailCodeService.IssuedCode issued;
         try {
-            code = emailCodeService.issue(purpose, email);
+            issued = emailCodeService.issueForDelivery(purpose, email);
         } catch (EmailCodeService.RateLimitedException e) {
             return ResponseEntity.ok(Map.of("error", e.getMessage()));   // 提示语是给人看的，直接回
         }
         try {
-            mailService.sendCode(email, purpose.label(), code, emailCodeService.ttlMinutes());
+            mailService.sendCode(email, purpose.label(), issued.code(), emailCodeService.ttlMinutes());
         } catch (MailService.NotConfiguredException e) {
-            emailCodeService.rollback(purpose, email);   // 撤回码 + 把当天额度还回去
+            emailCodeService.rollback(purpose, email, issued);
             return ResponseEntity.ok(Map.of("error", "邮件服务暂不可用，请稍后再试或联系站长"));
         } catch (MailService.QuotaExhaustedException e) {
             // 额度用完属于"今天就是发不了"，不是临时故障：把话说清楚，别让用户反复重试
-            emailCodeService.rollback(purpose, email);
+            emailCodeService.rollback(purpose, email, issued);
             return ResponseEntity.ok(Map.of("error", "今日邮件发送量已达上限，请明天再试；如急需请联系站长"));
         } catch (Exception e) {
-            emailCodeService.rollback(purpose, email);
+            emailCodeService.rollback(purpose, email, issued);
             MaaLog.error("验证码邮件发送失败: " + e.getMessage(), e);
             return ResponseEntity.ok(Map.of("error", "验证码发送失败，请稍后重试"));
         }
@@ -251,6 +254,16 @@ public class UserController {
     public ResponseEntity<Map<String, Object>> login(@RequestBody Map<String, String> body) {
         String account = body.get("account");
         String password = body.get("password");
+        if (account == null || account.isBlank() || account.length() > 190
+                || password == null || password.length() > 256) {
+            return ResponseEntity.badRequest().body(Map.of("error", "账号或密码格式无效"));
+        }
+        String attemptKey = EmailNormalizer.normalize(account);
+        long now = System.currentTimeMillis();
+        LoginWindow attempts = loginAttempts.asMap().compute(attemptKey, (key, old) ->
+                old == null || now - old.startedAt() >= 300_000 ? new LoginWindow(now, 1)
+                        : new LoginWindow(old.startedAt(), Math.min(11, old.count() + 1)));
+        if (attempts.count() > 10) return ResponseEntity.status(429).body(Map.of("error", "登录尝试过多，请稍后重试"));
         // 先按账号号查（老用户的习惯），查不到再按邮箱查（新人记不住 1005 这种号）
         var userOpt = userRepo.findByAccountNumber(account == null ? null : account.trim());
         if (userOpt.isEmpty()) {
@@ -581,7 +594,14 @@ public class UserController {
         Long uid = sessions.touch(token);
         if (uid == null) return null;
         return userRepo.findById(uid)
-                .map(u -> decrypt(u.getEncryptedApiKey()))
+                .map(u -> {
+                    String encrypted = u.getEncryptedApiKey();
+                    String plain = decrypt(encrypted);
+                    if (plain != null && encrypted != null && !encrypted.startsWith("gcm1:")) {
+                        userRepo.upgradeApiKeyCiphertext(uid, encrypted, encrypt(plain));
+                    }
+                    return plain;
+                })
                 .orElse(null);
     }
 
@@ -622,21 +642,33 @@ public class UserController {
     private String encrypt(String plain) {
         if (plain == null) return null;
         try {
-            Cipher cipher = Cipher.getInstance("AES");
-            cipher.init(Cipher.ENCRYPT_MODE, getKey());
-            String result = Base64.getEncoder().encodeToString(cipher.doFinal(plain.getBytes(StandardCharsets.UTF_8)));
-//            System.out.println("AES 加密成功 (前6位): " + result.substring(0, Math.min(6, result.length())) + "...");
+            byte[] nonce = new byte[12];
+            new java.security.SecureRandom().nextBytes(nonce);
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, getKey(), new javax.crypto.spec.GCMParameterSpec(128, nonce));
+            byte[] encrypted = cipher.doFinal(plain.getBytes(StandardCharsets.UTF_8));
+            String result = "gcm1:" + Base64.getEncoder().encodeToString(
+                    java.nio.ByteBuffer.allocate(nonce.length + encrypted.length).put(nonce).put(encrypted).array());
             System.out.println("AES 加密成功！");
             return result;
         } catch (Exception e) {
             System.err.println("AES 加密失败: " + e.getMessage());
-            return null;
+            throw new IllegalStateException("API Key 加密失败", e);
         }
     }
 
     private String decrypt(String encrypted) {
         if (encrypted == null) return null;
         try {
+            if (encrypted.startsWith("gcm1:")) {
+                byte[] bytes = Base64.getDecoder().decode(encrypted.substring(5));
+                if (bytes.length < 28) throw new IllegalArgumentException("密文格式无效");
+                Cipher authenticated = Cipher.getInstance("AES/GCM/NoPadding");
+                authenticated.init(Cipher.DECRYPT_MODE, getKey(), new javax.crypto.spec.GCMParameterSpec(128,
+                        java.util.Arrays.copyOfRange(bytes, 0, 12)));
+                return new String(authenticated.doFinal(bytes, 12, bytes.length - 12), StandardCharsets.UTF_8);
+            }
+            // 兼容历史密文；所有新写入使用带完整性校验的 GCM 密文。
             Cipher cipher = Cipher.getInstance("AES");
             cipher.init(Cipher.DECRYPT_MODE, getKey());
             return new String(cipher.doFinal(Base64.getDecoder().decode(encrypted)), StandardCharsets.UTF_8);

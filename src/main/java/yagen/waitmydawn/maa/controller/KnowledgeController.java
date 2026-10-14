@@ -12,7 +12,6 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/knowledge")
-@CrossOrigin(origins = "*")
 public class KnowledgeController {
 
     private final KnowledgeDb knowledgeDb;

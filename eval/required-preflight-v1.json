@@ -1,0 +1,23 @@
+{
+  "version": "required-preflight-1.0",
+  "frozenAt": "2026-10-13",
+  "notes": "必选预检的新行为增量集。旧 v2.0 保持冻结：其 G01 期待部分清单，预检阻塞后不应直接比较该题历史通过率。实时项目版本可变，版本可用性漂移需要复核。",
+  "cases": [
+    {
+      "id": "R01", "layer": "agent", "difficulty": "tricky", "title": "多核心缺兼容版本时暂停召回与组装",
+      "capabilities": ["named-core", "preflight", "diagnostics"],
+      "prompt": "我想玩一个60个模组的Neoforge1.21.1整合包，以铁魔法为核心，必须包含原项目slug alexs-mobs和alexs-caves，不接受移植或替代项目，多加一些铁魔法的扩展，以冒险为主题",
+      "assert": {"maxMods": 0, "visibleReplyContains": ["本轮未修改清单", "暂停推荐与组装"],
+        "facts": {"/trace/requirements/status": {"equals": "BLOCKED"}, "/trace/resolution/status": {"equals": "NOT_STARTED"},
+          "/trace/contract/missingMustHave": {"contains": ["alexs-mobs", "alexs-caves"]}, "/trace/candidatePool": {"equals": 0},
+          "/trace/contract/quantity/actual": {"equals": null}}}
+    },
+    {
+      "id": "R02", "layer": "agent", "difficulty": "basic", "title": "兼容必选仍正常构筑",
+      "capabilities": ["named-core", "preflight"],
+      "prompt": "新建NeoForge1.21.1包，必须包括jade和jei，只放这两个及必要前置，不加附属，不随机推荐。",
+      "assert": {"modsContain": ["jade", "jei"], "maxMods": 4,
+        "facts": {"/trace/requirements/status": {"equals": "READY"}, "/trace/contract/missingMustHave": {"equals": []}}}
+    }
+  ]
+}

@@ -32,6 +32,18 @@ class EmailCodeServiceTest {
     }
 
     @Test
+    void failedDeliveryPreservesCooldownWithoutConsumingQuota() {
+        var issued = svc.issueForDelivery(EmailCodeService.Purpose.REGISTER, EMAIL);
+        svc.rollback(EmailCodeService.Purpose.REGISTER, EMAIL, issued);
+        assertEquals(0, svc.sentToday(EMAIL));
+        assertThrows(EmailCodeService.RateLimitedException.class,
+                () -> svc.issue(EmailCodeService.Purpose.REGISTER, EMAIL));
+        advance(60_000);
+        svc.issue(EmailCodeService.Purpose.REGISTER, EMAIL);
+        assertEquals(1, svc.sentToday(EMAIL));
+    }
+
+    @Test
     @DisplayName("签发 → 校验通过 → 同一个码不能再用第二次（一次性）")
     void issueAndVerifyOnce() {
         String code = svc.issue(EmailCodeService.Purpose.REGISTER, EMAIL);
@@ -39,6 +51,17 @@ class EmailCodeServiceTest {
         assertTrue(code.matches("\\d{6}"));
         assertTrue(svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, code));
         assertFalse(svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, code), "用过的码必须失效");
+    }
+
+    @Test
+    void lateDeliveryFailureDoesNotRevokeNewCodeOrRefundTwice() {
+        var old = svc.issueForDelivery(EmailCodeService.Purpose.REGISTER, EMAIL);
+        advance(60_000);
+        var current = svc.issueForDelivery(EmailCodeService.Purpose.REGISTER, EMAIL);
+        svc.rollback(EmailCodeService.Purpose.REGISTER, EMAIL, old);
+        svc.rollback(EmailCodeService.Purpose.REGISTER, EMAIL, old);
+        assertEquals(1, svc.sentToday(EMAIL));
+        assertTrue(svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, current.code()));
     }
 
     @Test

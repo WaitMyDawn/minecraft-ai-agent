@@ -58,7 +58,7 @@ const pool = async (items, worker, limit) => {
 const post = async (path, body) => {
     const r = await fetch(BASE + path, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json; charset=utf-8'},
+        headers: {'Content-Type': 'application/json; charset=utf-8', 'X-Auth-Token': process.env.MAA_EVAL_AUTH_TOKEN || ''},
         body: JSON.stringify(body)
     });
     return {ct: r.headers.get('content-type') || '', text: await r.text()};
@@ -96,7 +96,7 @@ const fulfil = async (wanted) => {
         }
     }
 
-    const envWants = wanted.filter(w => w.kind === 'env_version');
+    const envWants = wanted.filter(w => w.kind === 'env_version' || w.kind === 'env_versions');
     const results = await pool(envWants, async (w) => {
         try {
             const gv = encodeURIComponent(JSON.stringify([w.mc]));
@@ -105,10 +105,10 @@ const fulfil = async (wanted) => {
                 + `/version?game_versions=${gv}&loaders=${ld}`);
             const arr = Array.isArray(got) ? got : (got ? [got] : []);
             return arr.length > 0
-                ? {found: {kind: 'env_version', key: w.key, data: arr[0]}}
-                : {absent: {kind: 'env_version', key: w.key}};
+                ? {found: {kind: w.kind, key: w.key, data: w.kind === 'env_versions' ? arr.slice(0, 4) : arr[0]}}
+                : {absent: {kind: w.kind, key: w.key}};
         } catch (e) {
-            return {failed: {kind: 'env_version', key: w.key}};
+            return {failed: {kind: w.kind, key: w.key}};
         }
     }, CONCURRENCY);
     for (const r of results) {

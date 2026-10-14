@@ -6,7 +6,7 @@
   Collapses "start server / provide key / run mvnw / compare CSVs" into one command.
   Artifacts:
     - target/eval/<label>-<timestamp>.json  per-case detail (includes <trace>)
-    - eval/results/ablation.csv             long-term comparison table (version-controlled, appended each run)
+    - eval/results/ablation-v3.csv             long-term comparison table (version-controlled, appended each run)
 
   NOTE: keep this file ASCII-only. Windows PowerShell 5.1 reads .ps1 using the system ANSI codepage
   unless the file has a UTF-8 BOM, so non-ASCII text here would break parsing. Chinese docs live in
@@ -27,6 +27,9 @@
 .PARAMETER NoStart
   Reuse an already running server (never touches existing processes).
 
+.PARAMETER Set
+  Dataset path (default: eval/golden-set.json; incremental: eval/golden-set-v2.json).
+
 .PARAMETER KeepServer
   Do not stop the server after the run.
 
@@ -41,6 +44,7 @@ param(
     [string]$Layer = "all",
     [int]$Repeat = 1,
     [string]$Cases = "",
+    [string]$Set = "eval/golden-set.json",
     [switch]$NoStart,
     [switch]$KeepServer
 )
@@ -51,34 +55,48 @@ Set-Location $root
 
 function Test-ServerReady {
     try {
-        $r = Invoke-WebRequest -Uri "http://localhost:8080/api/meta/categories" -TimeoutSec 5 -UseBasicParsing
+        $r = Invoke-WebRequest -Uri "http://127.0.0.1:8080/api/health?strict=true" -TimeoutSec 5 -UseBasicParsing
         return ($r.StatusCode -eq 200)
     } catch {
         return $false
     }
 }
 
-function Get-JavaPids {
-    return @(Get-Process java -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+$ownedProcesses = @{}
+function Remember-OwnedProcesses {
+    $rows = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId)
+    do {
+        $added = $false
+        foreach ($row in $rows) {
+            $id = [int]$row.ProcessId
+            if ($ownedProcesses.ContainsKey([int]$row.ParentProcessId) -and -not $ownedProcesses.ContainsKey($id)) {
+                $parentProcess = Get-Process -Id $row.ParentProcessId -ErrorAction SilentlyContinue
+                if (-not $parentProcess -or $parentProcess.StartTime -ne $ownedProcesses[[int]$row.ParentProcessId]) { continue }
+                $process = Get-Process -Id $id -ErrorAction SilentlyContinue
+                if ($process) { $ownedProcesses[$id] = $process.StartTime; $added = $true }
+            }
+        }
+    } while ($added)
 }
-
-# ---------- 1. load key from .env (never printed) ----------
-$apiKey = ""
-if (Test-Path (Join-Path $root ".env")) {
-    $line = Get-Content (Join-Path $root ".env") -Encoding UTF8 |
-        Where-Object { $_ -match '^\s*DEEPSEEK_API_KEY\s*=' } | Select-Object -First 1
-    if ($line) { $apiKey = ($line -split '=', 2)[1].Trim().Trim('"').Trim("'") }
+function Stop-OwnedProcesses {
+    Remember-OwnedProcesses
+    foreach ($id in @($ownedProcesses.Keys)) {
+        $process = Get-Process -Id $id -ErrorAction SilentlyContinue
+        if ($process -and $process.StartTime -eq $ownedProcesses[$id]) {
+            Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
-if ($apiKey) { $env:DEEPSEEK_API_KEY = $apiKey }
-if ($apiKey) {
-    Write-Host ("[1/4] key loaded from .env (length " + $apiKey.Length + ", not printed)")
-} else {
-    Write-Host "[1/4] no key found: agent layer will fail (offline layer still works)"
+# ---------- 1. validate evaluation authentication ----------
+if (-not $env:MAA_EVAL_AUTH_TOKEN) {
+    Write-Host "[1/4] set MAA_EVAL_AUTH_TOKEN to a logged-in test account token"
+    exit 4
 }
-
+Write-Host "[1/4] evaluation authentication configured (credentials are not printed)"
 # ---------- 2. start server and wait ----------
-$pidsBefore = Get-JavaPids
+
 $started = $false
+try {
 if (-not $NoStart) {
     if (Test-ServerReady) {
         Write-Host "[2/4] port 8080 already serving: pass -NoStart to reuse it, or stop it first (this script never kills processes it did not start)"
@@ -87,19 +105,20 @@ if (-not $NoStart) {
     $outLog = Join-Path $root "target/eval-run/app-oneshot.out.log"
     $errLog = Join-Path $root "target/eval-run/app-oneshot.err.log"
     New-Item -ItemType Directory -Force -Path (Join-Path $root "target/eval-run") | Out-Null
-    Start-Process -FilePath (Join-Path $root "mvnw.cmd") -ArgumentList "-o", "spring-boot:run" `
+    $appProcess = Start-Process -PassThru -FilePath (Join-Path $root "mvnw.cmd") -ArgumentList "-o", "spring-boot:run" `
         -WorkingDirectory $root -WindowStyle Hidden `
         -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+    $ownedProcesses[$appProcess.Id] = $appProcess.StartTime
     $started = $true
     Write-Host "[2/4] starting app (log: target/eval-run/app-oneshot.out.log) ..."
     $ready = $false
     for ($i = 0; $i -lt 40; $i++) {
+        Remember-OwnedProcesses
         Start-Sleep -Seconds 3
         if (Test-ServerReady) { $ready = $true; Write-Host ("      ready after ~" + (($i + 1) * 3) + "s"); break }
     }
     if (-not $ready) {
-        Write-Host "      start failed or timed out; last 20 log lines:"
-        Get-Content $outLog -Tail 20 -Encoding UTF8
+        Write-Host "      start failed or timed out; inspect the startup logs locally"
         exit 3
     }
 } else {
@@ -109,6 +128,7 @@ if (-not $NoStart) {
 
 # ---------- 3. run eval ----------
 $mvnArgs = @("-o", "test", "-Dtest=GoldenSetEval", "-Deval=true", "-Deval.layer=$Layer", "-Deval.label=$Label")
+$mvnArgs += "-Deval.set=$Set"
 if ($Repeat -gt 1) { $mvnArgs += "-Deval.repeat=$Repeat" }
 if ($Cases) { $mvnArgs += "-Deval.cases=$Cases" }
 Write-Host ("[3/4] running: mvnw " + ($mvnArgs -join " "))
@@ -116,7 +136,7 @@ Write-Host ("[3/4] running: mvnw " + ($mvnArgs -join " "))
 $exitCode = $LASTEXITCODE
 
 # ---------- 4. diff vs previous run ----------
-$csv = Join-Path $root "eval/results/ablation.csv"
+$csv = Join-Path $root "eval/results/ablation-v3.csv"
 if (Test-Path $csv) {
     # sort defensively: the table is chronological, but never trust file order for "previous run"
     $rows = @(Import-Csv $csv | Sort-Object timestamp)
@@ -124,6 +144,17 @@ if (Test-Path $csv) {
     if ($n -ge 2) {
         $cur = $rows[$n - 1]
         $prev = $rows[$n - 2]
+        $compatible = $cur.setSha256 -eq $prev.setSha256 -and $cur.layer -eq $prev.layer -and $cur.repeat -eq $prev.repeat
+        $detailRoot = [IO.Path]::GetFullPath((Join-Path $root "target/eval")) + [IO.Path]::DirectorySeparatorChar
+        $caseSelections = @()
+        foreach ($entry in @($prev, $cur)) {
+            $detail = [IO.Path]::GetFullPath((Join-Path $detailRoot ($entry.label + "-" + $entry.timestamp + ".json")))
+            if (-not $detail.StartsWith($detailRoot, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $detail)) { $compatible = $false; break }
+            $data = Get-Content -LiteralPath $detail -Raw | ConvertFrom-Json
+            $caseSelections += (($data.cases.id | Sort-Object) -join "|")
+        }
+        if ($caseSelections.Count -ne 2 -or $caseSelections[0] -ne $caseSelections[1]) { $compatible = $false }
+        if ($compatible) {
         Write-Host ""
         Write-Host ("==== diff vs previous run (previous = " + $prev.label + " / current = " + $cur.label + ") ====")
         $fmt = "{0,-14} {1,-22} {2,-22} {3}"
@@ -140,19 +171,19 @@ if (Test-Path $csv) {
         }
         Write-Host ""
         Write-Host ("per-case detail: target/eval/" + $cur.label + "-<timestamp>.json")
-        Write-Host "long-term table: eval/results/ablation.csv (this run appended)"
+        Write-Host "long-term table: eval/results/ablation-v3.csv (this run appended)"
+        } else { Write-Host "Skipped comparison: dataset, selection, layer or repeat count differs (or detail is unavailable)." }
     }
 }
 
 # ---------- cleanup ----------
+} finally {
 if ($started -and -not $KeepServer) {
-    $new = @(Get-JavaPids | Where-Object { $pidsBefore -notcontains $_ })
-    if ($new.Count -gt 0) {
-        Stop-Process -Id $new -Force -ErrorAction SilentlyContinue
-        Write-Host ("[4/4] stopped server processes started by this run: " + ($new -join ", "))
-    }
+    Stop-OwnedProcesses
+    Write-Host "[4/4] stopped the process tree started by this runner"
 } elseif ($KeepServer) {
     Write-Host "[4/4] -KeepServer: leaving the server running"
+}
 }
 
 exit $exitCode

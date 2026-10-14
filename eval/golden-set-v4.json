@@ -1,0 +1,480 @@
+{
+  "version": "4.0",
+  "frozenAt": "2026-10-14",
+  "notes": "工作流确认、局部偏好、通用复合目标和优化组合增量集；旧集保持冻结。KEEP_ALL是测试作者明确执行的选择，绝非超时默认确认。",
+  "cases": [
+    {
+      "id": "W01",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "仅服务端内存优化",
+      "prompt": "新建Neoforge1.21.1整合包，大概8~16个模组，仅改善Minecraft服务端内存，不需要渲染器、UI或内容扩充。",
+      "capabilities": [
+        "optimization",
+        "side-scope"
+      ],
+      "manualReview": [
+        "说明中的内存改善是否适用于服务端；不以安装侧别替代用途核实"
+      ],
+      "assert": {
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错",
+          "可直接运行"
+        ],
+        "minMods": 1,
+        "optimization": {
+          "side": "SERVER",
+          "rolesContain": [
+            "MEMORY"
+          ],
+          "minMods": 1,
+          "referenceActive": false,
+          "retainedEvidence": true,
+          "maxRenderers": 0
+        }
+      }
+    },
+    {
+      "id": "W02",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "客户端优化用途互补",
+      "prompt": "新建Fabric1.20.1整合包，约12~20个模组，改善客户端渲染、实体裁剪和内存；不要装两个基础渲染器。",
+      "capabilities": [
+        "optimization",
+        "complementarity"
+      ],
+      "manualReview": [
+        "渲染引擎与辅助机制是否互补，实际帧率需要独立实测"
+      ],
+      "assert": {
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错",
+          "可直接运行"
+        ],
+        "minMods": 2,
+        "optimization": {
+          "side": "CLIENT",
+          "rolesContain": [
+            "RENDERER",
+            "ENTITY_CULLING",
+            "MEMORY"
+          ],
+          "minMods": 2,
+          "referenceActive": false,
+          "retainedEvidence": true,
+          "maxRenderers": 1
+        }
+      }
+    },
+    {
+      "id": "W03",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "冷门科技与常规界面偏好独立",
+      "prompt": "新建Neoforge1.21.1包，约15~25个模组。\n1）自动化和运输尽量选择较新、小众的模组\n2）物品管理和界面优先成熟常用的模组",
+      "capabilities": [
+        "local-preferences",
+        "generic-goals"
+      ],
+      "manualReview": [
+        "新颖、小众是否只作用于科技目标；下载量与日期只是偏好依据"
+      ],
+      "assert": {
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错",
+          "可直接运行"
+        ],
+        "minMods": 2,
+        "coverage": {
+          "sourcesContain": [
+            "自动化",
+            "物品管理"
+          ],
+          "minSupporting": 2,
+          "retainedEvidence": true,
+          "maxRepairAdds": 3
+        },
+        "facts": {
+          "/constraints/requirements/1/preferences/popularity": {
+            "equals": "LESS_POPULAR"
+          },
+          "/constraints/requirements/1/preferences/freshness": {
+            "equals": "RECENT"
+          }
+        }
+      }
+    },
+    {
+      "id": "W04",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "点名现代化UI身份",
+      "prompt": "新建Neoforge1.21.1包，约8~15个模组，要求现代化UI，点名modern-ui，同时包含jade和jei。",
+      "capabilities": [
+        "aliases",
+        "named-core"
+      ],
+      "manualReview": [
+        "modern-ui应保持身份，不能被泛化界面推荐代替"
+      ],
+      "assert": {
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错",
+          "可直接运行"
+        ],
+        "modsContain": [
+          "modern-ui",
+          "jade",
+          "jei"
+        ],
+        "coverage": {
+          "noMissingNamed": true,
+          "retainedEvidence": true,
+          "maxRepairAdds": 3
+        }
+      }
+    },
+    {
+      "id": "W05",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "不同背包用途无需重叠选择",
+      "prompt": "新建Forge1.20.1包，只要inventory-profiles-next和inventoryhudplus及必要前置，根模组严格两个，不需要额外推荐。",
+      "capabilities": [
+        "overlap-negative",
+        "named-core"
+      ],
+      "manualReview": [
+        "库存整理与HUD展示不同，不应仅因inventory同词要求二选一；项目有效性由实时Modrinth核实"
+      ],
+      "assert": {
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错",
+          "可直接运行"
+        ],
+        "modsContain": [
+          "inventory-profiles-next",
+          "inventoryhudplus"
+        ],
+        "facts": {
+          "/trace/contract/quantity/actual": {
+            "equals": 2
+          }
+        }
+      }
+    },
+    {
+      "id": "W06",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "通用目标：交通与航海",
+      "prompt": "新建Forge1.20.1包，约15~25个模组。\n1）丰富交通运输和航海探索\n2）方便建造港口和航海基地，不需要任务线或额外代码。",
+      "capabilities": [
+        "generic-goals",
+        "compound-criteria"
+      ],
+      "manualReview": [
+        "船只、交通与港口建筑各自评估，不用冒险/魔法固定模板代替"
+      ],
+      "assert": {
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错",
+          "可直接运行"
+        ],
+        "minMods": 2,
+        "coverage": {
+          "sourcesContain": [
+            "交通运输",
+            "港口"
+          ],
+          "minSupporting": 2,
+          "retainedEvidence": true,
+          "maxRepairAdds": 3
+        }
+      }
+    },
+    {
+      "id": "W07",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "通用目标：工业与空间存储",
+      "prompt": "新建Fabric1.20.1包，约15~25个模组。\n1）工厂自动化和电力\n2）仓储、运输和方便查询配方",
+      "capabilities": [
+        "generic-goals",
+        "compound-criteria"
+      ],
+      "manualReview": [
+        "工业、电力、仓储和运输分别寻找实际内容证据"
+      ],
+      "assert": {
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错",
+          "可直接运行"
+        ],
+        "minMods": 2,
+        "coverage": {
+          "sourcesContain": [
+            "电力",
+            "仓储"
+          ],
+          "minSupporting": 2,
+          "retainedEvidence": true,
+          "maxRepairAdds": 3
+        }
+      }
+    },
+    {
+      "id": "W08",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "修复及UI不被优化证据替代",
+      "prompt": "新建Neoforge1.21.1包，约12~20个模组。\n1）增加一些优化模组\n2）现代化UI\n3）修复游戏漏洞，不需要增加新生物或世界生成",
+      "capabilities": [
+        "optimization",
+        "multi-facet"
+      ],
+      "manualReview": [
+        "优化、UI、修复三个目标都要有用途证据，软参考比例不作为硬阈值"
+      ],
+      "assert": {
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错",
+          "可直接运行"
+        ],
+        "minMods": 2,
+        "coverage": {
+          "sourcesContain": [
+            "优化",
+            "UI",
+            "修复"
+          ],
+          "minSupporting": 3,
+          "retainedEvidence": true,
+          "maxRepairAdds": 3
+        },
+        "optimization": {
+          "minMods": 1,
+          "referenceActive": true,
+          "retainedEvidence": true
+        }
+      }
+    },
+    {
+      "id": "W09",
+      "layer": "agent",
+      "difficulty": "basic",
+      "title": "主题短输入确认后续建",
+      "capabilities": [
+        "clarification-resume",
+        "minimal-input"
+      ],
+      "turns": [
+        {
+          "prompt": "我想玩一个交通和航海整合包",
+          "assert": {
+            "replyNotContains": [
+              "未通过结构化校验",
+              "组装过程中出错",
+              "可直接运行"
+            ],
+            "facts": {
+              "/trace/awaitingInput": {
+                "equals": true
+              },
+              "/clarification_context/schemaVersion": {
+                "equals": 1
+              }
+            }
+          }
+        },
+        {
+          "confirmation": {
+            "kind": "BASIC",
+            "answer": "使用Neoforge1.21.1，约12~20个模组，保留交通和航海主题"
+          },
+          "assert": {
+            "replyNotContains": [
+              "未通过结构化校验",
+              "组装过程中出错",
+              "可直接运行"
+            ],
+            "minMods": 1,
+            "envMc": "1.21.1",
+            "envLoader": "neoforge",
+            "coverage": {
+              "sourcesContain": [
+                "交通",
+                "航海"
+              ],
+              "retainedEvidence": true,
+              "maxRepairAdds": 3
+            }
+          }
+        }
+      ],
+      "manualReview": [
+        "确认后应保持原始主题，不将用户答复当成独立无主题请求"
+      ]
+    },
+    {
+      "id": "W10",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "大幅世界生成修改显式保留全部",
+      "capabilities": [
+        "overlap-resume",
+        "worldgen-scope",
+        "named-core"
+      ],
+      "turns": [
+        {
+          "prompt": "新建Neoforge1.21.1包，约8~20个模组，点名terralith、biomes-o-plenty和nullscape，不额外推荐；希望丰富世界生成。",
+          "assert": {
+            "replyNotContains": [
+              "未通过结构化校验",
+              "组装过程中出错",
+              "可直接运行"
+            ],
+            "facts": {
+              "/trace/awaitingInput": {
+                "equals": true
+              },
+              "/replacement_options/kind": {
+                "equals": "OVERLAP"
+              }
+            }
+          }
+        },
+        {
+          "confirmation": {
+            "kind": "OVERLAP",
+            "strategy": "KEEP_ALL"
+          },
+          "assert": {
+            "replyNotContains": [
+              "未通过结构化校验",
+              "组装过程中出错",
+              "可直接运行"
+            ],
+            "modsContain": [
+              "terralith",
+              "biomes-o-plenty",
+              "nullscape"
+            ],
+            "coverage": {
+              "noMissingNamed": true,
+              "retainedEvidence": true
+            },
+            "facts": {
+              "/trace/assembly/rootsKnown": {
+                "equals": true
+              }
+            }
+          }
+        }
+      ],
+      "manualReview": [
+        "跨维度潜在风格或兼容问题应该说明；显式全部保留不代表运行兼容已验证"
+      ]
+    },
+    {
+      "id": "W11",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "跨轮取消优化保留UI及点名项",
+      "capabilities": [
+        "release",
+        "optimization",
+        "persistence"
+      ],
+      "turns": [
+        {
+          "prompt": "新建Neoforge1.21.1包，约12~20个模组。\n1）优化内存\n2）现代化UI，点名modern-ui",
+          "assert": {
+            "replyNotContains": [
+              "未通过结构化校验",
+              "组装过程中出错",
+              "可直接运行"
+            ],
+            "modsContain": [
+              "modern-ui"
+            ],
+            "optimization": {
+              "minMods": 1,
+              "rolesContain": [
+                "MEMORY"
+              ],
+              "referenceActive": false,
+              "retainedEvidence": true
+            }
+          }
+        },
+        {
+          "prompt": "取消内存优化要求，保留原清单和modern-ui，添加jei，不额外推荐。",
+          "assert": {
+            "replyNotContains": [
+              "未通过结构化校验",
+              "组装过程中出错",
+              "可直接运行"
+            ],
+            "modsContain": [
+              "modern-ui",
+              "jei"
+            ],
+            "coverage": {
+              "sourcesContain": [
+                "UI"
+              ],
+              "noMissingNamed": true,
+              "retainedEvidence": true,
+              "maxRepairAdds": 0
+            }
+          }
+        }
+      ],
+      "manualReview": [
+        "解除目标不等于删除已经保留的模组，不应继续召回已解除的优化目标"
+      ]
+    },
+    {
+      "id": "W12",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "双侧内存需求不被单侧替代",
+      "prompt": "新建Neoforge1.21.1包，约8~16个模组，希望同时改善客户端和Minecraft服务端内存，不需要其它用途优化。",
+      "capabilities": [
+        "optimization",
+        "side-scope"
+      ],
+      "manualReview": [
+        "客户端和服务端各自需要有用途证据，自动断言先检查服务端，客户端另见目标报告"
+      ],
+      "assert": {
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错",
+          "可直接运行"
+        ],
+        "minMods": 1,
+        "optimization": {
+          "minMods": 1,
+          "side": "SERVER",
+          "rolesContain": [
+            "MEMORY"
+          ],
+          "referenceActive": false,
+          "retainedEvidence": true
+        }
+      }
+    }
+  ]
+}

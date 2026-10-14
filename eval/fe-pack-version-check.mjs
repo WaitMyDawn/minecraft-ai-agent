@@ -9,7 +9,7 @@
 //   2) 两版之间必须判得出不同（否则按钮之间没有区别）；
 //   3) 判定要与后端哈希同口径：清单顺序无关、去重。
 import {
-    applyPackState, attachVersion, packStateOf, parseCsv, readPackState, stateEquals,
+    applyPackState, attachVersion, markExplicitRoots, packStateOf, parseCsv, readPackState, stateEquals,
 } from '../src/main/resources/static/js/utils/pack-state.js';
 
 let failed = 0;
@@ -58,6 +58,37 @@ check(stateEquals(packStateOf(mkPack()), packStateOf(mkPack())), '空状态自�
 check(readPackState('') === null, '没有状态字段的老消息返回 null（调用方据此打开当前图谱）');
 check(readPackState('{坏 JSON') === null, '状态解析失败也不能抛异常，只能返回 null');
 check(parseCsv(' a ,, b ,').join('|') === 'a|b', 'CSV 解析去空去空格');
+
+const constrained = packStateOf(mkPack({constraints: {schemaVersion: 1, mustHave: ['create'], exclude: ['jei']}}));
+check(!stateEquals(constrained, packStateOf(mkPack())), '约束变化也生成独立历史版本');
+const restored = mkPack();
+applyPackState(restored, readPackState(JSON.stringify(constrained)));
+restored.constraints.mustHave.push('jade');
+check(constrained.constraints.mustHave.length === 1, '恢复后的约束与历史快照不共享可变引用');
+applyPackState(restored, readPackState(JSON.stringify(v1)));
+check(restored.constraints === null, '旧版本恢复清空后续版本的约束');
+
+const importedState = packStateOf(mkPack({importedPack: {loader: 'neoforge', mcVersion: '1.21.1', loaderVersion: '21.1.1',
+    files: [{slug: 'jade', versionId: 'old', sha1: 'a'}]}}));
+applyPackState(restored, readPackState(JSON.stringify(importedState)));
+restored.importedPack.files[0].versionId = 'new';
+check(importedState.importedPack.files[0].versionId === 'old', '导入版本锁定与历史状态不共享引用');
+check(!stateEquals(importedState, packStateOf(restored)), '精确版本变化形成独立历史状态');
+applyPackState(restored, v1);
+check(restored.importedPack === null, '旧版没有导入信息时清除版本锁定');
+
+const assembled = packStateOf(mkPack({assembly: {loader: 'neoforge', mcVersion: '1.21.1', roots: ['core'],
+    versions: {core: 'V1', library: 'V2'}, origins: {core: ['CORE'], library: ['DEPENDENCY']}, rootsKnown: true}}));
+applyPackState(restored, readPackState(JSON.stringify(assembled)));
+restored.assembly.versions.core = 'V3';
+check(assembled.assembly.versions.core === 'V1', '构建选版与历史快照不共享引用');
+check(!stateEquals(assembled, packStateOf(restored)), '构建选版改变形成独立历史版本');
+markExplicitRoots(restored, ['library']);
+check(restored.assembly.roots.includes('library') && restored.assembly.origins.library.includes('EXPLICIT_ADD')
+    && !restored.assembly.origins.library.includes('DEPENDENCY'), '手动点名已有前置提升为显式根');
+check(assembled.assembly.roots.length === 1, '手动新增不污染历史来源');
+applyPackState(restored, v1);
+check(restored.assembly === null, '恢复旧版本时清除后续构建选版及来源');
 
 if (failed > 0) {
     console.log('\nSOME CHECKS FAILED (' + failed + ')');

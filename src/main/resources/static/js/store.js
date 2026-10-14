@@ -15,6 +15,8 @@ export const sessionUuid = ref('session-' + Date.now() + '-' + Math.random().toS
 export const searchQuery = ref('');
 export const thinkTime = ref('0.0');
 export const currentThought = ref('');     // 当前显示的思考步骤文案
+export const buildProgress = ref([]);
+export const requestStatuses = reactive({});
 export const isLoading = ref(false);
 export const isResolving = ref(false);
 export const isBuilding = ref(false);
@@ -25,7 +27,10 @@ export const packData = reactive({
     modSlugs: [],
     // 🗑️ 用户在图谱里显式删除的模组：随 preview/chat 一起下发，
     // 防止被 Architect 复述或依赖引擎当作前置重新补回来（P2）
-    excludedSlugs: []
+    excludedSlugs: [],
+    constraints: null,
+    importedPack: null,
+    assembly: null
 });
 export const previewData = ref(null);
 export const selectedMods = ref(new Set());

@@ -25,7 +25,7 @@ public class AppConfig {
         return cacheManager;
     }
 
-    // RestClient — Modrinth API 调用
+    // 邮件与加载器目录共用客户端；Modrinth 使用独立的有界传输层。
     // 设置 connect=8s / read=15s 防止网络波动导致请求无限等待
     @Bean
     public RestClient restClient() {

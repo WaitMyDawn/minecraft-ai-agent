@@ -16,7 +16,6 @@ import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/prefs")
-@CrossOrigin(origins = "*")
 public class PreferencesController {
 
     private final UserRepository userRepo;
@@ -77,6 +76,7 @@ public class PreferencesController {
     }
 
     @DeleteMapping("/conversations/{id}")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<Map<String, Object>> deleteConversation(
             @RequestHeader("X-Auth-Token") String token, @PathVariable Long id) {
         Long uid = requireUser(token);
@@ -113,6 +113,7 @@ public class PreferencesController {
     }
 
     @PostMapping("/conversations/{id}/messages")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<Map<String, Object>> saveMessage(
             @RequestHeader("X-Auth-Token") String token, @PathVariable Long id,
             @RequestBody Map<String, Object> body) {
@@ -122,8 +123,11 @@ public class PreferencesController {
         if (convOpt.isEmpty() || !uid.equals(convOpt.get().getUserId())) {
             return ResponseEntity.status(404).body(Map.of("error", "对话不存在"));
         }
+        String content = text(body.get("content"));
+        if (content.length() > ChatMessage.MAX_CONTENT_LENGTH)
+            return ResponseEntity.status(413).body(Map.of("error", "消息内容超过存储上限"));
         ChatMessage msg = new ChatMessage(id,
-                body.get("role").toString(), body.get("content").toString(),
+                body.get("role").toString(), content,
                 Boolean.TRUE.equals(body.get("hasData")),
                 body.getOrDefault("thinkTime", "").toString(),
                 body.getOrDefault("modSlugs", "").toString());
@@ -136,8 +140,37 @@ public class PreferencesController {
             String loader = text(body.get("loader"));
             String modSlugs = text(body.getOrDefault("modSlugs", ""));
             String excludedSlugs = text(body.getOrDefault("excludedSlugs", ""));
-            msg.setPackState(packStateJson(packName, mcVersion, loader, modSlugs, excludedSlugs));
-            snapshotId = PackSnapshotHash.id(loader, mcVersion, modSlugs, excludedSlugs);
+            yagen.waitmydawn.maa.model.agent.BuildConstraints constraints = null;
+            if (body.get("constraints") != null) {
+                try {
+                    constraints = new yagen.waitmydawn.maa.model.agent.AgentContractCodec()
+                            .readConstraints(objectMapper.writeValueAsString(body.get("constraints")));
+                } catch (IllegalArgumentException invalid) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "包约束格式无效"));
+                }
+            }
+            ObjectNode savedState = (ObjectNode) objectMapper.readTree(packStateJson(packName, mcVersion, loader, modSlugs, excludedSlugs));
+            savedState.set("constraints", objectMapper.valueToTree(constraints));
+            yagen.waitmydawn.maa.model.ImportedPack imported = null;
+            if (body.get("importedPack") != null) {
+                try {
+                    imported = objectMapper.convertValue(body.get("importedPack"), yagen.waitmydawn.maa.model.ImportedPack.class);
+                    imported.requireEnvironment(loader, mcVersion);
+                } catch (IllegalArgumentException invalid) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "导入版本信息无效"));
+                }
+            }
+            savedState.set("importedPack", objectMapper.valueToTree(imported));
+            yagen.waitmydawn.maa.model.AssemblySnapshot assembly = null;
+            if (body.get("assembly") != null) {
+                try {
+                    assembly = objectMapper.convertValue(body.get("assembly"), yagen.waitmydawn.maa.model.AssemblySnapshot.class);
+                    if (!assembly.matches(loader, mcVersion)) throw new IllegalArgumentException("environment");
+                } catch (IllegalArgumentException invalid) { return ResponseEntity.badRequest().body(Map.of("error", "构建快照无效")); }
+            }
+            savedState.set("assembly", objectMapper.valueToTree(assembly));
+            msg.setPackState(objectMapper.writeValueAsString(savedState));
+            snapshotId = PackSnapshotHash.id(loader, mcVersion, modSlugs, excludedSlugs, constraints, imported, assembly);
             msg.setSnapshotId(snapshotId);
         }
         msgRepo.save(msg);
@@ -180,6 +213,7 @@ public class PreferencesController {
     }
 
     @PostMapping("/categories")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<Map<String, Object>> addCategoryPref(
             @RequestHeader("X-Auth-Token") String token, @RequestBody Map<String, String> body) {
         Long uid = requireUser(token);
@@ -234,6 +268,7 @@ public class PreferencesController {
     }
 
     @DeleteMapping("/categories/{id}")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<Map<String, Object>> removeCategoryPref(
             @RequestHeader("X-Auth-Token") String token, @PathVariable Long id) {
         Long uid = requireUser(token);
@@ -358,13 +393,16 @@ public class PreferencesController {
 
     // ==================== 下载时更新偏好 ====================
 
-    @PostMapping("/update-on-build")
     public ResponseEntity<Map<String, Object>> updateOnBuild(
             @RequestHeader("X-Auth-Token") String token, @RequestBody Map<String, Object> body) {
         Long uid = requireUser(token);
         @SuppressWarnings("unchecked")
         List<String> slugs = (List<String>) body.get("slugs");
         if (slugs == null || slugs.isEmpty()) return ResponseEntity.ok(Map.of("ok", true));
+        if (slugs.size() > 500 || slugs.stream().anyMatch(s -> !ModrinthIdentifiers.isProjectReference(s))) {
+            return ResponseEntity.badRequest().body(Map.of("error", "模组清单超过限额或包含非法标识"));
+        }
+        slugs = new ArrayList<>(new LinkedHashSet<>(slugs));
 
         // 模组太多时采样 (防止 API 调用过量和 DB 膨胀)
         List<String> sample = slugs.size() > 200
@@ -385,55 +423,63 @@ public class PreferencesController {
             }
         }
 
-        // 更新类别偏好: 统计各类别模组数量, 取 top 5
-        Map<String, Long> catCount = new LinkedHashMap<>();
-        for (String slug : slugs) {
-            String cat = slugCategories.getOrDefault(slug, "unknown");
-            catCount.merge(cat, 1L, Long::sum);
+        var lock = yagen.waitmydawn.maa.runtime.AccountWriteLocks.forOwner(uid);
+        try { lock.lockInterruptibly(); }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new java.util.concurrent.CancellationException("偏好更新已取消");
         }
-        catRepo.deleteByUserId(uid);
-        int rank = 1;
-        for (var entry : catCount.entrySet().stream()
-                .sorted((a, b) -> Long.compare(b.getValue(), a.getValue()))
-                .limit(5).toList()) {
-            catRepo.save(new CategoryPreference(uid, entry.getKey(), rank++));
-        }
+        try {
+            // 更新类别偏好: 统计各类别模组数量, 取 top 5
+            Map<String, Long> catCount = new LinkedHashMap<>();
+            for (String slug : slugs) {
+                String cat = slugCategories.getOrDefault(slug, "unknown");
+                catCount.merge(cat, 1L, Long::sum);
+            }
+            catRepo.deleteByUserId(uid);
+            int rank = 1;
+            for (var entry : catCount.entrySet().stream()
+                    .sorted((a, b) -> Long.compare(b.getValue(), a.getValue()))
+                    .limit(5).toList()) {
+                catRepo.save(new CategoryPreference(uid, entry.getKey(), rank++));
+            }
 
-        // 当前全局最高构建次数 (用于 user 来源模组同步)
-        int globalMax = modRepo.findByUserIdOrderByBuildCountDesc(uid).stream()
-                .mapToInt(ModPreference::getBuildCount).max().orElse(0);
+            // 当前全局最高构建次数 (用于 user 来源模组同步)
+            int globalMax = modRepo.findByUserIdOrderByBuildCountDesc(uid).stream()
+                    .mapToInt(ModPreference::getBuildCount).max().orElse(0);
 
-        // 更新模组偏好
-        int newMax = globalMax;
-        for (String slug : sample) {
-            String cat = slugCategories.getOrDefault(slug, "unknown");
-            var existing = modRepo.findByUserIdAndSlug(uid, slug);
-            if (existing.isPresent()) {
-                ModPreference mp = existing.get();
-                if ("user".equals(mp.getSource())) {
-                    mp.setBuildCount(Math.max(globalMax + 1, mp.getBuildCount() + 1));
+            // 更新模组偏好
+            int newMax = globalMax;
+            for (String slug : sample) {
+                String cat = slugCategories.getOrDefault(slug, "unknown");
+                var existing = modRepo.findByUserIdAndSlug(uid, slug);
+                if (existing.isPresent()) {
+                    ModPreference mp = existing.get();
+                    if ("user".equals(mp.getSource())) {
+                        mp.setBuildCount(Math.max(globalMax + 1, mp.getBuildCount() + 1));
+                    } else {
+                        mp.setBuildCount(mp.getBuildCount() + 1);
+                    }
+                    modRepo.save(mp);
+                    if (mp.getBuildCount() > newMax) newMax = mp.getBuildCount();
                 } else {
-                    mp.setBuildCount(mp.getBuildCount() + 1);
+                    // 首次出现: 保存为 agent 来源, buildCount=1
+                    // 前端仅展示 buildCount≥3 的 agent 模组, 后台静默累积
+                    ModPreference mp = new ModPreference(uid, cat, slug, 1, "agent");
+                    modRepo.save(mp);
                 }
-                modRepo.save(mp);
-                if (mp.getBuildCount() > newMax) newMax = mp.getBuildCount();
-            } else {
-                // 首次出现: 保存为 agent 来源, buildCount=1
-                // 前端仅展示 buildCount≥3 的 agent 模组, 后台静默累积
-                ModPreference mp = new ModPreference(uid, cat, slug, 1, "agent");
-                modRepo.save(mp);
             }
-        }
 
-        // 复核: user 来源模组全部同步到本轮最高 (含新增的 user 模组)
-        if (newMax > globalMax) {
-            for (var mp : modRepo.findByUserIdAndSource(uid, "user")) {
-                mp.setBuildCount(Math.max(mp.getBuildCount(), newMax));
-                modRepo.save(mp);
+            // 复核: user 来源模组全部同步到本轮最高 (含新增的 user 模组)
+            if (newMax > globalMax) {
+                for (var mp : modRepo.findByUserIdAndSource(uid, "user")) {
+                    mp.setBuildCount(Math.max(mp.getBuildCount(), newMax));
+                    modRepo.save(mp);
+                }
             }
-        }
 
-        return ResponseEntity.ok(Map.of("ok", true, "categories", catCount));
+            return ResponseEntity.ok(Map.of("ok", true, "categories", catCount));
+        } finally { lock.unlock(); }
     }
 
     // ==================== 模组黑名单 ====================
@@ -512,6 +558,7 @@ public class PreferencesController {
     }
 
     @PostMapping("/import")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<Map<String, Object>> importPrefs(
             @RequestHeader("X-Auth-Token") String token, @RequestBody Map<String, Object> data) {
         Long uid = requireUser(token);
@@ -563,6 +610,7 @@ public class PreferencesController {
     }
 
     @PostMapping("/clear")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<Map<String, Object>> clearPrefs(@RequestHeader("X-Auth-Token") String token) {
         Long uid = requireUser(token);
         catRepo.deleteByUserId(uid);
@@ -572,7 +620,6 @@ public class PreferencesController {
 
     // ==================== Modrinth 模组信息 (给前端卡片用) ====================
 
-    @GetMapping("/mod-info/{slug}")
     public ResponseEntity<Map<String, Object>> modInfo(@PathVariable String slug) {
         try {
             var info = apiClient.getProjectInfo(slug);

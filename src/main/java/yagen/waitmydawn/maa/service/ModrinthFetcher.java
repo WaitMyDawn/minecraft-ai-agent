@@ -7,7 +7,6 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 import yagen.waitmydawn.maa.runtime.RequestScope;
 
@@ -21,7 +20,7 @@ import java.util.Map;
 import java.util.function.Supplier;
 
 /**
- * Modrinth 出网层：运行时路径上<b>唯一</b>真正发出 HTTP 的地方。
+ * Modrinth 服务端取数层：管理缓存、限流与逻辑取数预算，HTTP 交由 ModrinthHttpTransport 执行。
  *
  * <p>为什么从 {@code ModrinthApiClient} 里拆出来：{@code @Cacheable} 的写回挡不住——只要方法被注解，
  * Spring 就一定会把它的返回值塞进共享缓存，而调用方拿到的值有可能来自不可信通道（用户浏览器回传的
@@ -36,7 +35,15 @@ import java.util.function.Supplier;
 @Service
 public class ModrinthFetcher {
 
-    private final RestClient restClient;
+    private final ModrinthHttpTransport transport;
+    private final long requestBudgetMs;
+    private final int maxAttempts;
+    private final ThreadLocal<Budget> activeBudget = new ThreadLocal<>();
+    private static final class Budget {
+        final long deadline;
+        boolean retry;
+        Budget(long millis) { deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(millis); }
+    }
     /** 全局出网令牌闸：运行时所有 Modrinth 请求都从这里取许可（详见 ModrinthThrottle 类注释） */
     private final ModrinthThrottle throttle;
     private final CacheManager cacheManager;
@@ -45,10 +52,15 @@ public class ModrinthFetcher {
 
     /** 批量端点单次最多带多少个 id。实测 100 个一次返回（622KB / URL 约 1.5KB），留足余量 */
     private static final int BATCH_LIMIT = 100;
+    private static final tools.jackson.databind.ObjectMapper JSON = new tools.jackson.databind.ObjectMapper();
 
-    public ModrinthFetcher(RestClient restClient, ModrinthThrottle throttle, CacheManager cacheManager,
-                           @Value("${maa.modrinth.batch-prefetch:true}") boolean batchPrefetch) {
-        this.restClient = restClient;
+    public ModrinthFetcher(ModrinthHttpTransport transport, ModrinthThrottle throttle, CacheManager cacheManager,
+                           @Value("${maa.modrinth.batch-prefetch:true}") boolean batchPrefetch,
+                           @Value("${maa.modrinth.request-budget-ms:20000}") long requestBudgetMs,
+                           @Value("${maa.modrinth.max-attempts:2}") int maxAttempts) {
+        this.transport = transport;
+        this.requestBudgetMs = Math.max(100, Math.min(60000, requestBudgetMs));
+        this.maxAttempts = Math.max(1, Math.min(3, maxAttempts));
         this.throttle = throttle;
         this.cacheManager = cacheManager;
         this.batchPrefetch = batchPrefetch;
@@ -59,6 +71,15 @@ public class ModrinthFetcher {
     public JsonNode getLatestVersion(String projectId, String mcVersion, String loaders) {
         return executeWithSmartRetry("https://api.modrinth.com/v2/project/{id}/version?game_versions=[\"{v}\"]&loaders={l}", projectId, mcVersion, loaders);
     }
+    public JsonNode getCompatibleVersions(String projectId, String mcVersion, String loaders) {
+        String template = "https://api.modrinth.com/v2/project/{id}/version?game_versions=[\"{v}\"]&loaders={l}";
+        JsonNode response = withSmartRetry(template, true, true,
+                () -> fetchByUri(new org.springframework.web.util.DefaultUriBuilderFactory().expand(template, projectId, mcVersion, loaders)));
+        if (response == null || !response.isArray()) return null;
+        var limited = new tools.jackson.databind.ObjectMapper().createArrayNode();
+        for (int i = 0; i < Math.min(4, response.size()); i++) limited.add(response.get(i));
+        return limited;
+    }
 
     /**
      * 方案 A 优先：直接按 slug 查最新兼容版本；若该 slug 路由 404/无结果，
@@ -67,6 +88,9 @@ public class ModrinthFetcher {
      */
     @Cacheable(value = "modVersionsBySlug", key = "#slug + '|' + #mcVersion + '|' + #loader", sync = true)
     public JsonNode getLatestCompatibleVersionBySlug(String slug, String mcVersion, String loader) {
+        return bounded(() -> latestCompatible(slug, mcVersion, loader));
+    }
+    private JsonNode latestCompatible(String slug, String mcVersion, String loader) {
         String loaders = "[\"" + loader + "\"]";
         JsonNode version = executeWithSmartRetry(
                 "https://api.modrinth.com/v2/project/{slug}/version?game_versions=[\"{v}\"]&loaders={l}",
@@ -247,19 +271,9 @@ public class ModrinthFetcher {
         if (key != null && !key.isBlank()) cache.put(key, value);
     }
 
-    /**
-     * 拼 {@code ["a","b"]} 形式的 JSON 数组。
-     *
-     * <p>不引 ObjectMapper：Modrinth 的 id 只含 {@code [A-Za-z0-9]}、slug 只含 {@code [a-z0-9-]}，
-     * 手拼足够且少一个依赖。仍然把越界字符滤掉，避免拼出坏 JSON。
-     */
+    /** JSON 编码保留合法项目引用，不能通过删字符把带括号的 slug 改成另一项目。 */
     private static String toJsonArray(List<String> values) {
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < values.size(); i++) {
-            if (i > 0) sb.append(',');
-            sb.append('"').append(values.get(i).replaceAll("[^A-Za-z0-9_.-]", "")).append('"');
-        }
-        return sb.append(']').toString();
+        return JSON.writeValueAsString(values);
     }
 
     /** 批量取数：失败只告警不抛，让调用方继续走逐条路径 */
@@ -288,17 +302,33 @@ public class ModrinthFetcher {
      */
     private JsonNode executeWithSmartRetry(String urlTemplate, boolean acceptPlainObject, Object... uriVariables) {
         return withSmartRetry(urlTemplate, acceptPlainObject,
-                () -> restClient.get().uri(urlTemplate, uriVariables).retrieve().body(JsonNode.class));
+                () -> fetchByUri(new org.springframework.web.util.DefaultUriBuilderFactory().expand(urlTemplate, uriVariables)));
     }
 
     /**
      * 直接按完整 URL 取。
      *
-     * <p>必须走 {@link URI} 形态：把已编码的 URL 当模板传给 RestClient 会把 {@code %} 二次转义成
-     * {@code %25}，请求直接失效。旧代码在 controller 里就是这么绕开的，收口后要保留这个细节。
+     * <p>已编码 URL 不再进入模板展开，避免把 {@code %} 再转义成 {@code %25}。
      */
     private JsonNode fetchByUrl(String url) {
-        return restClient.get().uri(URI.create(url)).retrieve().body(JsonNode.class);
+        return fetchByUri(URI.create(url));
+    }
+    private JsonNode fetchByUri(URI uri) {
+        return transport.get(uri, remainingMs(), activeBudget.get().retry);
+    }
+    private JsonNode bounded(Supplier<JsonNode> operation) {
+        if (activeBudget.get() != null) return operation.get();
+        activeBudget.set(new Budget(requestBudgetMs));
+        try { return operation.get(); } finally { activeBudget.remove(); }
+    }
+    private long remainingMs() {
+        long nanos = activeBudget.get().deadline - System.nanoTime();
+        if (nanos <= 0) throw new ModrinthApiClient.UnavailableException("Modrinth 取数总等待预算已耗尽");
+        return Math.max(1, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(nanos));
+    }
+    private void waitWithinBudget(long millis) {
+        if (millis >= remainingMs()) throw new ModrinthApiClient.UnavailableException("Modrinth 恢复窗口超过本次等待预算");
+        pause(millis);
     }
 
     private static String encode(String raw) {
@@ -324,24 +354,33 @@ public class ModrinthFetcher {
 
     private JsonNode withSmartRetry(String label, boolean acceptPlainObject, boolean rawReturn,
                                     Supplier<JsonNode> call) {
+        return bounded(() -> retryWithinBudget(label, acceptPlainObject, rawReturn, call));
+    }
+    private JsonNode retryWithinBudget(String label, boolean acceptPlainObject, boolean rawReturn, Supplier<JsonNode> call) {
         int baseWaitSeconds = 2; // 基础等待时间
 
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < maxAttempts; i++) {
+            var context = yagen.waitmydawn.maa.runtime.DelegationContext.current();
+            if (context != null) context.checkActive();
+            if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException("请求已取消");
             // 全局令牌闸：排不到队就按"无法确定"退出，绝不硬闯限额
-            if (!throttle.acquire()) {
+            if (!throttle.acquire(remainingMs())) {
                 throw new ModrinthApiClient.UnavailableException(
                         "Modrinth 出网队列拥塞，本次未发出请求: " + label);
             }
+            if (context != null) context.checkActive();
             try {
-                RequestScope.countUpstream();
+                activeBudget.get().retry = i > 0;
+                remainingMs();
                 JsonNode result = call.get();
 
-                if (rawReturn) return result;
-                if (result != null && result.isArray() && !result.isEmpty()) return result.get(0);
+                if (rawReturn && result != null && (result.isArray() || result.isObject())) return result;
+                if (result != null && result.isArray() && label.contains("/version?"))
+                    return result.isEmpty() ? null : result.get(0);
                 if (result != null && result.has("slug")) return result;
                 if (acceptPlainObject && result != null && result.isObject()) return result;
 
-                return null;
+                throw new ModrinthApiClient.UnavailableException("Modrinth 响应结构不可用");
             } catch (HttpClientErrorException.TooManyRequests e) {
                 RequestScope.countRateLimited();
                 HttpHeaders headers = e.getResponseHeaders();
@@ -350,7 +389,7 @@ public class ModrinthFetcher {
                 if (headers != null && headers.get("X-Ratelimit-Reset") != null) {
                     try {
                         String resetValue = headers.getFirst("X-Ratelimit-Reset");
-                        if (resetValue != null) waitSeconds = Integer.parseInt(resetValue) + 1;
+                        if (resetValue != null) waitSeconds = (int)Math.min(59, Math.max(0, Long.parseLong(resetValue))) + 1;
                     } catch (Exception ignored) {}
                 }
 
@@ -358,18 +397,39 @@ public class ModrinthFetcher {
                 if (waitSeconds == -1) {
                     waitSeconds = baseWaitSeconds * (1 << i); // 2 * 2^i
                 }
+                throttle.deferSeconds(waitSeconds);
 
-                System.err.println("⚠️ 触发限流！当前线程智能挂起 " + waitSeconds + " 秒后进行第 " + (i+1) + " 次重试...");
-                RequestScope.countRetry();
-                try { Thread.sleep(waitSeconds * 1000L); } catch (InterruptedException ignored) {}
+                if (i + 1 >= maxAttempts) break;
+                waitWithinBudget(Math.min(60, Math.max(1, waitSeconds)) * 1000L);
 
             } catch (Exception e) {
-                if (e.getMessage() != null && e.getMessage().contains("404")) return null;
-                RequestScope.countRetry();
-                try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
+                if (e instanceof java.util.concurrent.CancellationException cancelled) throw cancelled;
+                if (e instanceof org.springframework.web.client.HttpClientErrorException http
+                        && http.getStatusCode().value() == 404) return null;
+                if (e instanceof org.springframework.web.client.HttpClientErrorException http
+                        && http.getStatusCode().is4xxClientError()) {
+                    throw new ModrinthApiClient.UnavailableException("Modrinth 拒绝请求，HTTP " + http.getStatusCode().value());
+                }
+                if (i + 1 >= maxAttempts) break;
+                waitWithinBudget(1000);
             }
         }
         // 重试耗尽 = 无法确定结果，绝不能当成"该模组没有兼容版本"
         throw new ModrinthApiClient.UnavailableException("Modrinth 重试耗尽，无法确定结果: " + label);
+    }
+
+    private static void pause(long millis) {
+        try {
+            long until = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(millis);
+            for (long left = millis; left > 0; left = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(until - System.nanoTime())) {
+                var context = yagen.waitmydawn.maa.runtime.DelegationContext.current();
+                if (context != null) context.checkActive();
+                Thread.sleep(Math.min(250, left));
+            }
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new java.util.concurrent.CancellationException("请求已取消");
+        }
     }
 }

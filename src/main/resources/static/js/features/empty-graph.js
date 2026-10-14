@@ -66,6 +66,8 @@ export const confirmEmptyGraph = async () => {
         packData.loader = emptyGraphForm.loader;
         packData.modSlugs = [];
         packData.excludedSlugs = [];
+        packData.constraints = null; packData.importedPack = null;
+        packData.assembly = {loader: packData.loader, mcVersion: packData.mcVersion, roots: [], versions: {}, origins: {}, rootsKnown: true};
 
         // 落历史：saveMsg 会在没有会话时自己建一个（不会清空工作区），标题取首条用户消息前 30 字，
         // 于是侧边栏一眼能认出是哪个包

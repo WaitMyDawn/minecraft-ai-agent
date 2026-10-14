@@ -15,7 +15,10 @@ public class ChatMessage {
     @Column(nullable = false)
     private String role;  // "user" or "ai"
 
-    @Column(length = 5000)
+    public static final int MAX_CONTENT_LENGTH = 524288;
+
+    // 结构化需求、组合报告及阶段记录随正文保存；不能截断 JSON 来适配短文本列。
+    @Column(length = MAX_CONTENT_LENGTH)
     private String content;
 
     private boolean hasData;
@@ -27,8 +30,9 @@ public class ChatMessage {
     @Column(length = 16)
     private String snapshotId;  // 打包输入状态的内容哈希（10 位十六进制），"这是哪一版"
 
-    @Column(length = 10000)
-    private String packState;   // 当时的完整输入状态 JSON：{name, mcVersion, loader, modSlugs, excludedSlugs}
+    // 快照还包含必选与排除约束；不能沿用仅容纳模组 CSV 的长度限制。
+    @Column(length = 524288)
+    private String packState;
 
     @Column(nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();

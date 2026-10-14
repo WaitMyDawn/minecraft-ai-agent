@@ -39,6 +39,27 @@ import static org.mockito.Mockito.when;
  * <p>这是"点历史按钮回到那一版"的地基：消息上没有版本号与状态，所有按钮就只能指向最新一版。
  */
 class PreferencesMessageSnapshotTest {
+    @Test void longStructuredMessagesAreNotTruncatedAndOversizedMessagesAreRejected() {
+        var request = body("core", true);
+        String content = "<requirement_report>" + "中文结构化结果".repeat(2000) + "</requirement_report>";
+        request.put("content", content);
+        assertEquals(200, controller.saveMessage(TOKEN, CONV, request).getStatusCode().value());
+        assertEquals(content, saved().getContent());
+        request.put("content", "x".repeat(ChatMessage.MAX_CONTENT_LENGTH + 1));
+        assertEquals(413, controller.saveMessage(TOKEN, CONV, request).getStatusCode().value());
+        verify(msgRepo, times(1)).save(any());
+    }
+    @Test void assemblyVersionsAndOriginsArePersistedWithTheHistorySnapshot() {
+        var assembly = new yagen.waitmydawn.maa.model.AssemblySnapshot("neoforge", "1.21.1", List.of("core"),
+                Map.of("core", "V1", "library", "V2"), Map.of("core", java.util.Set.of("CORE"), "library", java.util.Set.of("DEPENDENCY")));
+        var request = body("core,library", true);
+        request.put("assembly", new ObjectMapper().valueToTree(assembly));
+        var result = controller.saveMessage(TOKEN, CONV, request);
+        assertTrue(result.getStatusCode().is2xxSuccessful());
+        var state = new ObjectMapper().readTree(saved().getPackState());
+        assertEquals("V1", state.path("assembly").path("versions").path("core").asText());
+        assertEquals("DEPENDENCY", state.path("assembly").path("origins").path("library").get(0).asText());
+    }
 
     private static final String TOKEN = "tok";
     private static final long UID = 7L;
@@ -83,6 +104,34 @@ class PreferencesMessageSnapshotTest {
         ArgumentCaptor<ChatMessage> captor = ArgumentCaptor.forClass(ChatMessage.class);
         verify(msgRepo).save(captor.capture());
         return captor.getValue();
+    }
+
+    @Test void importedVersionsSurviveSavedSnapshotAndEnvironmentMismatchIsRejected() {
+        var imported = new yagen.waitmydawn.maa.model.ImportedPack("neoforge", "1.21.1", "21.1.42", List.of(
+                new yagen.waitmydawn.maa.model.ImportedPack.File("fixture", "P1", "V1", "fixture.jar",
+                        "https://cdn.modrinth.com/data/P1/versions/V1/fixture.jar", "a".repeat(40), "b".repeat(128), 123, Map.of())));
+        var body = body("fixture", true);
+        body.put("importedPack", new ObjectMapper().valueToTree(imported));
+        assertEquals(200, controller.saveMessage(TOKEN, CONV, body).getStatusCode().value());
+        assertTrue(saved().getPackState().contains("\"versionId\":\"V1\""));
+        assertEquals(PackSnapshotHash.id("neoforge", "1.21.1", "fixture", "", null, imported), saved().getSnapshotId());
+        body.put("loader", "forge");
+        assertEquals(400, controller.saveMessage(TOKEN, CONV, body).getStatusCode().value());
+        verify(msgRepo, times(1)).save(any());
+    }
+
+    @Test void durableConstraintsAreStoredInSnapshotAndInvalidConstraintsAreRejected() {
+        var body = body("create", true);
+        var constraints = new yagen.waitmydawn.maa.model.agent.BuildConstraints(1, List.of("create"), List.of("jei"),
+                List.of(), null, yagen.waitmydawn.maa.model.agent.BuildIntent.ReplacementPolicy.NONE, 500_000);
+        body.put("constraints", new ObjectMapper().valueToTree(constraints));
+        var response = controller.saveMessage(TOKEN, CONV, body);
+        assertEquals(200, response.getStatusCode().value());
+        assertTrue(saved().getPackState().contains("\"mustHave\":[\"create\"]"));
+        assertEquals(PackSnapshotHash.id("neoforge", "1.21.1", "create", "", constraints), saved().getSnapshotId());
+        body.put("constraints", Map.of("schemaVersion", 1));
+        assertEquals(400, controller.saveMessage(TOKEN, CONV, body).getStatusCode().value());
+        verify(msgRepo, times(1)).save(any());
     }
 
     @Test

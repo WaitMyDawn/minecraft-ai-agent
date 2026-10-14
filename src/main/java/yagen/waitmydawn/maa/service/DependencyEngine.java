@@ -133,14 +133,22 @@ public class DependencyEngine {
     /** 带缓存的完整解析，可指定本次不使用的规则来源（缓存按规则集隔离，见字段注释）。 */
     public ResolutionResult resolveCachedResult(Set<String> initialSlugs, String loader, String mcVersion,
                                                 KnowledgeRule.SourceType excludeRuleSource) {
-        String key = loader + "|" + mcVersion + "|" + ruleScopeKey(excludeRuleSource) + "|"
+        // 浏览器事实及其派生图谱只在当前任务内有效，不能进入共享缓存。
+        if (yagen.waitmydawn.maa.runtime.DelegationContext.current() != null) {
+            return doResolve(initialSlugs, loader, mcVersion, excludeRuleSource);
+        }
+        List<KnowledgeRule> ruleSnapshot = knowledgeDb.getActiveRules(loader.toLowerCase() + "-" + mcVersion, excludeRuleSource);
+        String rulesVersion = ruleSnapshot.stream().map(r -> r.modA + ":" + r.modB + ":" + r.relationType + ":" + r.sourceType)
+                .sorted().collect(java.util.stream.Collectors.joining(";"));
+        String key = loader + "|" + mcVersion + "|" + ruleScopeKey(excludeRuleSource) + "|" + rulesVersion + "|"
                 + new java.util.TreeSet<>(initialSlugs);
         ResolveCacheHit hit = resolveCache.get(key);
         long now = System.currentTimeMillis();
         if (hit != null && now - hit.cachedAt < RESOLVE_CACHE_TTL_MS) {
             return hit.result;
         }
-        ResolutionResult result = doResolve(initialSlugs, loader, mcVersion, excludeRuleSource);
+        ResolutionResult result = doResolve(initialSlugs, loader, mcVersion, excludeRuleSource, ruleSnapshot);
+        if (!result.isComplete()) return result;
         // 惰性清理 + 最旧优先淘汰。原来是"超过 50 条就整表 clear()"——多用户下 A 的插入会把 B
         // 刚算好的依赖图清掉（10 分钟 TTL 等于没用），于是重复 BFS、重复出网，而出口还要过令牌闸排队。
         resolveCache.entrySet().removeIf(e -> now - e.getValue().cachedAt() >= RESOLVE_CACHE_TTL_MS);
@@ -159,6 +167,33 @@ public class DependencyEngine {
     /** 规则集在缓存 key 里的表示：null（全都用）与"排除某一类"必须落在不同的桶里。 */
     private static String ruleScopeKey(KnowledgeRule.SourceType excludeRuleSource) {
         return excludeRuleSource == null ? "rules-all" : "rules-without-" + excludeRuleSource.name();
+    }
+    /** 软选版属于当前工作流，不进入按根清单索引的共享缓存。 */
+    public ResolutionResult resolvePreferred(Set<String> roots, String loader, String mc, KnowledgeRule.SourceType exclude,
+                                              Map<String, String> preferred) {
+        var choices = new ConcurrentHashMap<String, JsonNode>();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var pending = new ArrayList<CompletableFuture<Void>>();
+            for (var entry : preferred.entrySet()) pending.add(ScopedExecutors.runAsync(() -> {
+                try {
+                    var v = apiClient.getVersionById(entry.getValue());
+                    if (v != null && supportsEnv(v, mc, loader)) choices.put(entry.getKey(), v);
+                } catch (java.util.concurrent.CancellationException cancelled) { throw cancelled; }
+                catch (ModrinthApiClient.UnavailableException unavailable) { /* 原选版未核实，不宣称它已不存在。 */ }
+            }, executor));
+            CompletableFuture.allOf(pending.toArray(new CompletableFuture[0])).join();
+        }
+        return coordinate(roots, loader, mc, knowledgeDb.getActiveRules(loader.toLowerCase() + "-" + mc, exclude), choices);
+    }
+
+    /** 同一工作流试解复用已核实的版本事实，不按版本 ID 重取整个原包。 */
+    public ResolutionResult resolveUsingFacts(Set<String> roots, String loader, String mc, KnowledgeRule.SourceType exclude,
+                                             Map<String, JsonNode> verifiedVersions) {
+        var choices = new HashMap<String, JsonNode>();
+        verifiedVersions.forEach((slug, version) -> {
+            if (version != null && supportsEnv(version, mc, loader)) choices.put(slug, version.deepCopy());
+        });
+        return coordinate(roots, loader, mc, knowledgeDb.getActiveRules(loader.toLowerCase() + "-" + mc, exclude), choices);
     }
 
     /**
@@ -189,21 +224,102 @@ public class DependencyEngine {
 
     private ResolutionResult doResolve(Set<String> initialSlugs, String loader, String mcVersion,
                                        KnowledgeRule.SourceType excludeRuleSource) {
+        return doResolve(initialSlugs, loader, mcVersion, excludeRuleSource,
+                knowledgeDb.getActiveRules(loader.toLowerCase() + "-" + mcVersion, excludeRuleSource));
+    }
+
+    private ResolutionResult doResolve(Set<String> initialSlugs, String loader, String mcVersion,
+                                       KnowledgeRule.SourceType excludeRuleSource, List<KnowledgeRule> activeRules) {
+        return coordinate(initialSlugs, loader, mcVersion, activeRules, Map.of());
+    }
+    private ResolutionResult coordinate(Set<String> initialSlugs, String loader, String mcVersion,
+                                        List<KnowledgeRule> activeRules, Map<String, JsonNode> preferences) {
+        ResolutionResult first = resolveOnce(initialSlugs, loader, mcVersion, activeRules, preferences);
+        if (first.isComplete() || first.budgetExhausted()) return first;
+        var pending = new ArrayDeque<Map<String, JsonNode>>();
+        pending.add(preferences);
+        var visited = new HashSet<String>(); visited.add("");
+        var domains = new LinkedHashMap<String, List<JsonNode>>();
+        ResolutionResult best = first;
+        int attempts = 0;
+        while (!pending.isEmpty() && attempts < 6) {
+            var choices = pending.removeFirst();
+            ResolutionResult current = choices.equals(preferences) ? first : resolveOnce(initialSlugs, loader, mcVersion, activeRules, choices);
+            if (!choices.equals(preferences)) attempts++;
+            if (current.roots().containsAll(first.roots()) && quality(current) < quality(best)) best = current;
+            if (best.isComplete()) break;
+            var parents = current.unresolved().stream()
+                    .filter(u -> u.reason() == ResolutionResult.Reason.VERSION_CONFLICT || u.reason() == ResolutionResult.Reason.CONFLICT_BETWEEN_ROOTS)
+                    .map(ResolutionResult.Unresolved::requiredBy).filter(s -> !s.startsWith("("))
+                    .distinct().sorted().toList();
+            for (String parent : parents) {
+                if (current.graph().pinnedSlugs.contains(parent)) continue;
+                if (!domains.containsKey(parent)) {
+                    if (domains.size() >= 4) continue;
+                    var candidates = new ArrayList<JsonNode>();
+                    try {
+                        var info = apiClient.getProjectInfo(parent);
+                        if (info != null) {
+                            String id = info.path("id").asText();
+                            var versions = apiClient.getCompatibleVersions(id, mcVersion, "[\"" + loader.toLowerCase() + "\"]");
+                            if (versions != null && versions.isArray()) for (var v : versions) {
+                                if (candidates.size() >= 4) break;
+                                if (supportsEnv(v, mcVersion, loader) && id.equals(v.path("project_id").asText())
+                                        && !v.path("id").asText().isBlank()) candidates.add(v);
+                            }
+                        }
+                    } catch (java.util.concurrent.CancellationException cancelled) { throw cancelled; }
+                    catch (ModrinthApiClient.UnavailableException unavailable) { /* 不把取数故障当成无兼容版本。 */ }
+                    domains.put(parent, List.copyOf(candidates));
+                }
+                boolean promising = current.roots().containsAll(first.roots()) && quality(current) < quality(first);
+                var candidates = new ArrayList<>(domains.get(parent));
+                if (promising) Collections.reverse(candidates);
+                for (var version : candidates) {
+                    var selected = current.graph().selectedVersions.get(parent);
+                    if (selected != null && selected.path("id").asText().equals(version.path("id").asText())) continue;
+                    var next = new TreeMap<>(choices); next.put(parent, version);
+                    String key = next.entrySet().stream().map(e -> e.getKey() + "=" + e.getValue().path("id").asText())
+                            .collect(java.util.stream.Collectors.joining("|"));
+                    if (visited.size() < 25 && visited.add(key)) {
+                        if (promising) pending.addFirst(Map.copyOf(next)); else pending.addLast(Map.copyOf(next));
+                    }
+                }
+            }
+        }
+        var changes = new TreeMap<String, String>();
+        for (var entry : best.graph().selectedVersions.entrySet()) {
+            var previous = first.graph().selectedVersions.get(entry.getKey());
+            String version = entry.getValue().path("id").asText();
+            if (previous == null || !version.equals(previous.path("id").asText())) changes.put(entry.getKey(), version);
+        }
+        var stats = new ResolutionResult.Coordination(attempts, domains.size(), best.isComplete() ? "RESOLVED"
+                : attempts >= 6 ? "LIMIT_REACHED" : "UNRESOLVED", changes);
+        MaaLog.user("静态版本协调：尝试 " + attempts + "，候选查询 " + domains.size() + "，状态 " + stats.status() + "，选版 " + changes);
+        return best.coordinated(stats);
+    }
+    private static int quality(ResolutionResult result) {
+        return result.unresolved().size() + result.dropped().size() + (result.budgetExhausted() ? 10000 : 0);
+    }
+    private ResolutionResult resolveOnce(Set<String> initialSlugs, String loader, String mcVersion,
+                                        List<KnowledgeRule> activeRules, Map<String, JsonNode> choices) {
         String loadersParam = "[\"" + loader.toLowerCase() + "\"]";
         // 规则集只有这一处入口：预览画边时会传同样的 excludeRuleSource，两边不会再分裂
-        List<KnowledgeRule> activeRules = knowledgeDb.getActiveRules(
-                loader.toLowerCase() + "-" + mcVersion, excludeRuleSource);
         String ctxKey = MaaLog.userKey();
 
         DependencyGraph graph = new DependencyGraph();
         Set<String> processedKeys = ConcurrentHashMap.newKeySet();
+        var admittedNodes = new java.util.concurrent.atomic.AtomicInteger();
         Map<String, String> idToSlug = new ConcurrentHashMap<>();
         /** 解析失败的节点：请求键 → 原因 */
         Map<String, ResolutionResult.Reason> failed = new ConcurrentHashMap<>();
         Map<String, String> failedDetail = new ConcurrentHashMap<>();
         /** 依赖关系（dependent 真 slug → 被要求的 projectId/versionId），成败待事后判定 */
         List<String[]> requiredPairs = java.util.Collections.synchronizedList(new ArrayList<>());
+        List<String[]> incompatiblePairs = java.util.Collections.synchronizedList(new ArrayList<>());
         Set<String> rootSlugs = ConcurrentHashMap.newKeySet();
+        Set<String> hardPinnedSlugs = ConcurrentHashMap.newKeySet();
+        Set<String> dependencyPins = ConcurrentHashMap.newKeySet();
         java.util.concurrent.atomic.AtomicBoolean budgetExhausted = new java.util.concurrent.atomic.AtomicBoolean(false);
 
         Queue<String> queue = new ConcurrentLinkedQueue<>(initialSlugs);
@@ -221,22 +337,39 @@ public class DependencyEngine {
                 // 🚀 层内批量预取：本层所有节点的项目元数据一次取回（100 个/请求），
                 // 于是下面每个节点各自调 getProjectInfo 时就是缓存命中，不再各发一次请求。
                 // 取不到的那几个会自动退回逐条查询，所以这一步只可能省请求、不会漏数据。
-                List<String> levelKeys = new ArrayList<>(queue);
+                List<String> levelKeys = new ArrayList<>();
+                for (String candidate : new java.util.TreeSet<>(queue)) {
+                    if (candidate.isBlank() || processedKeys.contains(candidate)) continue;
+                    String known = idToSlug.get(candidate);
+                    JsonNode selected = known == null ? null : graph.selectedVersions.get(known);
+                    if (selected != null && (!candidate.startsWith(VID_PREFIX)
+                            || (candidate.substring(VID_PREFIX.length()).equals(selected.path("id").asText()) && supportsEnv(selected, mcVersion, loader)))) {
+                        processedKeys.add(candidate);
+                        continue;
+                    }
+                    if (admittedNodes.get() + levelKeys.size() >= nodeBudget) {
+                        budgetExhausted.set(true);
+                        processedKeys.add(candidate);
+                        failed.putIfAbsent(candidate, ResolutionResult.Reason.BUDGET_EXCEEDED);
+                    } else levelKeys.add(candidate);
+                }
                 apiClient.prefetchProjects(levelKeys.stream()
                         .filter(k -> !k.startsWith(VID_PREFIX)).toList());
                 apiClient.prefetchVersions(levelKeys.stream()
                         .filter(k -> k.startsWith(VID_PREFIX))
                         .map(k -> k.substring(VID_PREFIX.length())).toList());
 
-                for (String key : queue) {
+                for (String key : levelKeys) {
                     if (key == null || key.trim().isEmpty()) continue;
                     final boolean isRootLevel = firstLevel;
                     futures.add(ScopedExecutors.runAsync(() -> MaaLog.runWithUser(ctxKey, () -> {
                         // 不再用局部信号量卡并发：它保护的"服务器出网速率"现在由全局令牌闸负责，
                         // 而挂着许可去等浏览器会把批量切成一次 5 个，反而把往返次数放大好几倍
                         try {
+                            var context = yagen.waitmydawn.maa.runtime.DelegationContext.current();
+                            if (context != null) context.checkActive();
                             if (!processedKeys.add(key)) return;   // 环安全：同一节点只解析一次
-                            if (graph.allSlugs.size() >= nodeBudget) {
+                            if (admittedNodes.incrementAndGet() > nodeBudget) {
                                 budgetExhausted.set(true);
                                 failed.putIfAbsent(key, ResolutionResult.Reason.BUDGET_EXCEEDED);
                                 return;
@@ -277,7 +410,9 @@ public class DependencyEngine {
 
                             // 2) 取版本（严格 loader：不做跨加载器回退）
                             if (latestVersion == null) {
-                                latestVersion = apiClient.getLatestVersion(projectId, mcVersion, loadersParam);
+                                latestVersion = choices.get(realSlug);
+                                if (latestVersion != null && !projectId.equals(latestVersion.path("project_id").asText())) latestVersion = null;
+                                if (latestVersion == null) latestVersion = apiClient.getLatestVersion(projectId, mcVersion, loadersParam);
                             }
                             if (latestVersion == null) {
                                 failed.put(key, ResolutionResult.Reason.NO_VERSION_FOR_ENV);
@@ -294,6 +429,26 @@ public class DependencyEngine {
 
                             // 4) 成功：入图 + 收集依赖关系（先不建边，等 target 成败确定）
                             if (!idToSlug.containsKey(projectId)) idToSlug.put(projectId, realSlug);
+                            idToSlug.put(key, realSlug);
+                            idToSlug.put(VID_PREFIX + latestVersion.path("id").asText(), realSlug);
+                            synchronized (graph) {
+                                JsonNode previous = graph.selectedVersions.get(realSlug);
+                                boolean pinned = key.startsWith(VID_PREFIX);
+                                boolean previousHardPin = hardPinnedSlugs.contains(realSlug);
+                                if (previous != null && !previous.path("id").asText().equals(latestVersion.path("id").asText())
+                                        && pinned && graph.pinnedSlugs.contains(realSlug)) {
+                                    graph.versionConflicts.add(realSlug);
+                                }
+                                if (isRootLevel && pinned) hardPinnedSlugs.add(realSlug);
+                                if (previous == null || (pinned && isRootLevel && (!previousHardPin
+                                        || latestVersion.path("id").asText().compareTo(previous.path("id").asText()) < 0))
+                                        || (pinned && !hardPinnedSlugs.contains(realSlug) && (!dependencyPins.contains(realSlug)
+                                        || latestVersion.path("id").asText().compareTo(previous.path("id").asText()) < 0))) {
+                                    graph.selectedVersions.put(realSlug, latestVersion);
+                                }
+                                if (isRootLevel && pinned) graph.pinnedSlugs.add(realSlug);
+                                if (pinned) dependencyPins.add(realSlug);
+                            }
                             graph.allSlugs.add(realSlug);
                             if (isRootLevel) rootSlugs.add(realSlug);
 
@@ -302,18 +457,26 @@ public class DependencyEngine {
                                 for (JsonNode dep : deps) {
                                     String type = dep.path("dependency_type").asText("");
                                     // optional 不装（只记录原因）；embedded 已自带，不重复当外置前置
+                                    if ("incompatible".equals(type)) {
+                                        String incompatibleId = dep.path("project_id").asText("");
+                                        String incompatibleVersion = dep.path("version_id").asText("");
+                                        String target = !incompatibleVersion.isBlank() && !"null".equals(incompatibleVersion)
+                                                ? VID_PREFIX + incompatibleVersion : incompatibleId;
+                                        if (!target.isBlank() && !"null".equals(target)) incompatiblePairs.add(new String[]{realSlug, target, latestVersion.path("id").asText()});
+                                        continue;
+                                    }
                                     if (!"required".equals(type)) continue;
                                     String depProject = dep.path("project_id").asText("");
                                     String depVersion = dep.path("version_id").asText("");
                                     boolean hasProject = !depProject.isEmpty() && !"null".equals(depProject);
                                     boolean hasVersion = !depVersion.isEmpty() && !"null".equals(depVersion);
                                     if (SINYTRA_ECOSYSTEM_IDS.contains(depProject)) continue;
-                                    if (hasProject) {
-                                        requiredPairs.add(new String[]{realSlug, depProject});
-                                        nextLevel.add(depProject);
-                                    } else if (hasVersion) {
-                                        requiredPairs.add(new String[]{realSlug, VID_PREFIX + depVersion});
+                                    if (hasVersion) {
+                                        requiredPairs.add(new String[]{realSlug, VID_PREFIX + depVersion, latestVersion.path("id").asText()});
                                         nextLevel.add(VID_PREFIX + depVersion);
+                                    } else if (hasProject) {
+                                        requiredPairs.add(new String[]{realSlug, depProject, latestVersion.path("id").asText()});
+                                        nextLevel.add(depProject);
                                     }
                                 }
                             }
@@ -324,6 +487,8 @@ public class DependencyEngine {
                                     nextLevel.add(rule.modB);
                                 }
                             }
+                        } catch (java.util.concurrent.CancellationException e) {
+                            throw e;
                         } catch (ModrinthApiClient.UnavailableException e) {
                             // 查不通 ≠ 不存在：标记但不当成失败剔除
                             failed.put(key, ResolutionResult.Reason.UPSTREAM_UNAVAILABLE);
@@ -342,7 +507,7 @@ public class DependencyEngine {
 
         // ===== 事后统一裁决（确定性：不依赖并发完成顺序）=====
         return finalizeResolution(graph, idToSlug, failed, failedDetail, requiredPairs,
-                rootSlugs, initialSlugs, activeRules, budgetExhausted.get(), startTime);
+                incompatiblePairs, rootSlugs, initialSlugs, activeRules, budgetExhausted.get(), startTime);
     }
 
     /** 该版本是否满足指定 mc + loader（用于 version_id 精确依赖的环境校验） */
@@ -366,18 +531,29 @@ public class DependencyEngine {
     private ResolutionResult finalizeResolution(DependencyGraph graph, Map<String, String> idToSlug,
                                                 Map<String, ResolutionResult.Reason> failed,
                                                 Map<String, String> failedDetail,
-                                                List<String[]> requiredPairs, Set<String> rootSlugs,
+                                                List<String[]> requiredPairs, List<String[]> incompatiblePairs, Set<String> rootSlugs,
                                                 Set<String> requestedRoots, List<KnowledgeRule> activeRules,
                                                 boolean budgetExhausted, long startTime) {
         List<ResolutionResult.Unresolved> unresolved = new ArrayList<>();
         List<ResolutionResult.Dropped> dropped = new ArrayList<>();
         Set<String> kept = new LinkedHashSet<>(graph.allSlugs);
+        List<KnowledgeRule> rules = new ArrayList<>(activeRules);
+        for (var pair : incompatiblePairs) {
+            var selected = graph.selectedVersions.get(pair[0]);
+            if (selected == null || !pair[2].equals(selected.path("id").asText())) continue;
+            String target = pair[1].startsWith(VID_PREFIX) ? graph.selectedVersions.entrySet().stream()
+                    .filter(e -> pair[1].substring(VID_PREFIX.length()).equals(e.getValue().path("id").asText()))
+                    .map(Map.Entry::getKey).findFirst().orElse("") : idToSlug.getOrDefault(pair[1], pair[1]);
+            if (!target.isBlank()) rules.add(new KnowledgeRule("", pair[0], target, "CONFLICTS_WITH", KnowledgeRule.SourceType.MODRINTH, 100));
+        }
         // doResolve 只收集候选关系、不提前建边，边一律在这里按"成败已定"重建，
         // 所以图里不可能留下指向空气的边。清空是防御性的：防将来有人在 BFS 里提前建边。
         graph.depsOf.clear();
         graph.dependentsOf.clear();
 
         List<String[]> pairs = new ArrayList<>(requiredPairs);
+        pairs.removeIf(pair -> pair.length > 2 && graph.selectedVersions.containsKey(pair[0])
+                && !pair[2].equals(graph.selectedVersions.get(pair[0]).path("id").asText()));
         pairs.sort(Comparator.comparing((String[] p) -> p[0]).thenComparing(p -> p[1]));
 
         java.util.function.Function<String, String> toSlug = id -> {
@@ -389,6 +565,12 @@ public class DependencyEngine {
         // 用户点名的模组自己就没解析出来（不存在 / 无版本 / 查不通）也要如实上报，
         // 否则用户只会看到"少了一个"，却不知道为什么
         for (String req : new ArrayList<>(requestedRoots)) {
+            String slug = toSlug.apply(req);
+            JsonNode selected = graph.selectedVersions.get(slug);
+            if (req.startsWith(VID_PREFIX) && selected != null && !req.substring(VID_PREFIX.length()).equals(selected.path("id").asText())) {
+                unresolved.add(new ResolutionResult.Unresolved(slug, "(导入锁定)", ResolutionResult.Reason.VERSION_CONFLICT, "锁定版本未保留"));
+                continue;
+            }
             if (kept.contains(toSlug.apply(req)) || !failed.containsKey(req)) continue;
             ResolutionResult.Reason reason = failed.get(req);
             unresolved.add(new ResolutionResult.Unresolved(toSlug.apply(req), "(用户点名)", reason,
@@ -398,6 +580,12 @@ public class DependencyEngine {
             String dependent = pair[0];
             String target = pair[1];
             String targetSlug = toSlug.apply(target);
+            JsonNode selected = graph.selectedVersions.get(targetSlug);
+            if (target.startsWith(VID_PREFIX) && selected != null && !target.substring(VID_PREFIX.length()).equals(selected.path("id").asText())) {
+                unresolved.add(new ResolutionResult.Unresolved(targetSlug, dependent, ResolutionResult.Reason.VERSION_CONFLICT,
+                        "需要精确版本 " + target.substring(VID_PREFIX.length()) + "，实际选择 " + selected.path("id").asText()));
+                continue;
+            }
             if (kept.contains(targetSlug)) {
                 graph.addEdge(dependent, targetSlug);
                 continue;
@@ -439,7 +627,7 @@ public class DependencyEngine {
         }
 
         // 互斥裁决（确定性：按 slug 排序；核心优先；两个都是核心时报给用户）
-        List<KnowledgeRule> conflicts = activeRules.stream()
+        List<KnowledgeRule> conflicts = rules.stream()
                 .filter(r -> "CONFLICTS_WITH".equals(r.relationType))
                 .sorted(Comparator.comparing((KnowledgeRule r) -> r.modA).thenComparing(r -> r.modB))
                 .toList();
@@ -462,9 +650,44 @@ public class DependencyEngine {
                     "与保留的 " + keeper + " 互斥，已剔除"));
         }
 
+        // 互斥裁决可能移除已解析的必需前置，必须重新检查依赖闭包。
+        boolean changed;
+        Set<String> reportedBroken = new HashSet<>();
+        do {
+            changed = false;
+            for (String dependent : new TreeSet<>(kept)) {
+                for (String target : graph.getDependenciesOf(dependent)) {
+                    if (kept.contains(target)) continue;
+                    if (reportedBroken.add(dependent + "|" + target)) {
+                        unresolved.add(new ResolutionResult.Unresolved(target, dependent,
+                                ResolutionResult.Reason.DEPENDENT_OF_DROPPED, "必需前置已被冲突或断链裁决移除"));
+                    }
+                    if (!rootSlugs.contains(dependent) && kept.remove(dependent)) {
+                        dropped.add(new ResolutionResult.Dropped(dependent,
+                                ResolutionResult.Reason.DEPENDENT_OF_DROPPED, "必需前置已移除"));
+                        changed = true;
+                    }
+                }
+            }
+        } while (changed);
+
         // 重建最终图（只保留 kept 的节点与其有效边）
+        var reachable = new HashSet<String>();
+        var rootsQueue = new ArrayDeque<String>();
+        rootSlugs.stream().filter(kept::contains).forEach(rootsQueue::add);
+        while (!rootsQueue.isEmpty()) {
+            String slug = rootsQueue.removeFirst();
+            if (!kept.contains(slug) || !reachable.add(slug)) continue;
+            graph.getDependenciesOf(slug).stream().filter(kept::contains).forEach(rootsQueue::add);
+        }
+        kept.retainAll(reachable);
         DependencyGraph finalGraph = new DependencyGraph();
         finalGraph.allSlugs.addAll(kept);
+        finalGraph.pinnedSlugs.addAll(graph.pinnedSlugs);
+        for (String slug : kept) {
+            JsonNode selected = graph.selectedVersions.get(slug);
+            if (selected != null) finalGraph.selectedVersions.put(slug, selected);
+        }
         for (var e : graph.depsOf.entrySet()) {
             if (!kept.contains(e.getKey())) continue;
             for (String target : e.getValue()) {

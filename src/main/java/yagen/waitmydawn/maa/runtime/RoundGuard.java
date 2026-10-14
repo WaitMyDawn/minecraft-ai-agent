@@ -32,6 +32,7 @@ public class RoundGuard {
     private record Entry(long startedAt, Long ownerId, String uuid) {}
 
     private final Map<String, Entry> running = new ConcurrentHashMap<>();
+    private final ThreadLocal<Map<String, Entry>> acquired = ThreadLocal.withInitial(java.util.HashMap::new);
     private final long ttlMs;
 
     public RoundGuard(long ttlMs) {
@@ -52,7 +53,7 @@ public class RoundGuard {
      *
      * @param ownerId 账号 id；匿名传 null（只按 uuid 拦）
      */
-    public boolean begin(String uuid, Long ownerId) {
+    public synchronized boolean begin(String uuid, Long ownerId) {
         if (uuid == null || uuid.isBlank()) return true;      // 没有会话标识就不拦（匿名直调接口的场景）
         long now = System.currentTimeMillis();
         sweepIfCrowded(now);
@@ -62,6 +63,7 @@ public class RoundGuard {
             running.remove(uuid);
             return false;
         }
+        acquired.get().put(uuid, running.get(uuid));
         return true;
     }
 
@@ -78,9 +80,11 @@ public class RoundGuard {
      *
      * <p>账号名额靠 entry 里记的 owner 找回；用"值相等才删"这一版，避免把抢占了同一账号的新轮次误删。
      */
-    public void end(String uuid) {
+    public synchronized void end(String uuid) {
         if (uuid == null || uuid.isBlank()) return;
-        Entry e = running.remove(uuid);
+        Entry e = acquired.get().remove(uuid);
+        if (acquired.get().isEmpty()) acquired.remove();
+        if (e == null || !running.remove(uuid, e)) return;
         if (e == null || e.ownerId() == null) return;
         running.remove(ownerKey(e.ownerId()), e);
     }

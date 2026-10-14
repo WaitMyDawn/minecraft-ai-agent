@@ -35,6 +35,34 @@ import static org.mockito.Mockito.when;
  * 等超时——任何一种都不允许让流程在那里空等或直接失败。
  */
 class ModrinthApiClientTest {
+    @Test void compatibleVersionListUsesTaskFactsWithoutServerFetchOrSharedCache() throws Exception {
+        var fetcher = mock(ModrinthFetcher.class);
+        var ctx = new DelegationContext();
+        var api = client(fetcher, true, 3000);
+        var got = new AtomicReference<JsonNode>();
+        var versions = new ObjectMapper().createArrayNode().addObject().put("id", "V1");
+        var data = new ObjectMapper().createArrayNode().add(versions);
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var call = executor.submit(() -> DelegationContext.runWith(ctx,
+                    () -> got.set(api.getCompatibleVersions("P1", "1.21.1", "[\"neoforge\"]"))));
+            for (int i = 0; i < 400 && !ctx.hasPending(); i++) Thread.sleep(5);
+            assertTrue(ctx.hasPending());
+            assertEquals(Kind.ENV_VERSIONS, ctx.pendingWants().getFirst().kind());
+            ctx.deliver(Kind.ENV_VERSIONS, "P1|1.21.1|[\"neoforge\"]", data);
+            call.get(3, TimeUnit.SECONDS);
+        }
+        assertEquals(data, got.get());
+        org.mockito.Mockito.verifyNoInteractions(fetcher);
+    }
+    @Test
+    void cancellationNeverFallsBackToServerFetch() {
+        ModrinthFetcher fetcher = mock(ModrinthFetcher.class);
+        DelegationContext context = new DelegationContext();
+        context.cancelAll();
+        org.junit.jupiter.api.Assertions.assertThrows(java.util.concurrent.CancellationException.class,
+                () -> DelegationContext.runWith(context, () -> client(fetcher, true, 100).getProjectInfo("create")));
+        org.mockito.Mockito.verifyNoInteractions(fetcher);
+    }
 
     private final ObjectMapper mapper = new ObjectMapper();
 

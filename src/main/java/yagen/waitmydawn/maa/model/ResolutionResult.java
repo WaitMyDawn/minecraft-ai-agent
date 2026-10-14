@@ -66,10 +66,20 @@ public class ResolutionResult {
     private final List<Dropped> dropped = new ArrayList<>();
     private final int nodeBudget;
     private final boolean budgetExhausted;
+    public record Coordination(int attempts, int queries, String status, Map<String, String> changes) {
+        public Coordination { changes = Map.copyOf(changes); }
+    }
+    private final Coordination coordination;
 
     public ResolutionResult(DependencyGraph graph, Status status, Set<String> roots,
                             List<Unresolved> unresolved, List<Dropped> dropped,
                             int nodeBudget, boolean budgetExhausted) {
+        this(graph, status, roots, unresolved, dropped, nodeBudget, budgetExhausted,
+                new Coordination(0, 0, "NOT_NEEDED", Map.of()));
+    }
+    private ResolutionResult(DependencyGraph graph, Status status, Set<String> roots,
+                            List<Unresolved> unresolved, List<Dropped> dropped,
+                            int nodeBudget, boolean budgetExhausted, Coordination coordination) {
         this.graph = graph;
         this.status = status;
         this.roots = new LinkedHashSet<>(roots);
@@ -77,6 +87,11 @@ public class ResolutionResult {
         this.dropped.addAll(dropped);
         this.nodeBudget = nodeBudget;
         this.budgetExhausted = budgetExhausted;
+        this.coordination = coordination;
+    }
+    public Coordination coordination() { return coordination; }
+    public ResolutionResult coordinated(Coordination stats) {
+        return new ResolutionResult(graph, status, roots, unresolved, dropped, nodeBudget, budgetExhausted, stats);
     }
 
     public DependencyGraph graph() {

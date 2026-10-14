@@ -15,6 +15,31 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * （最后一条是防"进程被杀/异常没走 finally → 用户被永久锁死"的兜底）。
  */
 class RoundGuardTest {
+    @Test
+    void staleWorkerCannotReleaseReplacementLease() throws Exception {
+        RoundGuard guard = new RoundGuard(20);
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var finishOld = new java.util.concurrent.CountDownLatch(1);
+        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var old = executor.submit(() -> {
+                assertTrue(guard.begin("same", 1L));
+                entered.countDown();
+                finishOld.await();
+                guard.end("same");
+                return null;
+            });
+            try {
+                assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS));
+                Thread.sleep(40);
+                assertTrue(guard.begin("same", 1L));
+                finishOld.countDown();
+                old.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(1L, guard.ownerOf("same"));
+                guard.end("same");
+                assertNull(guard.ownerOf("same"));
+            } finally { finishOld.countDown(); }
+        }
+    }
 
     @Test
     @DisplayName("同 uuid 第二轮被拒；释放后可以再开")

@@ -12,24 +12,43 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * 数据库形态体检：**真连库跑一遍**，不靠 mock。
- *
- * <p>为什么必须有这个测试：上面两轮一共踩了三个只有真库才暴露的坑 ——
- * <ol>
- *   <li>原生 SQL 里列名写成 {@code account_number}，实际是 {@code ACCOUNTNUMBER}（camelCase，
- *       因为本项目在 {@code MainDataSourceConfig} 里手搓 EntityManagerFactory，没启用 Spring Boot 的
- *       下划线命名策略）。走 mock 的单元测试完全看不出来，真机上"第一次注册"就会抛 Column not found；</li>
- *   <li>{@code emailVerified} 因为"NOT NULL 且无默认值"加不进已有数据的表，那一列压根没建成；</li>
- *   <li>新建列的 DDL 失败时 Hibernate 只打一条 WARN 就继续启动，应用看起来是好的，直到有人真的查询。</li>
- * </ol>
- * 所以这里断言三件事：新增列/约束真的存在、按字段名派生的查询能跑通、原生 SQL 能跑通。
- *
- * <p>用的是项目自带的数据源（本地开发库），只做只读查询；结构变更本来就会在上下文启动时由
- * {@code ddl-auto=update} 完成，和跑一次应用没有区别。
- */
-@SpringBootTest
+/** 独立内存 H2 的结构与竞争回归：验证实体 DDL、原生及派生查询、约束和旧快照写入保护。 */
+@SpringBootTest(properties = "spring.config.location=classpath:application-test.properties")
 class SchemaSanityTest {
+    @Autowired private ChatMessageRepository messages;
+
+    @Test void constraintSnapshotsCanExceedLegacyCsvColumnCapacity() {
+        var message = new ChatMessage(999L, "ai", "fixture", true, "", "jade");
+        String snapshot = "{\"fixture\":\"" + "x".repeat(32_000) + "\"}";
+        message.setPackState(snapshot);
+        var saved = messages.saveAndFlush(message);
+        try {
+            org.junit.jupiter.api.Assertions.assertEquals(snapshot, messages.findById(saved.getId()).orElseThrow().getPackState());
+        } finally { messages.deleteById(saved.getId()); }
+    }
+    @Test
+    void staleAccountWritesAndCiphertextMigrationCannotOverwriteNewSettings() {
+        User saved = userRepo.saveAndFlush(new User("900001", "concurrency-fixture", "fixture-hash"));
+        try {
+            User first = userRepo.findById(saved.getId()).orElseThrow();
+            User stale = userRepo.findById(saved.getId()).orElseThrow();
+            first.setEncryptedApiKey("fixture-old-ciphertext");
+            userRepo.saveAndFlush(first);
+            stale.setUsername("stale-name");
+            org.junit.jupiter.api.Assertions.assertThrows(org.springframework.dao.OptimisticLockingFailureException.class,
+                    () -> userRepo.saveAndFlush(stale));
+            org.junit.jupiter.api.Assertions.assertEquals(0, userRepo.upgradeApiKeyCiphertext(saved.getId(), "wrong", "replacement"));
+            org.junit.jupiter.api.Assertions.assertEquals(1, userRepo.upgradeApiKeyCiphertext(saved.getId(), "fixture-old-ciphertext", "replacement"));
+            org.junit.jupiter.api.Assertions.assertEquals(0, userRepo.upgradeApiKeyCiphertext(saved.getId(), "fixture-old-ciphertext", "other"));
+            org.junit.jupiter.api.Assertions.assertEquals("replacement", userRepo.findById(saved.getId()).orElseThrow().getEncryptedApiKey());
+        } finally { userRepo.deleteById(saved.getId()); }
+    }
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private yagen.waitmydawn.maa.service.LoaderVersionService loaderVersions;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private yagen.waitmydawn.maa.service.KnowledgeDb knowledgeDb;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private yagen.waitmydawn.maa.cache.ModrinthCacheService modrinthCache;
 
     @Autowired
     private JdbcTemplate jdbc;      // Spring Boot 按主数据源自动装配

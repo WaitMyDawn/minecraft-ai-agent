@@ -281,12 +281,11 @@ public class ModrinthCacheService {
      * 幂等：同 slug+loader 追加小版本，不重复写入。
      */
     public void recordVersion(String slug, String loader, String mcVersion) {
+        if (yagen.waitmydawn.maa.runtime.DelegationContext.current() != null) return;
         String l = loader.toLowerCase();
-        // 临界区里只改内存，写库（JDBC，磁盘 I/O）挪到锁外：
-        // 这个方法在一轮里会被调用几十上百次（每发现一个新版本一次），原来整段 synchronized 意味着
-        // 多用户并发时大家排队等别人写盘。快照式拷贝保证落库的是同一时刻的一致内容。
+        // Serialize read/merge/write for each slug so older snapshots cannot overwrite newer versions.
         Map<String, Set<String>> snapshot = new java.util.LinkedHashMap<>();
-        synchronized (this) {
+        synchronized (knownVersions.computeIfAbsent(slug, k -> new ConcurrentHashMap<>())) {
             Map<String, Set<String>> byLoaderMap =
                     knownVersions.computeIfAbsent(slug, k -> new ConcurrentHashMap<>());
             Set<String> vers = byLoaderMap.computeIfAbsent(l, k -> ConcurrentHashMap.newKeySet());
@@ -294,8 +293,8 @@ public class ModrinthCacheService {
                 return; // 已存在，无需写库
             }
             byLoaderMap.forEach((k, v) -> snapshot.put(k, new java.util.LinkedHashSet<>(v)));
+            persistVersions(slug, snapshot);
         }
-        persistVersions(slug, snapshot);
     }
 
     private void persistVersions(String slug, Map<String, Set<String>> byLoaderMap) {
@@ -371,28 +370,18 @@ public class ModrinthCacheService {
         return result;
     }
 
-    /** 本地附属检索：与核心同 loader、标题/简介含核心关键字的候选（粗召回，交给校验与 Critic） */
+    /** 文本粗召回优先完整核心词组，避免通用单词命中占满有限候选；关系由精确版本元数据核实。 */
     public List<ModEntry> findAddons(String coreSlug, String loader, int limit) {
         List<ModEntry> pool = byLoader.getOrDefault(loader.toLowerCase(), List.of());
-        String core = coreSlug.toLowerCase().replace('-', ' ');
-        String[] tokens = core.split("\\s+");
         List<ModEntry> result = new ArrayList<>();
         for (ModEntry e : pool) {
             if (e.slug().equalsIgnoreCase(coreSlug)) continue;
             String hay = (e.title() + " " + e.slug()).toLowerCase();
-            boolean hit = false;
-            for (String t : tokens) {
-                if (t.length() >= 3 && hay.contains(t)) {
-                    hit = true;
-                    break;
-                }
-            }
-            if (hit) {
-                result.add(e);
-                if (result.size() >= limit) break;
-            }
+            if (yagen.waitmydawn.maa.model.AddonEvidence.textStrength(coreSlug, hay) > 0) result.add(e);
         }
-        return result;
+        result.sort(java.util.Comparator.comparingInt((ModEntry e) -> yagen.waitmydawn.maa.model.AddonEvidence.textStrength(coreSlug, e.title() + " " + e.slug())).reversed()
+                .thenComparing(java.util.Comparator.comparingLong(ModEntry::downloads).reversed()).thenComparing(ModEntry::slug));
+        return result.stream().limit(Math.max(0, limit)).toList();
     }
 
     private List<String> parseArray(String json) {

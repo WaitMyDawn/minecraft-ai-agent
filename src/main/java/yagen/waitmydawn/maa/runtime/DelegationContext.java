@@ -26,8 +26,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@code POST /api/chat/task/{id}/facts} 把结果送回来。挂起是虚拟线程的 park，
  * 一次构筑挂几十上百个也不占 OS 线程。
  *
- * <p><b>超时即自抓</b>：每个挂起最多等 {@code budgetMs}（取值见
- * {@code maa.delegation.per-call-budget-ms}）。等不到就返回
+ * <p><b>超时即自抓</b>：未下发事实受独立波次等待上限保护，实际下发后最多等 {@code budgetMs}（取值见
+ * {@code maa.delegation.per-call-budget-ms}），两者都受任务整体期限约束。等不到就返回
  * {@link Outcome#TIMEOUT}，调用方照常自己发请求。所以"浏览器没来"不会拖死流程，
  * 只会退化成改造前的行为——这也是这条链路上唯一的兜底，必须有。
  *
@@ -40,6 +40,8 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class DelegationContext {
 
     private static final ThreadLocal<DelegationContext> CURRENT = new ThreadLocal<>();
+    private final BuildProgress progress = new BuildProgress();
+    public BuildProgress progress() { return progress; }
 
     /** 当前线程所属的委派上下文；不在委派任务里返回 null（此时所有取数都归服务器自己做） */
     public static DelegationContext current() {
@@ -71,6 +73,8 @@ public final class DelegationContext {
         VERSION,
         /** 某模组在某 (mc, loader) 下的最新版本——Modrinth 没有批量等价物，只能逐个查 */
         ENV_VERSION,
+        /** 有界兼容版本候选列表，用于静态版本协调。 */
+        ENV_VERSIONS,
         /** 关键词搜索（key 用 wantId，把查询参数当事实描述） */
         SEARCH
     }
@@ -97,18 +101,46 @@ public final class DelegationContext {
     private final Set<String> absent = ConcurrentHashMap.newKeySet();
     private final Map<String, CompletableFuture<Answer>> waiting = new ConcurrentHashMap<>();
     private final Map<String, Want> waitingMeta = new ConcurrentHashMap<>();
+    private final Map<String, Long> sentAt = new ConcurrentHashMap<>();
+    private final Map<String, CompletableFuture<Void>> dispatchSignals = new ConcurrentHashMap<>();
+    private final Map<String, AtomicInteger> consumers = new ConcurrentHashMap<>();
+    private final AtomicLong sequence = new AtomicLong();
+    private final long queueBudgetMs;
+    public DelegationContext() { this(0); }
+    public DelegationContext(long queueBudgetMs) { this.queueBudgetMs = Math.max(0, queueBudgetMs); }
     private final AtomicLong lastWantNanos = new AtomicLong();
     private final AtomicInteger served = new AtomicInteger();
+    private final AtomicInteger browserHttp = new AtomicInteger();
+
+    public void recordBrowserHttp(int requests) {
+        if (requests >= 0 && requests <= 10000) browserHttp.addAndGet(requests);
+    }
+
+    public int browserHttpCount() { return browserHttp.get(); }
     private final AtomicInteger timedOut = new AtomicInteger();
+    private final AtomicInteger queueTimeouts = new AtomicInteger();
+    private final AtomicInteger browserTimeouts = new AtomicInteger();
+    private final AtomicInteger handBacks = new AtomicInteger();
+    public int queueTimeoutCount() { return queueTimeouts.get(); }
+    public int browserTimeoutCount() { return browserTimeouts.get(); }
+    public int handBackCount() { return handBacks.get(); }
     /** 累计下发给浏览器的需求数（每次打包下发时累加，可能重复计入同一 key） */
     private final AtomicInteger dispatched = new AtomicInteger();
     /** 下发轮次 */
     private final AtomicInteger rounds = new AtomicInteger();
     private volatile boolean cancelled;
+    private final long deadlineNanos = System.nanoTime() + TimeUnit.MINUTES.toNanos(20);
+
+    public void checkActive() {
+        if (cancelled || Thread.currentThread().isInterrupted() || System.nanoTime() >= deadlineNanos) {
+            throw new java.util.concurrent.CancellationException("任务已取消或超过执行期限");
+        }
+    }
 
     /** 挂起等待某个事实；超时或取消时返回 TIMEOUT/CANCELLED，由调用方自己出网 */
     public Answer await(Kind kind, String key, long budgetMs) {
         String id = id(kind, key);
+        if (cancelled) return new Answer(Outcome.CANCELLED, null);
 
         // 读表不删：同一个键在一次任务里可能被问多次（BFS 下一层又碰到同一个前置、
         // 或两个分支共用一个依赖）。删了就会重新登记 → 再次下发，
@@ -126,32 +158,63 @@ public final class DelegationContext {
             return new Answer(Outcome.CANCELLED, null);
         }
 
-        Want want = new Want("w" + Math.abs(id.hashCode()), kind, key);
-        CompletableFuture<Answer> future = waiting.computeIfAbsent(id, k -> new CompletableFuture<>());
-        waitingMeta.put(id, want);
+        CompletableFuture<Answer> future;
+        CompletableFuture<Void> dispatchedSignal;
+        AtomicInteger consumer;
+        synchronized (this) {
+            if (cancelled) return new Answer(Outcome.CANCELLED, null);
+            ready = satisfied.get(id);
+            if (ready != null || absent.contains(id)) {
+                served.incrementAndGet();
+                return new Answer(ready == null ? Outcome.ABSENT : Outcome.GOT, ready);
+            }
+            future = waiting.computeIfAbsent(id, k -> new CompletableFuture<>());
+            dispatchedSignal = dispatchSignals.computeIfAbsent(id, k -> new CompletableFuture<>());
+            consumer = consumers.computeIfAbsent(id, k -> new AtomicInteger());
+            consumer.incrementAndGet();
+            waitingMeta.computeIfAbsent(id, k -> new Want("w" + sequence.incrementAndGet(), kind, key));
+        }
         lastWantNanos.set(System.nanoTime());
+        long queuedDeadline = Math.min(deadlineNanos, System.nanoTime()
+                + TimeUnit.MILLISECONDS.toNanos(Math.max(queueBudgetMs, budgetMs)));
+        boolean browserWaiting = false;
         try {
-            Answer answer = future.get(budgetMs, TimeUnit.MILLISECONDS);
-            waiting.remove(id);
-            waitingMeta.remove(id);
+            while (!future.isDone()) {
+                Long sent = sentAt.get(id);
+                browserWaiting = sent != null;
+                long deadline = sent == null ? queuedDeadline : Math.min(deadlineNanos, sent + TimeUnit.MILLISECONDS.toNanos(budgetMs));
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) throw new TimeoutException();
+                if (sent == null) CompletableFuture.anyOf(future, dispatchedSignal).get(remaining, TimeUnit.NANOSECONDS);
+                else future.get(remaining, TimeUnit.NANOSECONDS);
+            }
+            Answer answer = future.join();
             if (answer.outcome() == Outcome.GOT || answer.outcome() == Outcome.ABSENT) {
                 served.incrementAndGet();
             }
             return answer;
         } catch (TimeoutException e) {
-            waiting.remove(id);
-            waitingMeta.remove(id);
-            timedOut.incrementAndGet();
-            return new Answer(Outcome.TIMEOUT, null);
+            synchronized (this) {
+                if (future.complete(new Answer(Outcome.TIMEOUT, null))) {
+                    timedOut.incrementAndGet();
+                    (browserWaiting ? browserTimeouts : queueTimeouts).incrementAndGet();
+                }
+            }
+            return future.join();
         } catch (InterruptedException e) {
-            waiting.remove(id);
-            waitingMeta.remove(id);
             Thread.currentThread().interrupt();
             return new Answer(Outcome.CANCELLED, null);
         } catch (ExecutionException e) {
-            waiting.remove(id);
-            waitingMeta.remove(id);
             return new Answer(Outcome.TIMEOUT, null);
+        } finally {
+            synchronized (this) {
+                if (consumer.decrementAndGet() == 0 && waiting.remove(id, future)) {
+                    waitingMeta.remove(id);
+                    sentAt.remove(id);
+                    dispatchSignals.remove(id);
+                    consumers.remove(id, consumer);
+                }
+            }
         }
     }
 
@@ -161,8 +224,10 @@ public final class DelegationContext {
      * @param data null 表示"上游明确没有这个项目/版本"（批量端点对无效 id 是静默丢弃的，
      *             所以这个区分必须由客户端显式告诉服务器，否则服务器会把不存在的模组当正常结果收下）
      */
-    public void deliver(Kind kind, String key, JsonNode data) {
+    public synchronized void deliver(Kind kind, String key, JsonNode data) {
         String id = id(kind, key);
+        CompletableFuture<Answer> future = waiting.get(id);
+        if (cancelled || future == null || future.isDone()) return;
         // 先留底、再唤醒。留底是给"以后还会问同一个键"的调用用的：
         // 只在有人等着的时候交付，后面再问同一个键就会重新登记→再次下发，
         // 而第二份回执到达时等待者已经被第一份放走了，只能被当成"过期"丢弃
@@ -172,7 +237,6 @@ public final class DelegationContext {
         } else {
             satisfied.put(id, data);
         }
-        CompletableFuture<Answer> future = waiting.get(id);
         if (future != null) {
             future.complete(new Answer(data == null ? Outcome.ABSENT : Outcome.GOT, data));
         }
@@ -180,7 +244,30 @@ public final class DelegationContext {
 
     /** 当前还没被满足的需求（用于组装下发给浏览器的清单） */
     public List<Want> pendingWants() {
-        return new ArrayList<>(waitingMeta.values());
+        return waitingMeta.values().stream().filter(want -> {
+            var future = waiting.get(id(want.kind(), want.key()));
+            return future != null && !future.isDone();
+        }).toList();
+    }
+
+    /** 原子认领有界波次；登记等待与已下发等待分开计时，轮询不会重复下发在途事实。 */
+    public synchronized List<Want> dispatchWants() {
+        var batch = new ArrayList<Want>();
+        int singles = (int) pendingWants().stream().filter(w -> sentAt.containsKey(id(w.kind(), w.key())))
+                .filter(w -> w.kind() == Kind.ENV_VERSION || w.kind() == Kind.ENV_VERSIONS || w.kind() == Kind.SEARCH).count();
+        for (var want : pendingWants().stream().sorted(java.util.Comparator.comparingLong(w -> Long.parseLong(w.wantId().substring(1)))).toList()) {
+            String id = id(want.kind(), want.key());
+            if (sentAt.containsKey(id)) continue;
+            if (want.kind() == Kind.ENV_VERSION || want.kind() == Kind.ENV_VERSIONS || want.kind() == Kind.SEARCH) {
+                if (singles >= 6) continue;
+                singles++;
+            }
+            if (batch.size() >= 100) break;
+            sentAt.put(id, System.nanoTime());
+            dispatchSignals.get(id).complete(null);
+            batch.add(want);
+        }
+        return List.copyOf(batch);
     }
 
     /**
@@ -201,19 +288,16 @@ public final class DelegationContext {
      * 进而产出一个缺模组的包。端到端探针跑出了这个洞：前端把抓取失败也记成 missing，
      * 服务器照着 missing 当作确定不存在，兜底就失效了。
      */
-    public void handBack(Kind kind, String key) {
+    public synchronized void handBack(Kind kind, String key) {
         String id = id(kind, key);
         CompletableFuture<Answer> future = waiting.get(id);
         if (future != null) {
-            future.complete(new Answer(Outcome.TIMEOUT, null));
+            if (future.complete(new Answer(Outcome.TIMEOUT, null))) { timedOut.incrementAndGet(); handBacks.incrementAndGet(); }
         }
-        waiting.remove(id);
-        waitingMeta.remove(id);
-        timedOut.incrementAndGet();
     }
 
     public boolean hasPending() {
-        return !waitingMeta.isEmpty();
+        return waiting.values().stream().anyMatch(future -> !future.isDone());
     }
 
     public long lastWantNanos() {
@@ -221,13 +305,23 @@ public final class DelegationContext {
     }
 
     /** 任务被终止时唤醒所有挂起线程，避免留下永远不会醒的虚拟线程 */
-    public void cancelAll() {
+    public synchronized void cancelAll() {
         cancelled = true;
         for (CompletableFuture<Answer> f : waiting.values()) {
             f.complete(new Answer(Outcome.CANCELLED, null));
         }
         waiting.clear();
         waitingMeta.clear();
+        sentAt.clear();
+        dispatchSignals.clear();
+        consumers.clear();
+    }
+
+    /** 任务完成后只保留计数，及时释放回传 JSON，避免结果留存期间继续占用大块堆内存。 */
+    public void releaseFacts() {
+        cancelAll();
+        satisfied.clear();
+        absent.clear();
     }
 
     /** 由浏览器满足的需求数（观测用：这个数越大，说明服务器省下的请求越多） */
@@ -252,7 +346,7 @@ public final class DelegationContext {
         this.abandoned = true;
     }
 
-    /** 等超时、退回服务器自抓的次数（观测用：这个数大说明用户网络/浏览器不给力） */
+    /** 超时及交还的总数；必须结合分阶段计数归因，不能仅凭总数判断网络故障。 */
     public int timedOutCount() {
         return timedOut.get();
     }

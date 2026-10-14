@@ -31,11 +31,18 @@ public class ModAliasRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(ModAliasRegistry.class);
 
-    /** 内置兜底词典（与 maa_db/aliases.json 的初始内容一致，仅用于文件不可用时兜底） */
+    /** 内置常用词与外部词典合并；外部同名项优先，存量词典不会遮蔽新增内置项。 */
     private static final Map<String, String> DEFAULTS = Map.ofEntries(
             Map.entry("铁魔法", "irons-spells-n-spellbooks"),
             Map.entry("灾变", "l_enders-cataclysm"),
+            Map.entry("冰火传说", "iceandfire-ce"),
             Map.entry("冰火传说社区版", "iceandfire-ce"),
+            Map.entry("alex生物", "alexs-mobs"),
+            Map.entry("alex洞穴", "alexs-caves"),
+            Map.entry("海灵物语", "aquamirae"),
+            Map.entry("苹果皮", "appleskin"),
+            Map.entry("现代化ui", "modern-ui"),
+            Map.entry("jei", "jei"),
             Map.entry("地牢浮现之时", "when-dungeons-arise"),
             Map.entry("农夫乐事", "farmers-delight"),
             Map.entry("机械动力", "create"),
@@ -68,10 +75,10 @@ public class ModAliasRegistry {
             JsonNode root = objectMapper.readTree(Files.readAllBytes(file));
             JsonNode node = root.path("aliases");
             // LinkedHashMap 保留文件里的书写顺序，提示词输出才稳定
-            Map<String, String> loaded = new LinkedHashMap<>();
+            Map<String, String> loaded = new LinkedHashMap<>(DEFAULTS);
             if (node.isObject()) {
                 node.properties().forEach(p -> {
-                    String key = p.getKey() == null ? "" : p.getKey().trim().toLowerCase(Locale.ROOT);
+                    String key = p.getKey() == null ? "" : p.getKey().trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
                     String slug = p.getValue().asText("").trim();
                     if (!key.isEmpty() && !slug.isEmpty()) loaded.put(key, slug);
                 });
@@ -99,7 +106,7 @@ public class ModAliasRegistry {
         String t = raw.trim();
         if (t.isEmpty()) return "";
         String lower = t.toLowerCase(Locale.ROOT);
-        String hit = aliases.get(lower);
+        String hit = aliases.get(lower.replaceAll("\\s+", ""));
         return hit != null ? hit : lower;
     }
 

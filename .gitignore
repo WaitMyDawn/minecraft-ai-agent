@@ -33,10 +33,13 @@ maa_db/*.lock.db
 maa_db/backups/
 logs/
 maa_logs/
+docs/
 
 # ===== 日志 =====
 *.log
 logs/
+
+eval/results
 
 # ===== Maven =====
 .mvn/wrapper/maven-wrapper.jar
@@ -48,14 +51,11 @@ temp/
 # ===== 自用MD =====
 DEPLOY.md
 InsForAdmin.md
-RAG-project.md
 MAA-QA.md
 workflow.md
 TODO.md
 test.md
-
-# ===== 底座服务器 =====
-maa-base-server/
+SECURITY-DEPLOYMENT.md
 
 # ===== other =====
 *.tar

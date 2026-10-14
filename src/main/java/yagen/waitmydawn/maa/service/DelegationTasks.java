@@ -25,11 +25,12 @@ import java.util.concurrent.TimeUnit;
  * 必须能自动过期回收。它是<b>任务表</b>不是元数据缓存——刻意与本项目那几层 Modrinth 元数据
  * 缓存分开，因为里面装着活的线程与不可信输入，语义完全不同。
  *
- * <p>整个功能由 {@code maa.delegation.enabled} 控制；为 false 时后端走原路径，
- * 前端行为零变化（见 {@code ModpackController}/{@code ChatController} 的分支）。
+ * <p>{@code maa.delegation.enabled} 仅控制是否向浏览器下发取数需求；关闭时构筑仍经过有界队列，
+ * 由服务器取数并直接返回最终文本。
  */
 @Service
 public class DelegationTasks {
+    private static final java.util.concurrent.atomic.AtomicLong SEQUENCE = new java.util.concurrent.atomic.AtomicLong();
 
     /** 等待浏览器回传的静默窗口：最后一个需求登记之后再安静这么久，才认定"这批要完了" */
     private static final long QUIET_WINDOW_MS = 60;
@@ -39,17 +40,38 @@ public class DelegationTasks {
     private final Cache<String, Task> tasks = Caffeine.newBuilder()
             .expireAfterWrite(20, TimeUnit.MINUTES)
             .maximumSize(2_000)
+            .<String, Task>removalListener((key, task, cause) -> {
+                if (task != null && !task.isDone() && cause.wasEvicted()) cancel(task);
+            })
             .build();
     /** 长生命周期：挂起的任务要活过发起它的那次 HTTP 请求 */
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final java.util.concurrent.ThreadPoolExecutor executor;
+    private final java.util.concurrent.ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(
+            Thread.ofPlatform().daemon().name("maa-task-deadlines").factory());
+    private final java.util.concurrent.ConcurrentMap<Long, String> owners = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @jakarta.annotation.PreDestroy
+    public void close() {
+        tasks.asMap().values().forEach(Task::stop);
+        executor.shutdownNow();
+        deadlines.shutdownNow();
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
-    public DelegationTasks(@Value("${maa.delegation.enabled:false}") boolean enabled,
-                           @Value("${maa.delegation.per-call-budget-ms:5000}") long callBudgetMs) {
+    public DelegationTasks(@Value("${maa.delegation.enabled:true}") boolean enabled,
+                           @Value("${maa.delegation.per-call-budget-ms:120000}") long callBudgetMs,
+                           @Value("${maa.build.active-limit:8}") int activeLimit,
+                           @Value("${maa.build.queue-limit:128}") int queueLimit) {
         this.enabled = enabled;
-        // 下限 50ms：预算给成 0 会让每一次委派都立刻超时，退化成"服务器全包"，
-        // 表面上没坏、实际上功能白做，所以宁可直接拒绝这种配置
         this.callBudgetMs = Math.max(50, callBudgetMs);
+        int workers = Math.max(1, Math.min(64, activeLimit));
+        this.executor = new java.util.concurrent.ThreadPoolExecutor(workers, workers, 0, TimeUnit.MILLISECONDS,
+                new java.util.concurrent.ArrayBlockingQueue<>(Math.max(1, Math.min(256, queueLimit))),
+                Thread.ofVirtual().name("maa-build-", 0).factory(), new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+    }
+
+    public DelegationTasks(boolean enabled, long callBudgetMs) {
+        this(enabled, callBudgetMs, 8, 128);
     }
 
     /** 测试与简单装配用：默认 5 秒预算 */
@@ -57,7 +79,7 @@ public class DelegationTasks {
         this(enabled, 5_000);
     }
 
-    /** 总开关。false 时调用方必须走原来的同步路径，行为与改造前完全一致。 */
+    /** 取数委派开关；关闭时门面层只使用服务器出网层。 */
     public boolean isEnabled() {
         return enabled;
     }
@@ -69,6 +91,7 @@ public class DelegationTasks {
 
     /** 一个在后台跑的构筑任务 */
     public static final class Task {
+        private final long sequence = SEQUENCE.incrementAndGet();
         private final String taskId;
         /** 提交时刻：僵尸轮次回收要算它跑了多久 */
         private final long createdAtMillis = System.currentTimeMillis();
@@ -76,8 +99,25 @@ public class DelegationTasks {
         private final String userKey;
         /** 发起者账号 id；匿名 = null。用户回执端点用它做归属校验（别人的 taskId 不该能往里塞数据） */
         private final Long ownerId;
-        private final DelegationContext context = new DelegationContext();
+        private final DelegationContext context = new DelegationContext(180_000);
         private final CompletableFuture<String> result = new CompletableFuture<>();
+        private volatile java.util.concurrent.Future<?> worker;
+        private final java.util.concurrent.atomic.AtomicBoolean started = new java.util.concurrent.atomic.AtomicBoolean();
+        private final java.util.concurrent.atomic.AtomicBoolean delivered = new java.util.concurrent.atomic.AtomicBoolean();
+        private volatile long lastReceiptMillis = System.currentTimeMillis();
+
+        public void received() { lastReceiptMillis = System.currentTimeMillis(); }
+        public void dispatched() {
+            if (context.dispatchedCount() == 0) received();
+        }
+
+        private void stop() {
+            // 先固定结果状态，避免唤醒等待者后由工作线程抢先提交成功结果。
+            result.cancel(false);
+            context.cancelAll();
+            var current = worker;
+            if (current != null) current.cancel(true);
+        }
         /** 提交时捕获的请求作用域：任务里的出网计数都记在它上面，收口时要读它而不是当前线程的 */
         private RequestScope scope;
 
@@ -117,6 +157,8 @@ public class DelegationTasks {
             return result.isDone();
         }
 
+        public boolean hasStarted() { return started.get(); }
+
         public CompletableFuture<String> result() {
             return result;
         }
@@ -135,22 +177,71 @@ public class DelegationTasks {
     /** 登记归属账号的那一版（登录用户走这条） */
     public Task submit(String taskId, Long ownerId, String userKey, RequestScope scope,
                        Callable<String> work) {
+        return submit(taskId, ownerId, userKey, scope, work, true);
+    }
+
+    public Task submit(String taskId, Long ownerId, String userKey, RequestScope scope,
+                       Callable<String> work, boolean exclusiveOwner) {
         Task task = new Task(taskId == null || taskId.isBlank()
-                ? UUID.randomUUID().toString().substring(0, 8) : taskId, userKey, ownerId);
+                ? UUID.randomUUID().toString() : taskId, userKey, ownerId);
+        if (exclusiveOwner && ownerId != null && owners.putIfAbsent(ownerId, task.taskId) != null) {
+            throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT,
+                    "已有构筑任务正在进行或等待执行");
+        }
         task.scope = scope;
         tasks.put(task.taskId, task);
-        executor.execute(() -> RequestScope.runWith(scope, () -> DelegationContext.runWith(task.context, () -> {
+        try {
+        task.worker = executor.submit(() -> RequestScope.runWith(scope, () -> DelegationContext.runWith(task.context, () -> {
+            task.started.set(true);
+            task.context.progress().enter("构建任务开始执行");
             try {
+                task.context.checkActive();
                 task.result.complete(work.call());
             } catch (Throwable e) {
                 task.result.completeExceptionally(e);
+            } finally {
+                var upstream = scope == null ? new RequestScope.Snapshot(0, 0, 0, 0) : scope.snapshotOf();
+                System.out.println("[Modrinth task] taskId=" + task.taskId() + " user=" + task.userKey()
+                        + " browserHttp=" + task.context.browserHttpCount()
+                        + " browserFacts=" + task.context.servedCount() + " fallbackFacts=" + task.context.timedOutCount()
+                        + " queueTimeout=" + task.context.queueTimeoutCount() + " browserTimeout=" + task.context.browserTimeoutCount()
+                        + " handBack=" + task.context.handBackCount()
+                        + " serverHttp=" + upstream.http() + " server429=" + upstream.rateLimited()
+                        + " serverRetries=" + upstream.retries() + " throttleMs=" + upstream.throttleWaitMs());
+                task.context.releaseFacts();
+                if (ownerId != null) owners.remove(ownerId, task.taskId);
             }
         })));
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            tasks.invalidate(task.taskId);
+            if (ownerId != null) owners.remove(ownerId, task.taskId);
+            throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.TOO_MANY_REQUESTS,
+                    "构筑队列已满，请稍后重试");
+        }
+        var timeout = deadlines.schedule(() -> { if (!task.isDone()) cancel(task); }, 20, TimeUnit.MINUTES);
+        task.result.whenComplete((value, failure) -> timeout.cancel(false));
         return task;
     }
 
     public Task find(String taskId) {
         return taskId == null ? null : tasks.getIfPresent(taskId);
+    }
+
+    /** 已交付结果仅保留短暂重试窗口，避免大图谱在任务表中滞留二十分钟。 */
+    public void resultDelivered(Task task) {
+        if (task.isDone() && task.delivered.compareAndSet(false, true)) {
+            deadlines.schedule(() -> tasks.invalidate(task.taskId()), 60, TimeUnit.SECONDS);
+        }
+    }
+
+    /** 排位是当前快照；已开始的任务不计入等待人数。 */
+    public int queuePosition(Task task) {
+        if (task.hasStarted() || task.isDone()) return 0;
+        int position = 1;
+        for (Task other : tasks.asMap().values()) {
+            if (!other.hasStarted() && !other.isDone() && other.sequence < task.sequence) position++;
+        }
+        return position;
     }
 
     /** 只读遍历当前任务表（僵尸轮次回收用） */
@@ -192,7 +283,12 @@ public class DelegationTasks {
     /** 任务被用户主动终止（{@code /api/chat/abort}） */
     public void cancel(Task task) {
         if (task != null) {
-            task.context().cancelAll();
+            task.stop();
+            if (task.worker instanceof Runnable runnable) executor.remove(runnable);
+            if (task.ownerId != null && task.worker != null && !task.started.get()) {
+                // 尚未执行的任务没有 finally 回收入口；运行中的账号租约由工作线程释放。
+                owners.remove(task.ownerId, task.taskId);
+            }
         }
     }
 
@@ -208,7 +304,7 @@ public class DelegationTasks {
         int n = 0;
         for (Task t : tasks.asMap().values()) {
             if (userKey.equals(t.userKey()) && !t.isDone()) {
-                t.context().cancelAll();
+                cancel(t);
                 n++;
             }
         }
@@ -226,10 +322,18 @@ public class DelegationTasks {
         int n = 0;
         for (Task t : tasks.asMap().values()) {
             if (ownerId.equals(t.ownerId()) && !t.isDone()) {
-                t.context().cancelAll();
+                cancel(t);
                 n++;
             }
         }
         return n;
+    }
+
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 60_000)
+    public void expireDisconnected() {
+        long now = System.currentTimeMillis();
+        for (Task task : tasks.asMap().values()) {
+            if (!task.isDone() && now - task.lastReceiptMillis > 120_000) cancel(task);
+        }
     }
 }

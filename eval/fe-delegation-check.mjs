@@ -135,4 +135,22 @@ assert(searched.answered.length === 1 && Array.isArray(searched.answered[0].data
     '搜索响应要整份带回（含 hits），服务器才能当正常结果收下');
 assert(searched.unavailable.length === 0, '成功的搜索不该进 unavailable');
 
+// 环境版本端点的明确 404 是不存在证据，不能触发服务端重查；5xx 仍需回退。
+const beforeStatusFetch = globalThis.fetch;
+globalThis.fetch = async url => ({ok: false, status: url.includes('gone') ? 404 : 503});
+const statusResult = await fulfilWanted([
+    {kind: 'env_version', key: 'gone|1.21.1|["neoforge"]', project: 'gone', mc: '1.21.1', loader: 'neoforge'},
+    {kind: 'env_version', key: 'broken|1.21.1|["neoforge"]', project: 'broken', mc: '1.21.1', loader: 'neoforge'}
+]);
+globalThis.fetch = beforeStatusFetch;
+assert(statusResult.missing.length === 1 && statusResult.missing[0].key.startsWith('gone'), '环境版本 404 → missing，无须服务端回退');
+assert(statusResult.unavailable.length === 1 && statusResult.unavailable[0].key.startsWith('broken'), '环境版本 503 → unavailable，保留服务端回退');
+
+const listFetch = globalThis.fetch;
+globalThis.fetch = async () => ({ok: true, status: 200, json: async () => Array.from({length: 9}, (_, i) => ({id: `V${i}`}))});
+const candidateList = await fulfilWanted([{kind: 'env_versions', key: 'candidates|1.21.1|["neoforge"]', project: 'candidates', mc: '1.21.1', loader: 'neoforge'}]);
+globalThis.fetch = listFetch;
+assert(candidateList.answered.length === 1 && candidateList.answered[0].kind === 'env_versions'
+    && candidateList.answered[0].data.length === 4 && candidateList.unavailable.length === 0,
+    '兼容候选列表由浏览器取回，最多回传四个版本');
 console.log(process.exitCode ? 'SOME CHECKS FAILED' : 'ALL CHECKS PASSED');

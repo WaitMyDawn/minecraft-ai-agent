@@ -9,7 +9,7 @@ import java.util.Set;
  * 单回合内的包状态可变副本（M2）。
  *
  * <p>状态权威仍在前端（packData 全量回传），本对象只在一次 /api/chat 请求内存在，
- * 承载 Architect 通过 Tool 下发的变更：删除的 slug、目标数量、热度上限、包名、类别目标。
+ * 承载结构化计划执行器及历史 Tool 路径产生的变更：删除项、数量、热度、包名与类别目标。
  * 回合结束后这些变更由 ChatController 应用到 initialMods / 蓝图参数，
  * 并以 {@code <ops_summary>}（结构化 JSON）随响应返回，供前端渲染"本轮变更"卡片。
  *
@@ -18,6 +18,25 @@ import java.util.Set;
  * 模型漏说一次，用户就会以为什么都没发生。
  */
 public class PackSessionState {
+    private yagen.waitmydawn.maa.model.AssemblySnapshot finishedAssembly;
+    private yagen.waitmydawn.maa.model.DependencyClosure finishedClosure;
+    public yagen.waitmydawn.maa.model.AssemblySnapshot getFinishedAssembly() { return finishedAssembly; }
+    public void setFinishedAssembly(yagen.waitmydawn.maa.model.AssemblySnapshot value) { finishedAssembly = value; }
+    public yagen.waitmydawn.maa.model.DependencyClosure getFinishedClosure() { return finishedClosure; }
+    public void setFinishedClosure(yagen.waitmydawn.maa.model.DependencyClosure value) { finishedClosure = value; }
+
+    private yagen.waitmydawn.maa.model.AssemblySnapshot assembly;
+    public yagen.waitmydawn.maa.model.AssemblySnapshot getAssembly() { return assembly; }
+    public void setAssembly(yagen.waitmydawn.maa.model.AssemblySnapshot assembly) { this.assembly = assembly; }
+    private yagen.waitmydawn.maa.model.RequiredModsReport requiredMods;
+    public yagen.waitmydawn.maa.model.RequiredModsReport getRequiredMods() { return requiredMods; }
+    public void setRequiredMods(yagen.waitmydawn.maa.model.RequiredModsReport report) { requiredMods = report; }
+    private java.util.List<yagen.waitmydawn.maa.model.agent.AgentContractCodec.Failure> plannerFailures = java.util.List.of();
+    public java.util.List<yagen.waitmydawn.maa.model.agent.AgentContractCodec.Failure> getPlannerFailures() { return plannerFailures; }
+    public void setPlannerFailures(java.util.List<yagen.waitmydawn.maa.model.agent.AgentContractCodec.Failure> failures) { plannerFailures = java.util.List.copyOf(failures); }
+    private yagen.waitmydawn.maa.model.ImportedPack importedPack;
+    public yagen.waitmydawn.maa.model.ImportedPack getImportedPack() { return importedPack; }
+    public void setImportedPack(yagen.waitmydawn.maa.model.ImportedPack importedPack) { this.importedPack = importedPack; }
 
     private final Set<String> removedSlugs = new LinkedHashSet<>();
     private final Map<String, Integer> categoryTargets = new LinkedHashMap<>();
@@ -56,7 +75,7 @@ public class PackSessionState {
         return categoryTargets;
     }
 
-    /** 本回合是否有 Tool 下发的变更（无变更时不返回 {@code <ops_summary>}，前端也就不会出现空卡片） */
+    /** 本回合是否有可展示的变更；无变更时不返回 ops_summary。 */
     public boolean hasChanges() {
         return !removedSlugs.isEmpty() || !categoryTargets.isEmpty()
                 || targetCount != null || maxDownloads != null

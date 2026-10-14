@@ -1,14 +1,19 @@
 // 装配台打包（buildPack）+ 知识库视图（openDbView / groupedDbData）。
 //
 // 本模块只管打包与知识库视图：图谱渲染在 graph.js，删除流程在 delete-flow.js。
-// ⚠️ buildPack 的偏好回填在 finally 里：失败或未选中任何模组时也会打 update-on-build ——
-//    这是原有行为（会把失败的一次也算成构建次数），本轮按"零行为变化"保留，要改请单独说。
-import {authHeader} from '../api.js';
+import {apiFetch, authHeader} from '../api.js';
 import {authUser, currentView, dbFilterLoader, dbFilterModA, dbFilterVersion, dbRules, isBuilding, packData, previewData, selectedMods} from '../store.js';
 import {loadPrefs, refreshDbRules} from './prefs.js';
 import {computed, watch} from 'vue';
 
+let downloadUrl;
+window.addEventListener('pagehide', () => {
+    if (downloadUrl) window.URL.revokeObjectURL(downloadUrl);
+    downloadUrl = null;
+});
+
 export const buildPack = async () => {
+    let exportedSlugs = [];
     try {
         if (selectedMods.value.size === 0) return alert("请至少选中一个模组！");
         isBuilding.value = true;
@@ -17,10 +22,18 @@ export const buildPack = async () => {
         const selectedIds = previewData.value.nodes
             .filter(n => selectedMods.value.has(n.id)).map(n => n.id);
         try {
-            const res = await fetch('/api/modpack/build', {
-                method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({...packData, manifestId: previewData.value.manifestId, selectedIds})
+            const buildBody = {...packData, manifestId: previewData.value.manifestId, selectedIds};
+            const submitBuild = (allowIncomplete = true) => apiFetch('/api/modpack/build', {
+                method: 'POST', headers: {'Content-Type': 'application/json', ...authHeader()},
+                acceptErrorStatuses: [409],
+                body: JSON.stringify({...buildBody, allowIncomplete})
             });
+            let res = await submitBuild();
+            if (res.status === 409 && (res.headers.get('content-type') || '').includes('application/json')) {
+                const diagnostic = await res.json();
+                if (!diagnostic.canExportIncomplete) throw new Error(diagnostic.error || '无法导出当前选择');
+                res = await submitBuild(true);
+            }
                     if (!res.ok) {
                         // 服务端现在会把原因放在响应体里（快照过期 / 这个 MC 版本没有维护加载器版本），
                         // 优先显示它 —— 否则用户只看到"打包失败，请重试"，无从下手。
@@ -33,19 +46,26 @@ export const buildPack = async () => {
                     }
             const blob = await res.blob();
             const a = document.createElement('a');
-            a.href = window.URL.createObjectURL(blob);
+            // 内嵌浏览器可能在保存位置选定后才读取 Blob，不能按固定短延时回收。
+            if (downloadUrl) window.URL.revokeObjectURL(downloadUrl);
+            downloadUrl = window.URL.createObjectURL(blob);
+            a.href = downloadUrl;
             a.download = `${packData.name}.mrpack`;
+            document.body.appendChild(a);
             a.click();
+            a.remove();
+            exportedSlugs = previewData.value.nodes.filter(n => selectedIds.includes(n.id)).map(n => n.slug);
         } finally {
             isBuilding.value = false;
         }
+    } catch (e) {
+        alert(e.message || '打包失败，请稍后重试');
     } finally {
-        // 构建后回填偏好（原 buildPackWithPref 包装体内联）
-        if (authUser.value && packData.modSlugs.length > 0) {
-            fetch('/api/prefs/update-on-build', {
+        if (authUser.value && exportedSlugs.length > 0) {
+            apiFetch('/api/prefs/update-on-build', {
                 method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
-                body: JSON.stringify({slugs: packData.modSlugs})
-            }).finally(() => loadPrefs());
+                body: JSON.stringify({slugs: exportedSlugs})
+            }).catch(e => console.warn('更新偏好失败', e)).finally(() => loadPrefs());
         }
     }
 };

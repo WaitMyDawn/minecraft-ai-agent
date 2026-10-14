@@ -91,6 +91,7 @@
     }, 8000);
 </script>
     <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.min.js"></script>
     <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <style>
         ::-webkit-scrollbar {
@@ -220,7 +221,68 @@
 </head>
 <body class="bg-gray-50 h-screen font-sans overflow-hidden">
 <div id="app" v-cloak class="h-full flex flex-col relative">
-
+    <div v-if="replacementPrompt" class="fixed inset-0 z-[80] bg-slate-950/60 flex items-center justify-center p-4"
+         @keydown.esc="cancelReplacement">
+        <section role="dialog" aria-modal="true" aria-labelledby="replacement-title"
+                 class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div class="px-6 py-5 border-b bg-gradient-to-r from-indigo-50 to-sky-50">
+                <h2 id="replacement-title" class="text-xl font-bold text-slate-900">{{ replacementPrompt.kind === 'OVERLAP' ? '确认内容组合' : '选择兼容的替代模组' }}</h2>
+                <p class="text-sm text-slate-600 mt-2">目标环境 {{ replacementPrompt.loader }} / {{ replacementPrompt.mcVersion }}。
+                    <span v-if="replacementPrompt.kind === 'OVERLAP'">可保留一个、几个或全部。默认勾选是建议；未确认不会自动继续。</span>
+                    <span v-else>可选择一个或多个候选，已默认勾选匹配度最高、同分下载量最多的项目。确认后继续原构建需求。</span></p>
+            </div>
+            <div class="p-6 overflow-y-auto space-y-7">
+                <div v-for="group in replacementPrompt.groups" :key="group.original">
+                    <h3 class="font-semibold text-slate-900 mb-3">{{ replacementPrompt.kind === 'OVERLAP' ? group.title : '替换 ' + group.original }}</h3>
+                    <p v-if="group.explanation" class="text-sm text-slate-600 mb-3">{{ group.explanation }}</p>
+                    <button v-if="replacementPrompt.kind === 'OVERLAP'" @click="group.candidates.forEach(c => syncReplacementSelection(c.slug, true))"
+                            class="text-xs text-indigo-600 underline mb-3">保留本组全部</button>
+                    <p v-if="!group.verified" class="text-sm text-amber-700 mb-3">取数未全部完成，不能断言没有兼容版本。可取消后重试，或补充准确 slug。</p>
+                    <p v-if="!group.candidates.length && group.verified" class="text-sm text-slate-600 mb-3">未发现经过验证的兼容移植或平替。请补充准确 slug，或选择去除这项要求再继续。</p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <label v-for="(candidate, index) in group.candidates" :key="candidate.slug"
+                               class="rounded-xl border-2 p-4 transition cursor-pointer"
+                               :class="group.choice.slugs.includes(candidate.slug) && !group.choice.drop && !group.choice.manualSlug ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-indigo-300'">
+                            <div class="flex gap-3 items-start">
+                                <input type="checkbox" v-model="group.choice.slugs" :value="candidate.slug"
+                                       :disabled="group.choice.drop || !!group.choice.manualSlug || candidate.protectedSelection"
+                                       @change="syncReplacementSelection(candidate.slug, $event.target.checked)" class="mt-2 accent-indigo-600">
+                                <img v-if="candidate.iconUrl" :src="candidate.iconUrl" alt="" loading="lazy" class="w-12 h-12 rounded-lg">
+                                <div class="min-w-0 flex-1">
+                                    <div class="font-semibold text-slate-900 break-words">{{ candidate.title }}</div>
+                                    <div class="text-xs text-slate-500 break-all mt-1">{{ candidate.slug }}</div>
+                                    <div class="flex gap-2 flex-wrap mt-2 text-xs">
+                                        <span class="rounded-full bg-sky-100 text-sky-800 px-2 py-1">{{ candidate.relation }}</span>
+                                        <span v-if="replacementPrompt.kind === 'OVERLAP' ? candidate.recommended : index === 0" class="rounded-full bg-indigo-100 text-indigo-800 px-2 py-1">默认推荐</span>
+                                        <span v-if="candidate.scope" class="rounded-full bg-slate-100 text-slate-700 px-2 py-1">{{ candidate.scope }}</span>
+                                        <span v-if="candidate.protectedSelection" class="rounded-full bg-amber-100 text-amber-800 px-2 py-1">点名核心 / 必要前置 / 锁定版本</span>
+                                        <span class="py-1 text-slate-600">{{ candidate.downloads.toLocaleString() }} 次下载</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <p class="text-sm text-slate-600 mt-3 line-clamp-3">{{ candidate.description }}</p>
+                            <blockquote v-if="candidate.evidence" class="mt-3 border-l-2 border-indigo-200 pl-3 text-xs text-slate-600 break-words">介绍依据：{{ candidate.evidence }}</blockquote>
+                            <p v-if="candidate.scopeEvidence && candidate.scopeEvidence !== candidate.evidence" class="mt-2 text-xs text-slate-500 break-words">范围依据：{{ candidate.scopeEvidence }}</p>
+                            <a :href="replacementLink(candidate.slug)" target="_blank" rel="noopener noreferrer"
+                               @click.stop class="inline-block text-xs text-indigo-600 mt-3 underline">查看项目详情 ↗</a>
+                        </label>
+                    </div>
+                    <div v-if="replacementPrompt.kind !== 'OVERLAP'" class="mt-3 flex flex-col sm:flex-row gap-3 sm:items-center">
+                        <label class="text-sm text-slate-600 flex items-center gap-2 shrink-0">
+                            <input type="checkbox" v-model="group.choice.drop" class="accent-indigo-600">去除这项要求
+                        </label>
+                        <input v-model="group.choice.manualSlug" :disabled="group.choice.drop" placeholder="或输入准确的模组 slug"
+                               aria-label="准确的替代模组 slug" class="border rounded-lg px-3 py-2 text-sm flex-1 disabled:bg-slate-100">
+                    </div>
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t flex gap-3 items-center bg-slate-50">
+                <p role="alert" class="text-sm text-red-600 flex-1">{{ replacementPrompt.error }}</p>
+                <button @click="cancelReplacement" class="px-4 py-2 text-sm rounded-lg border bg-white">暂不构建</button>
+                <button id="replacement-confirm" @click="confirmReplacement" class="px-5 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white">确认并继续</button>
+            </div>
+        </section>
+    </div>
     <!-- 顶部导航栏 -->
     <header class="bg-slate-900 text-white p-4 shadow-lg flex justify-between items-center shrink-0 z-10 relative">
         <div class="flex items-center gap-3">
@@ -276,17 +338,19 @@
                          class="mb-3 group bg-slate-50 rounded-lg p-3 border border-slate-200">
                     <summary class="cursor-pointer font-bold text-slate-500 flex items-center text-xs">
                         <span class="mr-2 transform group-open:rotate-90 transition-transform">▶</span>
-                        深度思考已完成 (耗时 {{ msg.thinkTime }} 秒)
+                        {{ msg.hasData ? '构建结果已生成' : '本轮处理结束' }} (耗时 {{ msg.thinkTime }} 秒)
                     </summary>
                     <div class="mt-2 text-xs text-slate-400 pl-4 border-l-2 border-slate-300 space-y-1">
-                        <p>1. 正在解析自然语言提取意图...</p>
-                        <p>2. 正在触发底层搜索大批量模组真实性...</p>
-                        <p>3. 正在组装最终的 XML 蓝图...</p>
+                        <p v-for="(stage, index) in readBuildProgress(msg.content)" :key="stage.id">
+                            阶段 {{ index + 1 }}/{{ readBuildProgress(msg.content).length }} · {{ stage.title }}
+                        </p>
+                        <p v-if="!readBuildProgress(msg.content).length">本条历史消息未记录构建阶段。</p>
                     </div>
                 </details>
 
                 <!-- AI 消息走安全 Markdown 渲染；用户消息保持纯文本 -->
                 <div v-if="msg.role === 'ai'" class="chat-markdown" v-html="renderMarkdownSafe(msg.content)"></div>
+                <build-report v-if="msg.role === 'ai'" :content="msg.content"></build-report>
                 <span v-else class="whitespace-pre-wrap">{{ msg.content }}</span>
 
                 <!-- 🔧 本轮变更卡片：内容来自后端 Java 状态（<ops_summary>），不依赖模型措辞 -->
@@ -326,10 +390,17 @@
                             <path class="opacity-75" fill="currentColor"
                                   d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        Agent 深度思考与并发核实中... ({{ thinkTime }}s)
+                        构建过程记录 ({{ thinkTime }}s)
                     </summary>
                     <div class="pl-6 border-l-2 border-indigo-200 text-slate-500 text-sm">
-                        <p class="animate-pulse">{{ currentThought }}</p>
+                        <ol class="space-y-2">
+                            <li v-for="(stage, index) in buildProgress" :key="stage.id" class="flex gap-2">
+                                <span class="text-indigo-600 shrink-0">阶段 {{ index + 1 }}/{{ buildProgress.length }}</span>
+                                <span>{{ stage.title }}<span class="ml-2 text-xs text-slate-400">{{ stage.endedAt ? '本阶段结束' : '进行中' }}</span></span>
+                            </li>
+                        </ol>
+                        <p v-if="!buildProgress.length && !currentThought" class="text-slate-400">请求已提交，等待构建任务开始。</p>
+                        <p v-if="currentThought" class="mt-2 text-amber-600">{{ currentThought }}</p>
                     </div>
                 </details>
             </div>
@@ -474,12 +545,7 @@
                         <button @click="openSuggestBoard" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 rounded text-xs font-bold transition whitespace-nowrap">💡 智能抽卡</button>
                     </div>
                     <!-- 解析诊断：加错的 slug 以前会"默默消失"，这里把原因写在输入框下面 -->
-                    <div v-if="unresolvedRows.length" class="mt-1 space-y-0.5">
-                        <p v-for="row in unresolvedRows" :key="row.slug" class="text-[11px] leading-snug"
-                           :class="row.hard ? 'text-red-500' : 'text-amber-600'">
-                            {{ row.hard ? '⚠ 当前环境找不到 ' : '⏳ 暂时没查到 ' }}<b class="font-mono">{{ row.slug }}</b> —— {{ row.reason }}
-                        </p>
-                    </div>
+
                 </div>
                 <div class="flex-1 overflow-y-auto p-4" id="tree-container">
                     <tree-node v-for="node in filteredRootNodes" :key="node.id" :node="node" :path="node.id"
@@ -1418,12 +1484,14 @@
 
 <script type="module">
     import {opsRows, renderMarkdownSafe} from './js/utils/format.js';
+    import {readBuildProgress} from './js/utils/build-progress.js';
     import {byKey} from './js/utils/code-cooldown.js';
     import {createApp, ref, reactive, computed, inject, provide, nextTick, watch} from 'vue';
     import TreeNodeComponent from './js/components/TreeNode.js';
+    import BuildReportComponent from './js/components/BuildReport.js';
     import {
         currentView, chatHistory, userInput, searchQuery, thinkTime,
-        currentThought, isLoading, isResolving, isBuilding, previewData, packData,
+        currentThought, buildProgress, isLoading, isResolving, isBuilding, previewData, packData,
         selectedMods, rootTreeNodes, globalHighlightId, dbRules,
         deleteMode, deleteMarked, deleteBusy, isRefreshing, deleteConflicts,
         ctxMenu, deleteDialog, pendingMrpack, manualAddSlug, showSuggestBoard, isSuggesting,
@@ -1459,10 +1527,10 @@
     import {filteredRootNodes} from './js/features/graph.js';
     import {acceptCascade, acceptPrerequisites, acceptSeedOnly, closeDeleteDialog, confirmBatchDelete, conflictSummary, ctxDelete, ctxLocate, ctxMenuLabel, ctxOpenModrinth, enterDeleteMode, exitDeleteMode, idLabel, openLab, provideDeleteContract, seedLabels, stillNeeded} from './js/features/delete-flow.js';
     import {closeEmptyGraphModal, confirmEmptyGraph, emptyGraphBusy, emptyGraphEnvs, emptyGraphError, emptyGraphForm, emptyGraphVersions, onEmptyGraphLoaderChange, openEmptyGraphModal, showEmptyGraphModal} from './js/features/empty-graph.js';
-    import {commitPackName, editingPackName, packNameDraft, startEditPackName, switchToVersion, unresolvedRows} from './js/features/pack-snapshot.js';
+    import {commitPackName, editingPackName, packNameDraft, startEditPackName, switchToVersion} from './js/features/pack-snapshot.js';
     import {cancelSuggestions, confirmAddSuggestedMods, directAddMod, fetchSuggestions, jumpToPage, openSuggestBoard, openSuggestBoardForPref, resetSuggestPage, suggestPageDown, suggestPageUp, toggleSuggestCategory, toggleSuggestSelection} from './js/features/gacha.js';
     import {buildPack, dbLoaderOptions, dbVersionOptions, groupModAStyle, groupState, groupedDbData, openDbView, resetDbFilters, ruleStyle} from './js/features/pack-view.js';
-    import {abortThinking, onMrpackUpload, sendMessage} from './js/features/chat.js';
+    import {abortThinking, onMrpackUpload, sendMessage, replacementPrompt, replacementLink, confirmReplacement, cancelReplacement, syncReplacementSelection} from './js/features/chat.js';
 
     const app = createApp({
         setup() {
@@ -1473,7 +1541,7 @@
 
 
             return {
-                currentView, chatHistory, userInput, isLoading, thinkTime, currentThought,
+                currentView, chatHistory, userInput, isLoading, thinkTime, currentThought, buildProgress, readBuildProgress,
                 isResolving, isBuilding,
                 previewData, selectedMods, rootTreeNodes, dbRules, groupedDbData,
                 // 🗂️ 知识库规则管理视图：筛选 + 用户来源配色 + 认可/不认可
@@ -1490,7 +1558,8 @@
                 manualAddSlug, showSuggestBoard, isSuggesting, suggestedMods, selectedSuggests, suggestForm,
                 availableCategories, categoryGloss,
                 pageJumpInput,
-                sendMessage, openLab, buildPack, openDbView, abortThinking, onMrpackUpload, pendingMrpack,
+                sendMessage, replacementPrompt, replacementLink, confirmReplacement, cancelReplacement, syncReplacementSelection,
+                openLab, buildPack, openDbView, abortThinking, onMrpackUpload, pendingMrpack,
                 directAddMod, openSuggestBoard, openSuggestBoardForPref, suggestMode, toggleSuggestSelection, fetchSuggestions, confirmAddSuggestedMods,
                 cancelSuggestions,
                 jumpToPage, toggleSuggestCategory,suggestPageUp,suggestPageDown,resetSuggestPage,
@@ -1499,7 +1568,7 @@
                 emptyGraphError, emptyGraphBusy, openEmptyGraphModal, closeEmptyGraphModal,
                 onEmptyGraphLoaderChange, confirmEmptyGraph,
                 // 🧾 整合包版本：当前版本号 / 变更横幅 / 名称编辑 / 历史版本切换 / 解析诊断
-                latestSnapshotId, labChangeNote, unresolvedRows, switchToVersion,
+                latestSnapshotId, labChangeNote, switchToVersion,
                 editingPackName, packNameDraft, startEditPackName, commitPackName, packData,
                 // 🔐 auth
                 showAuthModal, authMode, authForm, authError, authSuccess, authLoading, authUser, showSidebar,
@@ -1544,6 +1613,7 @@
     };
 
     app.component('tree-node', TreeNodeComponent);
+    app.component('build-report', BuildReportComponent);
     try {
         app.mount('#app');
         // 显式摘掉 v-cloak：不依赖"Vue 会不会处理根容器上的这个属性"。

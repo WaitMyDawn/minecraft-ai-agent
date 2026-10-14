@@ -17,7 +17,7 @@ import {applyPackState, attachVersion, packStateOf, readPackState, stateEquals} 
 import {computed, ref} from 'vue';
 
 /** 解析失败原因 → 给用户看的话。UPSTREAM_UNAVAILABLE 不在里面：那是"没查到"，不是"没有" */
-const HARD_FAIL_REASONS = ['PROJECT_NOT_FOUND', 'NO_VERSION_FOR_ENV', 'LOADER_MISMATCH', 'VERSION_CONFLICT'];
+const HARD_FAIL_REASONS = ['PROJECT_NOT_FOUND', 'NO_VERSION_FOR_ENV', 'LOADER_MISMATCH'];
 
 const REASON_TEXT = {
     PROJECT_NOT_FOUND: 'Modrinth 上没有这个项目',
@@ -46,13 +46,16 @@ const reasonText = (reason) => REASON_TEXT[reason] || reason || '未知原因';
  *
  * @param {{state: object, nodes: Array, unresolved: Array, dropped: Array}} result
  */
-export const handlePreviewResult = async ({state, nodes, unresolved, dropped}) => {
+export const handlePreviewResult = async ({state, nodes, unresolved, dropped, buildReport}) => {
     labUnresolved.value = Array.isArray(unresolved) ? unresolved : [];
 
     // ① 硬失败（不存在 / 当前环境没版本）的模组从清单里摘掉：留着的话每次预览都会重复报同一个错，
     //    而且会被算进版本号里，让"同一版"看起来一直在变。查不通（UPSTREAM_UNAVAILABLE）不摘。
+    const nodeSlugs = new Set((nodes || []).map(n => n.slug));
+    // 关系诊断不代表项目不存在；最终图中仍有可用版本时必须保留清单项。
     const hardFail = new Set((unresolved || [])
         .filter(u => HARD_FAIL_REASONS.includes(u.reason))
+        .filter(u => !nodeSlugs.has(u.slug))
         .filter(u => (state.modSlugs || []).includes(u.slug))
         .map(u => u.slug));
     if (hardFail.size > 0) {
@@ -66,7 +69,8 @@ export const handlePreviewResult = async ({state, nodes, unresolved, dropped}) =
         return;
     }
 
-    const note = buildChangeNote(state, nodes, dropped, hardFail);
+    const note = buildChangeNote(state, nodes, dropped, hardFail)
+        + (buildReport?.issues?.length ? '\n<build_report>' + JSON.stringify(buildReport) + '</build_report>' : '');
     const summary = summarize(state, nodes, hardFail);
     labChangeNote.value = summary;
     lastNodes = nodes || [];
@@ -99,8 +103,8 @@ const buildChangeNote = (state, nodes, dropped, hardFail) => {
     const prev = latestPackState.value || {name: '', mcVersion: '', loader: '', modSlugs: [], excludedSlugs: []};
     const prevSlugs = new Set(prev.modSlugs || []);
     const selfAdded = state.modSlugs.filter(s => !prevSlugs.has(s));
-    const removed = (prev.modSlugs || []).filter(s => !state.modSlugs.includes(s));
     const nodeSlugs = new Set((nodes || []).map(n => n.slug));
+    const removed = (prev.modSlugs || []).filter(s => !state.modSlugs.includes(s) && !nodeSlugs.has(s));
     const prevNodes = lastNodes ? new Set(lastNodes.map(n => n.slug)) : null;
     // 依赖自动补入：在图里但用户没主动加过，且上一版图里也没有
     const depAdded = prevNodes ? [...nodeSlugs].filter(s => !prevNodes.has(s) && !selfAdded.includes(s)) : [];

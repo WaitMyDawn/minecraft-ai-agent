@@ -8,13 +8,26 @@ export const escapeHtml = (s) => String(s ?? '')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 
+/** 消息正文与独立报告保留；构建和追踪协议只供状态解析，不进入可见正文。 */
+export const cleanChatReply = content => String(content ?? '').replace(/<name>.*?<\/name>|<mc>.*?<\/mc>|<loader>.*?<\/loader>|<ops_summary>.*?<\/ops_summary>|<trace>.*?<\/trace>|<dependency_audit>.*?<\/dependency_audit>|<constraints>.*?<\/constraints>|<mods>.*?<\/mods>/gs, '').trim();
+
 /** AI 回复的安全 Markdown 渲染：先转义再交给 marked；连续空行折叠成一段间距。 */
 export const renderMarkdownSafe = (content) => {
     if (!content) return '';
-    const text = String(content).replace(/\n{3,}/g, '\n\n').trim();
+    const text = String(content).replace(/<replacement_choices>[\s\S]*?<\/replacement_choices>/g, '')
+        .replace(/<build_progress>[\s\S]*?<\/build_progress>/g, '')
+        .replace(/<clarification_context>[\s\S]*?<\/clarification_context>/g, '')
+        .replace(/<requirement_report>[\s\S]*?<\/requirement_report>/g, '')
+        .replace(/<build_report>[\s\S]*?<\/build_report>/g, '')
+        .replace(/\n{3,}/g, '\n\n').trim();
     try {
-        if (typeof marked !== 'undefined' && marked.parse) {
-            return marked.parse(escapeHtml(text), {gfm: true, breaks: false});
+        if (typeof marked !== 'undefined' && marked.parse && typeof DOMPurify !== 'undefined') {
+            return DOMPurify.sanitize(marked.parse(escapeHtml(text), {gfm: true, breaks: false}), {
+                ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'del', 'code', 'pre', 'blockquote',
+                    'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'h4', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td'],
+                ALLOWED_ATTR: ['href', 'title', 'start'],
+                ALLOWED_URI_REGEXP: /^(?:https?:\/\/|mailto:|\/[^/]|#)/i
+            });
         }
     } catch (e) { /* fallthrough */ }
     return escapeHtml(text).replace(/\n/g, '<br>');

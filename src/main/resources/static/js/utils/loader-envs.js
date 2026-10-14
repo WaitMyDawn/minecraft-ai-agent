@@ -5,10 +5,12 @@
 // 迟早出现"一处能选、另一处选不出"的偏差 —— fabric 就是典型：它在版本表里的键叫
 // fabric-loader，且只有通配项，这层差异由服务端统一换算。
 
+import {apiFetch, authHeader} from '../api.js';
+
 /** 拉取 { neoforge: ['1.20.1', ...], forge: [...], fabric: [...] }；失败返回空对象 */
 export const loadLoaderEnvs = async () => {
     try {
-        const r = await fetch('/api/knowledge/feedback/loader-envs');
+        const r = await apiFetch('/api/knowledge/feedback/loader-envs', {headers: authHeader()});
         if (!r.ok) return {};
         return (await r.json()) || {};
     } catch (e) {

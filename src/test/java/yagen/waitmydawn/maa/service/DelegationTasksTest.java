@@ -28,6 +28,60 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 打包成一份清单的，是 BFS 一层里那几十个并发虚拟线程。下面两条用例分别钉住这两种形态。
  */
 class DelegationTasksTest {
+    @Test
+    void hundredDistinctAccountsCanWaitAndCancelledQueueEntryNeverExecutes() throws Exception {
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var started = new java.util.concurrent.CountDownLatch(1);
+        var executed = new java.util.concurrent.atomic.AtomicInteger();
+        DelegationTasks tasks = new DelegationTasks(true, 180000, 1, 128);
+        try {
+            var first = tasks.submit(null, 1L, "one", null, () -> {
+                started.countDown(); release.await(); return "first";
+            });
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            var queued = new java.util.ArrayList<DelegationTasks.Task>();
+            for (long owner = 2; owner <= 100; owner++) queued.add(tasks.submit(null, owner, "user", null,
+                    () -> { executed.incrementAndGet(); return "done"; }));
+            assertEquals(99, tasks.queuePosition(queued.getLast()));
+            tasks.cancel(queued.getFirst());
+            assertEquals(98, tasks.queuePosition(queued.getLast()));
+            release.countDown();
+            assertEquals("first", first.result().get(2, TimeUnit.SECONDS));
+            assertEquals("done", queued.getLast().result().get(3, TimeUnit.SECONDS));
+            assertEquals(98, executed.get());
+        } finally { release.countDown(); tasks.close(); }
+    }
+    @Test
+    void queueIsBoundedAndCancelledRunningTaskRetainsItsAccountUntilWorkerExits() throws Exception {
+        DelegationTasks tasks = new DelegationTasks(true, 5_000, 1, 1);
+        var started = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        try {
+            var running = tasks.submit(null, 1L, "one", null, () -> {
+                started.countDown();
+                while (release.getCount() != 0) {
+                    try { release.await(); } catch (InterruptedException ignored) { }
+                }
+                return "finished";
+            });
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            var queued = tasks.submit(null, 2L, "two", null, () -> "queued");
+            var full = org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                    () -> tasks.submit(null, 3L, "three", null, () -> "rejected"));
+            assertEquals(429, full.getStatusCode().value());
+            tasks.cancel(running);
+            var duplicate = org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                    () -> tasks.submit(null, 1L, "one", null, () -> "duplicate"));
+            assertEquals(409, duplicate.getStatusCode().value());
+            tasks.cancel(queued);
+            var replacement = tasks.submit(null, 2L, "two", null, () -> "replacement");
+            release.countDown();
+            assertEquals("replacement", replacement.result().get(2, TimeUnit.SECONDS));
+        } finally {
+            release.countDown();
+            tasks.close();
+        }
+    }
 
     @Test
     @DisplayName("开关默认关闭；关掉时后端必须走原路径")
@@ -138,7 +192,7 @@ class DelegationTasksTest {
         assertTrue(tasks.awaitFirstDemand(task, 5_000));
         tasks.cancel(task);
 
-        assertEquals("被放行了", task.result().get(3, TimeUnit.SECONDS));
+        assertTrue(task.result().isCancelled());
     }
 
     @Test
@@ -165,10 +219,10 @@ class DelegationTasksTest {
         assertTrue(tasks.awaitFirstDemand(b, 5_000));
 
         assertEquals(1, tasks.cancelByUser("sess-mine"), "只该命中一个任务");
-        assertEquals("a 放行", a.result().get(3, TimeUnit.SECONDS));
+        assertTrue(a.result().isCancelled());
         assertFalse(b.isDone(), "别的会话不该被误伤");
 
         tasks.cancel(b);
-        assertEquals("b 放行", b.result().get(3, TimeUnit.SECONDS));
+        assertTrue(b.result().isCancelled());
     }
 }

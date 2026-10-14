@@ -42,10 +42,42 @@ public final class PackSnapshotHash {
         return sha256Hex(canonical(loader, mcVersion, modSlugsCsv, excludedSlugsCsv));
     }
 
+    /** 空约束保留历史哈希；有效约束参与版本身份，避免清单相同而编辑语义不同的版本被合并。 */
+    public static String id(String loader, String mcVersion, String modSlugsCsv, String excludedSlugsCsv,
+                            yagen.waitmydawn.maa.model.agent.BuildConstraints constraints) {
+        if (constraints == null || constraints.equals(yagen.waitmydawn.maa.model.agent.BuildConstraints.empty()))
+            return id(loader, mcVersion, modSlugsCsv, excludedSlugsCsv);
+        return sha256Hex(canonical(loader, mcVersion, modSlugsCsv, excludedSlugsCsv) + "|"
+                + new yagen.waitmydawn.maa.model.agent.AgentContractCodec().write(constraints));
+    }
+
     /** 规范化后的待哈希串（包可见：测试直接断言"顺序不同、结果相同"） */
+    public static String id(String loader, String mcVersion, String mods, String excluded,
+                            yagen.waitmydawn.maa.model.agent.BuildConstraints constraints,
+                            yagen.waitmydawn.maa.model.ImportedPack imported) {
+        String base = id(loader, mcVersion, mods, excluded, constraints);
+        if (imported == null) return base;
+        var sorted = new yagen.waitmydawn.maa.model.ImportedPack(imported.loader(), imported.mcVersion(), imported.loaderVersion(),
+                imported.files().stream().sorted(java.util.Comparator.comparing(yagen.waitmydawn.maa.model.ImportedPack.File::slug)).toList());
+        var mapper = new tools.jackson.databind.ObjectMapper();
+        tools.jackson.databind.JsonNode canonical = mapper.valueToTree(sorted);
+        for (var file : canonical.path("files")) {
+            var env = new java.util.TreeMap<String, String>();
+            file.path("env").properties().forEach(e -> env.put(e.getKey(), e.getValue().asText()));
+            ((tools.jackson.databind.node.ObjectNode) file).set("env", mapper.valueToTree(env));
+        }
+        return sha256Hex(base + "|" + mapper.writeValueAsString(canonical));
+    }
+
     static String canonical(String loader, String mcVersion, String modSlugsCsv, String excludedSlugsCsv) {
         return blankIfNull(loader) + "|" + blankIfNull(mcVersion) + "|"
                 + sortedUnique(modSlugsCsv) + "|" + sortedUnique(excludedSlugsCsv);
+    }
+    public static String id(String loader, String mc, String mods, String excluded,
+                            yagen.waitmydawn.maa.model.agent.BuildConstraints constraints,
+                            yagen.waitmydawn.maa.model.ImportedPack imported, yagen.waitmydawn.maa.model.AssemblySnapshot assembly) {
+        String base = id(loader, mc, mods, excluded, constraints, imported);
+        return assembly == null ? base : sha256Hex(base + "|" + new tools.jackson.databind.ObjectMapper().writeValueAsString(assembly));
     }
 
     private static String blankIfNull(String s) {

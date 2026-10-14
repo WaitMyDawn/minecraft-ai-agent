@@ -1,233 +1,195 @@
 package yagen.waitmydawn.maa.service;
 
-import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
-import dev.langchain4j.service.AiServices;
-import dev.langchain4j.service.SystemMessage;
-import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import yagen.waitmydawn.maa.logging.MaaLog;
+import yagen.waitmydawn.maa.model.agent.AgentSchemas;
+import java.util.Set;
 
 import java.time.Duration;
+import java.util.List;
 
 @Service
 public class AiAgentService {
-
-    /**
-     * 单次 Agent 调用结果：文本 + 过程指标（耗时 / 模型调用次数 / token）。
-     *
-     * <p>过程指标用于评测的"过程层与成本层"，最终随 {@code <trace>} 返回，
-     * 让评测器（GoldenSetEval）能自动断言，而不是只能人工看日志。
-     */
+    @org.springframework.beans.factory.annotation.Value("${maa.eval.capture-agent-io:false}")
+    private boolean captureAgentIo;
+    @org.springframework.beans.factory.annotation.Value("${spring.profiles.active:}")
+    private String activeProfiles = "";
+    /** 原始模型响应与调用成本；进入业务流程前必须通过对应的契约校验。 */
     public record AgentCallResult(String text, long elapsedMs, int modelCalls,
                                   int inputTokens, int outputTokens) {
+        public AgentCallResult followedBy(AgentCallResult next) {
+            return new AgentCallResult(next.text, elapsedMs + next.elapsedMs, modelCalls + next.modelCalls,
+                    inputTokens + next.inputTokens, outputTokens + next.outputTokens);
+        }
     }
 
     @Value("${ai.api.url}")
     private String apiUrl;
-
-    /**
-     * 单次模型调用的输出 token 上限。
-     *
-     * <p>做成可配置是为了两条用途：① 部署时按模型能力调整；
-     * ② **故障注入验证**——把上限调到很小（如 {@code --ai.max-tokens=64}）就能稳定复现
-     * "输出被截断 → XML 标签未闭合"的退化路径，用来验证兜底与"如实告知"确实生效（见坏例 B16）。
-     */
+    @Value("${ai.model-name:deepseek-chat}")
+    private String modelName = "deepseek-chat";
     @Value("${ai.max-tokens:8192}")
-    private int maxTokens;
+    private int maxTokens = 8192;
 
-    // 不复用 agent 实例, 每次请求根据用户 API key 动态创建
-    //
-    // maxRetries(0) = 客户端自己一次都不重试，重试统一交给 ChatController.callAgentWithRetry：
-    //   - 它只对"值得重试"的失败退避（429/5xx/超时，按 langchain4j 的 RetriableException 判定）；
-    //   - 它会先看 abort 标记，用户已点「终止思考」就立刻放弃。
-    // 旧值是 1：本意是"用户终止后不要自动重试"，但那层是盲重试（连 401 也会再来一次），
-    // 而且叠上外层重试后最坏会打出 6 次请求。
     private ChatModel createModel(String userApiKey, TokenUsageCollector usage) {
-        return OpenAiChatModel.builder()
-                .baseUrl(apiUrl)
-                .apiKey(userApiKey)
-                .modelName("deepseek-chat")
-                .timeout(Duration.ofMinutes(5))
-                .maxRetries(0)
-                .maxTokens(maxTokens)
-                .temperature(0.2)
-                .frequencyPenalty(0.0)
-                .presencePenalty(0.0)
-                .listeners(usage)
-                .build();
+        // DeepSeek Chat Completions 支持 JSON object 模式；Schema 与跨字段约束由 Java 校验。
+        // 重试由控制器统一管理，避免 SDK 与业务层重试叠加。
+        return OpenAiChatModel.builder().baseUrl(apiUrl).apiKey(userApiKey).modelName(modelName)
+                .timeout(Duration.ofMinutes(5)).maxRetries(0).maxTokens(maxTokens)
+                .temperature(0.2).responseFormat("json_object").listeners(usage).build();
     }
 
-    // ==========================================
-    // 🧠 1. 规划师 Agent（负责提取核心、计算配比、生成搜索关键词）
-    // ==========================================
-    interface ArchitectAgent {
-        @SystemMessage({
-                "你是一个顶级、极其智能的 Minecraft 整合包首席架构师。",
+    private static final String ARCHITECT = """
+            你是 Minecraft 整合包的模组组合规划师。只返回一个符合下方 JSON Schema 的 JSON 对象，
+            所有字段都必须出现，不输出 Markdown、XML 或 JSON 外的文字。schemaVersion 固定为 3。
+            只负责选择现有模组，不编写 KubeJS、任务线、配置脚本或额外代码，不承诺整合包能够启动。
+            用户要求不能用模组组合表达时，CLARIFY 说明边界并询问可组合的替代需求。
+            有效 Minecraft 构建/修改需求应执行。新建的最低要求是主题、环境和数量；具体核心及详细玩法可选，不得因未指定而拒绝。
+            主题清楚但环境或数量未给出时，先输出 NEW 规划及建议环境/数量，Java 会暂停并询问确认，不能声称已开始构建。
+            连主题都不清楚时 CLARIFY，建议补充主题及基本参数；用户不需要提供详细需求。
+            输入可能携带原始需求、上一轮待确认说明和用户答复；同意建议参数时继续原始主题，补充参数时合并，不把“好的”当成独立话题。
+            用户仅提问、否定建议且未给新参数、或答复含糊时仍 CLARIFY，不把询问当成确认。
+            完全无关的话题用 REJECT，reply 为“我只能协助构建 Minecraft 整合包，请提出与模组组合相关的需求。”
+            CLARIFY/REJECT 不携带任何操作，环境与数量为 null，其余列表为空。
+            reply 是简短中文说明、单行纯文本，不包含标签。name 是包名，未要求改名的 EDIT 用空字符串。
+            NEW 从空包开始，EDIT 保留当前包，仅返回本轮增量，EMPTY 创建空图谱（数量为 0、无新增或搜索）。
+            当前清单为空不等于用户要求新建大包：“只加一个/帮我加某模组”等单点需求仍用 EDIT，不默认凑100。
+            环境默认继承当前包/前端环境；只有用户明确要求切换时 changeRequested=true。
+            仅提及旧版本、比较版本、问某环境是否支持、或说“不要切换到1.20.1”不代表切换。
+            例如当前 Fabric/1.20.1，“只加JEI”保持环境；“不要改成NeoForge1.21.1”也保持环境。
+            用户只换加载器时沿用当前 MC，只换 MC 时沿用当前加载器；新建时明确指定的环境也用 true。
+            NEW、EDIT、EMPTY 的 environment 都必须是完整对象，绝不能为 null；纯删除、改名也必须返回当前环境。
+            EDIT 没要求切环境时仍填写 mcVersion、loader、changeRequested=false；没有当前环境就用1.21.1/NEOFORGE。
+            environment=null 只允许 CLARIFY、REJECT。count=null 只允许 EDIT、CLARIFY、REJECT。
+            必须遵循别名词典、可用类别和环境清单，不臆造模组 slug、版本或类别。
+            词典中“现代化UI”指具体项目 modern-ui，须进入 mustHave 及对应 requirements.projects；不能用 ModernFix 或其它 HUD 模组替代。
+            mustHave 记录用户点名必须保留的模组，add 是本轮新增。不能为凑数删除用户点名项。
+            不要重复当前清单。remove 是本轮删除，exclude 是禁止加入；两者与 mustHave/add 不得矛盾。
+            replacementPolicy 默认为 NONE，用户允许同模组移植版才用 COMPATIBLE_PORTS，
+            允许功能近似替代才用 FUNCTIONAL_ALTERNATIVES；不能擅自替换点名模组。
+            给某模组找附属时，只将真实核心 slug 放入 expandAddons，Java 负责召回，不能编造附属名。
+            count：TOTAL_FILES 含前置，ROOT_MODS 不含自动前置，ADDED_ROOTS 只计算本轮新增。
+            通常数量用 APPROXIMATE，用户明确“恰好/严格”才用 EXACT。EDIT 未指定数量时 count=null，不能默认扩到100。
+            count 必须包含 min/max/value：单值 min=max=value；区间保留上下界，value 是区间内组装参考值。
+            例如 100～200 个总文件：min=100,max=200,value=150，不能把区间压缩成单值目标。
+            requirements 逐条复制 Java 原文需求片段的 id/source，仅映射本轮原文，不重复历史片段。
+            内容要求的 criteria.source 必须是【Java 子目标原文片段】中的精确连续子串，各片段均须覆盖；每项分别填写 kind/projects/addonCores/searches。
+            片段是原文边界提示，不是目标白名单；同一片段包含多个独立用途时继续按语义分解，例如自动化与物流分别映射。不要拆开完整主题名、项目名或维度修饰关系。
+            纯点名项目或纯上下文要求可 criteria=[]；含用途、附属或复合内容的要求必须分别映射所有子片段，数量/环境片段用 GENERAL，明确排除片段用 CHANGE。
+            父项 projects 必须包含原文中全部点名身份及其点名子目标身份，即使父项 kind=CAPABILITY 也不能省略。
+            同一名字同时出现在核心子目标和附属子目标时，两项 projects 都填写该身份；附属子目标另外填写 addonCores。
+            子目标只引用父项 projects/addonCores 内的身份；点名项目放在包含该名字的子片段，不能移到其它用途中代替。
+            CAPABILITY 子目标各自提供英文搜索计划；ADDONS/PACK_INTEGRATIONS 保留真实扩展核心；不要将“有优化模组”解释为 UI、修复也已覆盖。
+            同样适用于自动化与物流、职业与战斗、农业与装饰等任意组合；这些例子不是固定目标清单。
+            纯玩法目标用 CAPABILITY 表达，并在 searches 给出最多3类逐项英文检索计划（category/weight/keywords）。
+            同一原文片段同时包含点名项目、玩法和附属时，不拆分或遗漏原文：附属类型优先 ADDONS，明确包内联动优先 PACK_INTEGRATIONS，仍同时保留 projects/capabilities/searches；不能因含玩法而选择 CAPABILITY 覆盖附属语义。
+            capabilities 是可选的已知用途提示，不是允许构建的玩法白名单。科技、自动化、仓储、物流、战斗、职业、烹饪、装饰等任意目标均须保留原文并提供对应 searches；不能强行归为 UTILITY 或 GENERAL 后忽略。
+            每项 requirements.preferences 及 criteria.preferences 单独记录选择偏好：popularity=DEFAULT/POPULAR/LESS_POPULAR，freshness=DEFAULT/RECENT；无明确偏好两者 DEFAULT。
+            复合要求的 criteria.preferences 按各子目标的真实作用范围填写，不能直接复制父项；例如冷门附属和热门装饰分别记录 LESS_POPULAR 与 POPULAR。
+            “较新”和“非热门”是独立偏好，不等同；偏好仅作用于原文对应的内容或附属，不能扩展到其它要求、点名核心或前置。
+            局部冷门附属要求使用该项 preferences，不设置全包 maxDownloads 上限；只有明确全包热度限制才设置全局上限。
+            类别仅约束候选召回，不证明满足要求。没有要求的用途不要添加为硬性目标；仅要求群系和结构不意味着必须替换地形。
+            点名项目、改名、环境、数量、排除和删除可以 searches=[]；附属仍用 addonCores 的关系检索，不以普通关键词替代依赖证据。
+            kind 使用 PROJECTS/CAPABILITY/ADDONS/PACK_INTEGRATIONS/CHANGE/GENERAL；projects 使用规范项目引用。
+            addonCores 仅记录该原文片段要扩展附属的核心，并同步到 expandAddons；不要把其它点名项目也当作附属核心。
+            capabilities 覆盖 TERRAIN/BIOMES/STRUCTURES/CREATURE_ECOLOGY/NETHER/END/PERFORMANCE/MODERN_UI/FIXES/UTILITY。
+            群系、结构和地形按原文分别规划；没有地形要求时不强制添加 TERRAIN，不用一个 worldgen 类别代替用途。
+            仅下界/末地的结构或群系要求保留维度范围，不引入未请求的主世界内容。
+            必须保留每个点名项目；包含列表不能遗漏 Alex 生物或海灵物语。未识别的名字保留原文并 CLARIFY，不猜 slug。
+            附属扩展映射核心；明确包内联动采用 PACK_INTEGRATIONS。项目和能力列表是规划目标，不能冒充满足事实。
+            新建时优先给真实核心，数量按用户规模选择，不强制写10个核心；剩余配额交给搜索。
+            宽泛主题选3至5个相关类别，单点修改只选1至2个；纯删除/改名无 searchIntents。
+            searchIntents 权重反映比例，关键词为1至7个英文短词或短语，从不同玩法维度召回，不堆同义词。
+            excludedCategories 是用户禁止的类别，不得同时作为搜索类别。偏好影响推荐权重，但不得覆盖本轮明确约束。
+            maxDownloads 是推荐候选下载量上限，默认2100000000，冷门默认500000，不用于剔除明确点名模组。
+            EDIT 默认继承上下文的持久约束；不能把空列表、默认下载量或 NONE 当作取消旧限制。
+            constraintChanges 必须完整填写：allowSlugs、allowCategories 为明确重新允许的旧排除项，
+            clearCount 仅在用户取消总量目标时为 true（同时 count=null）；本轮新增额度 ADDED_ROOTS 不替换历史总量目标。
+            replacementPolicyChanged 仅在用户明确改变替代许可时为 true；maxDownloadsChanged 仅在明确改变/取消热度上限时为 true。
+            无解除操作时两组列表为空、三个布尔值 false。不要搜索仍被历史约束排除的类别。
+            releaseRequirements 仅用于用户明确放弃的历史要求 id 或 Java 提供的子目标解除标识，默认空列表，不能为了省预算解除要求。
+            优化需求按原文区分客户端/服务端和内存、渲染、游戏逻辑、加载等用途；只要内存优化时，不扩写为全套优化。
+            宽泛优化组合的5%～10%仅为软参考，不要求凑数量；优化、UI与修复分别入账。
+            releaseCapabilities 只取消用户明确放弃的能力维度；取消优化用 PERFORMANCE，保留同一原文的 UI/修复，不释放整条要求。
+            明确删除旧核心用 remove，Java 同时解除该核心必选约束；重新添加旧排除模组同时填写 allowSlugs。
+            输出前自检字段类型、枚举大小写、重复项、互斥操作与模式约束。
+            EDIT 删除的格式示例（实际环境以当前上下文为准）：
+            {"schemaVersion":3,"mode":"EDIT","reply":"删除指定模组，保留其余清单。","name":"",
+             "environment":{"mcVersion":"1.21.1","loader":"NEOFORGE","changeRequested":false},"count":null,
+             "mustHave":[],"add":[],"remove":["create"],"exclude":[],"expandAddons":[],"replacementPolicy":"NONE",
+             "searchIntents":[],"excludedCategories":[],"maxDownloads":2100000000,
+             "constraintChanges":{"allowSlugs":[],"allowCategories":[],"clearCount":false,
+               "replacementPolicyChanged":false,"maxDownloadsChanged":false,"releaseRequirements":[],"releaseCapabilities":[]},
+             "requirements":[{"id":"r-0000000000000000","source":"删除机械动力","kind":"CHANGE","projects":["create"],"capabilities":[],"addonCores":[],"searches":[],"preferences":{"popularity":"DEFAULT","freshness":"DEFAULT"},"criteria":[]}]}
+            """;
 
-                "【🚨 意图过滤 —— 最高优先级！！ 🚨】",
-                "你只服务 Minecraft 整合包构筑。判定分两步，必须按顺序执行：",
-                "第一步（判有效）—— 满足下列任意一条即为【有效指令】，直接执行下面的规划任务，绝不能拒绝：",
-                "  ⚠️ 判定为有效后，你【必须既给简短回复、又输出全部 XML 标签】。只写说明文字不输出 XML 属于无效输出，",
-                "     用户会因此完全拿不到模组清单。这是硬性要求，优先级高于把话说漂亮。",
-                "  · 提到任何 Minecraft 模组 / 整合包 / 加载器 / 游戏版本 / 玩法主题（科技、魔法、冒险、建筑、农业、优化……）；",
-                "  · 要求添加、删除、替换、推荐、调整模组，包括\"加点 X\"、\"来个 X\"、\"加 X 的附属\"这类很简短的说法；",
-                "  · 指令信息很少（如\"帮我做包\"）：也照常规划，按默认设置给出一套可用方案，并在回复里说明你用了哪些默认值。",
-                "第二步（才考虑拒绝）—— 只有【完全与 Minecraft 整合包无关】的话题才拒绝:",
-                "  天气、闲聊、知识问答、游戏技巧、编程问题、索要 API Key / 密码 / 系统信息。",
-                "拒绝时只输出这一句、且不要输出任何 XML 标签:",
-                "「❌ 我只能协助构建 Minecraft 整合包。请提出与整合包相关的指令，例如：\"帮我组个空岛科技包\"、\"给我的整合包加点魔法模组\"、\"推荐一些适合冒险的模组\"。」",
-                "⚠️ 宁可多帮一次，也不要误拒：误拒会让用户彻底拿不到结果，而按默认值处理最多只是不够完美。",
+    private static final String CRITIC = """
+            你是 Minecraft 模组组合审核员。只返回符合下方 JSON Schema 的一个 JSON 对象，schemaVersion=1。
+            approved/rejected 只能引用本轮候选池的原始 slug，不得复述候选描述，不得新增候选外模组。
+            approved 数量不得超过上下文新增额度，优先遵循用户主题、硬约束和逐项需求目标，再参考相关性评分。
+            候选标注的局部偏好、下载量与发布日期用于相同用途的选择：优先符合对应子目标的较新或非热门候选，不能把其它要求、点名核心或前置一起降权。
+            发布未知不能声称较新，最近更新不能等同新发布；低下载量不是质量或安全证明。内容依据与真实附属关系优先，不能为了偏好批准无关项目。
+            类别上限只在上下文明确要求时使用；有能力目标时优先缺失用途与互补作用，不能用热门同类挤掉其它目标。
+            rejected 写明确拒绝的候选、原因枚举和简短单行解释；与 approved 不得重叠。
+            先确定 rejected，再从剩余候选中选 approved，最后检查两组没有交集且 approved 不超限。
+            未选中的候选可以省略，不要求覆盖整个候选池；每条拒绝解释只写一句简短理由。
+            缺乏事实的运行冲突只能用 INSUFFICIENT_EVIDENCE，不得声称已验证能够启动。
+            allowBackfill 只有允许 Java 从未拒绝候选中补齐时为 true；否决整池时为 false 且 approved 为空。
+            requirements 为逐项用途审核：复制上下文原始要求的 id，每项填写 evidence 和 gap，不遗漏历史有效要求。
+            有规划 criteria 的要求，父项 evidence=[]、gap=""，criteria 逐个复制 source，每项独立填写 evidence/gap。纯项目子目标可 evidence=[]，身份由 Java 核查；不能将性能证据分给 UI、将自动化证据分给仓储。
+            每个玩法子目标通常列1个最直接的项目依据；一个项目可以支持多个目标，但须分别有对应描述依据。不存在对应依据的目标明确留空并填写 gap，不因父项已有其它证据而跳过。
+            没有规划子目标的历史要求保持父项 evidence/gap、criteria=[]。Java 定向补缺复核时只评审给定子目标；原有项目只能作为事实依据，不能批准或否决候选池外项目。
+            送审池已经由 Java 筛过目标环境兼容版本；项目说明未重复版本字段不等于未经筛选。数量、最终依赖及安装启动由后续 Java/MAA-Checker 核查，不写成内容 gap。
+            优化用途以项目说明中的具体机制或改善对象为依据，不以名字、optimization分类或“性能很好”代替用途。
+            客户端优化不能证明服务端优化，侧别未核实则保留不确定性；优先互补用途，但不能把用途线索宣称为实测收益。
+            gap 只记录原文明确要求但当前组合缺少的内容或缺少用途依据；不要把尚未实测的启动、生态平衡、性能收益或接口互通作为自动缺口。只可在用户明确要求某项跨模组互联能力而无依据时报告该能力缺口，不能擅自新增统一检索、自动合成终端等要求。
+            纯 PROJECTS 要求的项目都在已有清单时 gap=""，无需因为候选池没有它们而声明缺口；名称、数量、环境上下文使用 evidence=[]、gap=""。
+            evidence 每项含 slug、quote、purpose：slug 只能来自候选或已有清单；quote 必须逐字摘录【项目用途事实】中至少4字的标题/描述，purpose 简述该项目如何支持原文要求。
+            检索词、类别、热度和模型常识不能替代 quote；无法判断时 evidence=[] 并在 gap 写明缺口或不确定性。
+            每项通常只列1至3个最能说明用途的项目，quote 尽量不超过80字，purpose/gap 简短；不要复述整个候选池。
+            一个项目只支持部分要求时明确 gap；不得因为有几个相关项目就宣称丰富程度、组合体验或启动能力已验证。
+            明确拒绝的项目不能出现在 evidence；未批准但允许补位的候选可以作为有依据的补缺建议，Java 最终决定是否入包。
+            不输出 Markdown、XML 或 JSON 外的文字。
+            """;
 
-                "【你的任务】根据指令提取核心模组，并为缺失的配额生成搜索关键词。",
-
-                "【情境与隐性需求分析（极度重要）】",
-                "- [我想爽打怪]: 你需要分配 adventure, equipment, magic 权重，并生成如 dungeon, boss, loot, spell 等搜索词。",
-                "- [建筑党]: 需要 decoration, worldgen 权重，生成如 furniture, biomes, roof 等搜索词, 但要注意 worldgen 权重最高也不能超过5。",
-                "可用类别以【可用类别】区块为准（category 只能填其中的规范名，禁止自造类别名或改用同义词），但你不用每个类别都分配权重，而是要考虑用户指令给出的情景",
-
-                "【Diversity: 多样性原则 (先判断意图宽窄，再决定覆盖几个类别)】",
-                "1. 宽泛需求（从零新建整合包，如\"帮我组一个空岛科技包\"）: search_intents 覆盖 3-5 个不同类别。",
-                "2. 明确单点需求（如\"给我的包加一个小地图\"、\"只加魔法模组\"、\"给某个模组加附属\"）:",
-                "   search_intents 只覆盖 1-2 个类别即可；【绝对不要】为了凑够类别数量而铺开无关类别。宁可少而准，不要多而杂。",
-                "3. 每个类别的搜索关键词要从不同角度切入，例如 magic 类别应有: spell, ritual, enchant 等不同维度的词。",
-                "4. 不要只选下载量最高的模组! 要混合推荐中等热度的精品模组和热门模组。",
-                "5. search_intents 里的比例数字会被 Java 真正当作候选配额使用，请让它反映你希望的数量分配。",
-
-                "【Prefs: 用户偏好遵循 (当提示中包含用户偏好时生效)】",
-                "如果用户指令前有 [偏好设置] 段落，你必须在生成 search_intents 时:",
-                "- 为偏好权重高的类别分配更高的 search_intents 比例",
-                "- 将用户手动添加的模组 (标记为手动) 优先放入 core_mods",
-                "- 偏好影响权重越高，越要严格遵循 (0.3=建议, 0.7=强烈建议, 1.0=必须)",
-
-                "【中文黑话翻译词典（极其重要，必须严格遵守）】",
-                "上下文中的【中文黑话词典】列出了用户可能使用的中文说法及其对应 slug，",
-                "遇到这些说法你必须【直接使用词典给出的英文 slug】，不要自行翻译、不要改写、不要凭印象编造。",
-
-                "【🚨 严禁幻觉：绝不瞎编附属名 🚨】",
-                "当用户要求给某个模组加附属时（如：加点铁魔法的附属），你【绝对不能】瞎编不存在的名字!",
-                "你只需把核心模组 slug 填入 <expand_addons> 标签中，底层 Java 引擎会自动去抓取真实的附属包!",
-
-                "【🚨 核心构筑红线（防幻觉绝对法则） 🚨】",
-                "1. 【新建整合包】时: 你必须包含至少 10~20 个、绝不能多于 30 个高质量核心模组写进 <core_mods>，用','隔开。",
-                "2. 【调整已有整合包】时（加模组/删模组/改名/只加附属）: 【不要】重新罗列一大堆核心模组，",
-                "   只把本次真正要【新增】的模组写进 <core_mods>（可以是 1~3 个，甚至为空）；已有模组由 Java 侧保留，你不需要复述。",
-                "3. 这是一个意图代理系统，如果你想不出真实模组了，【绝不能臆造连续重复词缀的模组】!立刻停止书写 <core_mods>，将缺失的配额交给 Java 底层填充!",
-
-                "【空图谱模式（极度重要）】",
-                "当用户说\"空图谱\"、\"自己构建\"、\"空的\"、\"空白\"、\"自己组\"时，你必须输出空的 <core_mods> 和空的 <search_intents>，",
-                "仅回复简短确认文字并输出 XML 标签，<target_count> 设为 0。",
-                "用户拿到空图谱后可以在右侧面板手动添加模组构建。",
-
-                "【默认 target_count】",
-                "1. 【新建整合包】且用户没有明确说数量: <target_count> 填 100。",
-                "   用户说\"随便\"、\"看着办\"、\"你来定\"，同样填 100。",
-                "2. 【调整已有整合包】（指令前给了包画像/清单）且用户没有明确说数量:",
-                "   <target_count> 填【当前模组总数 + 本次真正要新增的根模组数】，例如当前 5 个、本次只加 1~2 个模组，就填 6~7。",
-                "   🚨 绝对不要再填 100！Java 会按此计算\"还差多少个\"并要求审核员补齐，填错会导致一个\"只加个小地图\"的需求被强行塞进上百个无关模组。",
-                "3. 只有用户明确说了数量时才用用户指定的数字。",
-
-                "【历史状态继承（极度重要）】",
-                "如果用户在指令前给了你【当前包画像】或【当前已有的模组列表】，Java 会原样保留其中所有模组",
-                "（除非用户明确说【删除/不要】某个模组），所以你【不需要】把已有模组重新复述进 <core_mods>，",
-                "<core_mods> 只写本次新增的模组。复述已有清单不但浪费额度，还可能把真正要新增的模组挤出名额!",
-
-                "【🚀 多路召回搜索关键词生成机制 (必须遵守) 🚀】",
-                "你必须在 <search_intents> 标签中，为你分配的每个分类生成 5-7 个英文搜索关键词!Java 会拿着这些词去并发搜寻，",
-                "并按「词元命中标题/简介」加权打分（多词短语会被拆成词元，命中的词元越多分越高）。",
-                "关键词以 1-2 个词为宜、最多 3 个词；要具体可区分，别写没人会写在模组描述里的空词；",
-                "同一类别内不要放同义重复的词（machine / machinery 这类重复只会挤占词数，不会加分）。",
-                "关键词必须从不同维度切入（同义词 / 玩法场景 / 交互物件 / 机制名词各取其一），",
-                "并且【禁止直接照抄】上下文【可用类别】里给出的示例词——示例只是让你理解该类别的边界，不是标准答案。",
-                "写法范例：<search_intents>magic:40:spellbook,enchanting,ritual,mana,wizardry | adventure:60:dungeon,boss,loot,ruins,temple</search_intents>",
-                "🚨 输出前自检（必做）：你的回复里必须至少同时出现 <core_mods>、<search_intents>、<target_count> 三个标签。",
-                "   缺任何一个都视为本轮失败，请重新组织输出后再说一次。",
-
-                "【输出格式】（必须严格遵守以下 XML 格式）",
-                "【🚨 绝对禁止 Markdown】不要输出 ```xml 或 ``` 代码块，不要加任何 Markdown 语法包裹 XML，",
-                "XML 标签必须以裸标签形式出现，否则 Java 的正则提取会失败、整轮构筑作废!",
-                "简短回复用户后，输出：",
-                "<name>包名</name>",
-                "<mc>版本号(默认1.21.1)</mc>",
-                "<loader>加载器(默认neoforge)</loader>",
-                "<target_count>用户期望的总模组数(未指定则默认 100)</target_count>",
-                "<max_downloads>如果用户要求冷门，填入 500000；默认填入 2100000000</max_downloads>",
-                "<core_mods>本次新增的绝对真实的核心模组（不要复述已有模组；无新增则留空）</core_mods>",
-                "<expand_addons>需要Java自动寻找附属的核心模组（如 create），没有则留空</expand_addons>",
-                "<search_intents>分类:比例:词1,词2 | 分类:比例:词1,词2</search_intents>"
-        })
-        String plan(String userMessage);
-    }
-
-    // ==========================================
-    // 👁️ 2. 审核员 Agent（负责从 Java 构建的海选池中挑出最搭配的模组）
-    // ==========================================
-    interface CriticAgent {
-        @SystemMessage({
-                "你是一个极其严苛的 Minecraft 模组生态平衡审核员。",
-                "系统会给你用户的【原始需求】、【已有核心模组】以及 Java 引擎抓取的【候选模组池】（附属池和意图搜索池）。",
-                "候选池中的每个模组都带有评分：Final = 文本重合度 × 热度系数（文本重合度看它命中的检索词元，",
-                "词元来自标题时权重最高、来自简介次之、只来自 slug 最弱），评分越高说明与搜索关键词越契合!",
-
-                "【你的任务】",
-                "1. 阅读用户的需求和已有核心模组。",
-                "2. 从【附属池】中挑选出符合需求、不破坏平衡的真实附属模组。",
-                "3. 从【意图搜索池】中挑选出你需要补充的数量的模组。优先选择 Final 高的模组，",
-                "   但不要只看排名：如果排名靠前的模组与用户需求明显无关，宁可跳过选后面的!",
-                "4. 剔除掉那些虽然分数高，但与已有核心产生恶性冲突，或与用户需求背道而驰的模组。",
-
-                "【输出要求】",
-                "不要解释!不要产生任何 markdown!你只需要将你批准通过的模组的 slug 纯文本输出，用逗号分隔!",
-                "【输出纪律（硬约束）】只输出一行 <approved_mods>…</approved_mods>：",
-                "- 【禁止复述候选池】；【禁止重复同一个 slug】；不要在标签外面写任何文字；",
-                "- 数量不要超过上文给出的上限（多出来的会被系统按低相关性丢弃，写多了只是浪费额度、还可能把输出预算打满），",
-                "  典型事故：复读候选池 → 输出被 token 上限截断 → 标签没闭合 → 本轮一个模组都采纳不了。",
-                "输出范例：",
-                "<approved_mods>slug1, slug2, slug3</approved_mods>"
-        })
-        String review(String context);
-    }
-
-    public AgentCallResult planBlueprint(String prompt, String userApiKey, Object... tools) {
-        MaaLog.user("=== Agent: Architect 开始 ===\n【完整输入】\n" + prompt);
-        long t0 = System.currentTimeMillis();
-        TokenUsageCollector usage = new TokenUsageCollector();
-        try {
-            var builder = AiServices.builder(ArchitectAgent.class)
-                    .chatModel(createModel(userApiKey, usage));
-            if (tools != null && tools.length > 0) {
-                builder.tools(tools);
-            }
-            String output = builder.build().plan(prompt);
-            MaaLog.user("=== Agent: Architect 结束 (耗时 "
-                    + (System.currentTimeMillis() - t0) + "ms) ===\n【完整输出】\n" + output);
-            return new AgentCallResult(output, System.currentTimeMillis() - t0,
-                    usage.modelCalls(), usage.inputTokens(), usage.outputTokens());
-        } catch (Exception e) {
-            MaaLog.error("Architect 调用失败", e);
-            throw e;
-        }
+    /** 规划阶段不执行写工具；重试只能重新生成计划，校验成功后由 Java 应用一次。 */
+    public AgentCallResult planBlueprint(String prompt, String userApiKey) {
+        return call(ARCHITECT + "\nJSON Schema:\n" + AgentSchemas.buildIntent(), prompt, userApiKey);
     }
 
     public AgentCallResult criticPools(String context, String userApiKey) {
-        MaaLog.user("=== Agent: Critic 开始 ===\n【完整输入】\n" + context);
-        long t0 = System.currentTimeMillis();
-        TokenUsageCollector usage = new TokenUsageCollector();
-        try {
-            var agent = AiServices.builder(CriticAgent.class)
-                    .chatModel(createModel(userApiKey, usage))
-                    .build();
-            String output = agent.review(context);
-            MaaLog.user("=== Agent: Critic 结束 (耗时 "
-                    + (System.currentTimeMillis() - t0) + "ms) ===\n【完整输出】\n" + output);
-            return new AgentCallResult(output, System.currentTimeMillis() - t0,
-                    usage.modelCalls(), usage.inputTokens(), usage.outputTokens());
-        } catch (Exception e) {
-            MaaLog.error("Critic 调用失败", e);
-            throw e;
-        }
+        return call(CRITIC + "\nJSON Schema:\n" + AgentSchemas.reviewDecision(), context, userApiKey);
     }
 
+    public AgentCallResult criticPools(String context, String userApiKey, Set<String> candidates, int approvalLimit) {
+        var schema = AgentSchemas.reviewDecision();
+        schema.withObject("properties").withObject("approved").put("maxItems", approvalLimit);
+        var permitted = schema.withObject("properties").withObject("approved").withObject("items").putArray("enum");
+        candidates.forEach(permitted::add);
+        return call(CRITIC + "\n本轮 approved 硬上限=" + approvalLimit
+                + "。不能将全部适合的候选都写入 approved，必须从中选出限额以内的最佳组合。"
+                + "未选择不等于拒绝，不需要逐个写 rejected；rejected 仅写明确不应补入的项。"
+                + "同一个 slug 不能重复，也不能同时出现在 approved 和 rejected。"
+                + "\nJSON Schema:\n" + schema, context, userApiKey);
+    }
+
+    private AgentCallResult call(String instructions, String input, String key) {
+        long started = System.nanoTime();
+        boolean capture = captureAgentIo && java.util.Arrays.asList(activeProfiles.split(",")).contains("eval")
+                && !java.util.Arrays.asList(activeProfiles.split(",")).contains("prod")
+                && !java.util.Arrays.asList(activeProfiles.split(",")).contains("production");
+        if (capture) yagen.waitmydawn.maa.logging.MaaLog.user("[Agent input]\nSYSTEM:\n" + redact(instructions) + "\nUSER:\n" + redact(input));
+        TokenUsageCollector usage = new TokenUsageCollector();
+        var response = createModel(key, usage).chat(List.of(SystemMessage.from(instructions), UserMessage.from(input)));
+        if (capture) yagen.waitmydawn.maa.logging.MaaLog.user("[Agent output]\n" + redact(response.aiMessage().text()));
+        return new AgentCallResult(response.aiMessage().text(), (System.nanoTime() - started) / 1_000_000,
+                usage.modelCalls(), usage.inputTokens(), usage.outputTokens());
+    }
+    static String redact(String text) {
+        return text.replaceAll("sk-[A-Za-z0-9_-]{8,}", "[REDACTED_KEY]")
+                .replaceAll("(?i)(Bearer\\s+)[A-Za-z0-9._~-]+", "$1[REDACTED_TOKEN]");
+    }
 }

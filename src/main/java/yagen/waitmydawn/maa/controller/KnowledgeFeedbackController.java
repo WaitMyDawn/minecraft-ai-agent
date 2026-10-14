@@ -9,7 +9,6 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/knowledge/feedback")
-@CrossOrigin(origins = "*")
 public class KnowledgeFeedbackController {
 
     private final KnowledgeDb knowledgeDb;

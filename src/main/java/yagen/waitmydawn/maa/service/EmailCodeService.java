@@ -115,6 +115,20 @@ public class EmailCodeService {
      * @throws RateLimitedException 冷却中 / 当日额度用完
      */
     public String issue(Purpose purpose, String email) {
+        return issueForDelivery(purpose, email).code();
+    }
+
+    public static final class IssuedCode {
+        private final String code;
+        private final String receipt = java.util.UUID.randomUUID().toString();
+        private final LocalDate day;
+        private final java.util.concurrent.atomic.AtomicBoolean refunded = new java.util.concurrent.atomic.AtomicBoolean();
+        private IssuedCode(String code, LocalDate day) { this.code = code; this.day = day; }
+        public String code() { return code; }
+    }
+
+    /** 发送凭据区分重发轮次，旧邮件失败不得撤销后来成功签发的验证码。 */
+    public IssuedCode issueForDelivery(Purpose purpose, String email) {
         String key = key(purpose, email);
         String quotaKey = EmailNormalizer.normalize(email);
         long now = clock.getAsLong();
@@ -135,10 +149,10 @@ public class EmailCodeService {
             return new Quota(today, old.count + 1, now);
         });
 
-        String code = randomCode();
+        IssuedCode issued = new IssuedCode(randomCode(), today);
         // 重新签发就覆盖旧的（用户点重发后，旧码立即失效，避免"两个码都能用"）
-        pending.put(key, new Pending(code, 0));
-        return code;
+        pending.put(key, new Pending(issued.code, 0, issued.receipt));
+        return issued;
     }
 
     /**
@@ -159,7 +173,7 @@ public class EmailCodeService {
                 return null;                                    // 一次性：用过就删
             }
             int attempts = cur.attempts + 1;
-            return attempts >= DEFAULT_MAX_ATTEMPTS ? null : new Pending(cur.code, attempts);
+            return attempts >= DEFAULT_MAX_ATTEMPTS ? null : new Pending(cur.code, attempts, cur.receipt);
         });
         return ok[0];
     }
@@ -178,11 +192,14 @@ public class EmailCodeService {
      * <p>为什么<b>保留</b>冷却时间戳（不回滚 lastSentAt）：万一某个收件地址会让 SMTP 立即拒信，
      * 回滚冷却就能被用来"无限次触发发信尝试"。保留冷却 = 这种情况最多每分钟一次，仍然安全。
      */
-    public void rollback(Purpose purpose, String email) {
-        pending.invalidate(key(purpose, email));
+    public void rollback(Purpose purpose, String email, IssuedCode issued) {
+        if (issued == null || !issued.refunded.compareAndSet(false, true)) return;
+        pending.asMap().computeIfPresent(key(purpose, email), (k, current) ->
+                current.receipt.equals(issued.receipt) ? null : current);
         quota.asMap().computeIfPresent(EmailNormalizer.normalize(email), (k, old) -> {
+            if (!old.day.equals(issued.day)) return old;
             int left = old.count - 1;
-            return left <= 0 ? null : new Quota(old.day, left, old.lastSentAt);
+            return new Quota(old.day, Math.max(0, left), old.lastSentAt);
         });
     }
 
@@ -211,7 +228,7 @@ public class EmailCodeService {
         return String.format(Locale.ROOT, "%06d", RANDOM.nextInt(CODE_BOUND));
     }
 
-    private record Pending(String code, int attempts) {}
+    private record Pending(String code, int attempts, String receipt) {}
 
     private record Quota(LocalDate day, int count, long lastSentAt) {}
 }

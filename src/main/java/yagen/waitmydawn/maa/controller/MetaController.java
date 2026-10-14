@@ -18,7 +18,6 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/meta")
-@CrossOrigin(origins = "*")
 public class MetaController {
 
     /** 19 个规范模组类别 + 中文释义（唯一权威源：CategoryRegistry） */

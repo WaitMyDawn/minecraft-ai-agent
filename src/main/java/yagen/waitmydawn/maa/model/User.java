@@ -6,6 +6,9 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "maa_user")
 public class User {
+    @Version
+    @Column(columnDefinition = "bigint default 0 not null")
+    private long revision;
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 

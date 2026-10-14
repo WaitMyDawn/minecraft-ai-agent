@@ -27,7 +27,6 @@ import java.util.zip.ZipOutputStream;
 
 @RestController
 @RequestMapping("/api/modpack")
-@CrossOrigin(origins = "*")
 public class ModpackController {
 
     private final DependencyEngine dependencyEngine;
@@ -69,6 +68,8 @@ public class ModpackController {
     }
 
     public static class ModpackRequest {
+        public yagen.waitmydawn.maa.model.AssemblySnapshot assembly;
+        public yagen.waitmydawn.maa.model.ImportedPack importedPack;
         public String name;
         public String mcVersion;
         public String loader;
@@ -87,6 +88,8 @@ public class ModpackController {
     }
 
     public static class BuildRequest {
+        /** 明确选择导出存在静态缺口的清单；诊断始终随归档保留。 */
+        public boolean allowIncomplete;
         public String name;
         public String mcVersion;
         public String loader;
@@ -94,7 +97,8 @@ public class ModpackController {
         public String manifestId;
         /** 勾选的节点 id（= projectId）；为空表示全选 */
         public List<String> selectedIds;
-        /** 兼容旧前端的直传路径（无 manifestId 时才使用） */
+        /** 旧客户端字段，保留反序列化兼容性；导出不采信其中的文件对象。 */
+        @Deprecated
         public List<JsonNode> selectedFiles;
     }
 
@@ -111,7 +115,6 @@ public class ModpackController {
         public String clientId;
     }
 
-    @PostMapping("/preview")
     public ResponseEntity<JsonNode> previewPack(
             @RequestHeader(value = "X-Auth-Token", required = false) String token,
             @RequestBody ModpackRequest request) {
@@ -135,6 +138,16 @@ public class ModpackController {
         // 手写为 null 时按空清单处理：新建的空图谱、以及只带 excludedSlugs 的调用方都会走到这里
         Set<String> initialSlugs = request.modSlugs == null
                 ? new LinkedHashSet<>() : new LinkedHashSet<>(request.modSlugs);
+        if (initialSlugs.size() > 500 || excludedSlugs.size() > 500
+                || initialSlugs.stream().anyMatch(s -> !ModrinthIdentifiers.isProjectReference(s))) {
+            return jsonBadRequest("模组清单超过限额或包含非法标识");
+        }
+        Map<String, JsonNode> importedFiles = new HashMap<>();
+        if (request.importedPack != null) {
+            try { request.importedPack.requireEnvironment(loader, mcVersion); }
+            catch (IllegalArgumentException invalid) { return jsonBadRequest(invalid.getMessage()); }
+        }
+        if (request.assembly != null && !request.assembly.matches(loader, mcVersion)) return jsonBadRequest("构建快照与环境不同，请先重新构建");
 
         ObjectNode responseJson = objectMapper.createObjectNode();
         ArrayNode nodesArray = responseJson.putArray("nodes");
@@ -153,14 +166,37 @@ public class ModpackController {
         // 用带诊断的那份解析结果（与 resolveFullDependencies 命中同一个缓存条目，不额外出网）：
         // 前端要靠 unresolved/dropped 告诉用户"这个 slug 在当前环境找不到"，而不是让它默默消失。
         ResolutionResult resolution = dependencyEngine.resolveCachedResult(
-                initialSlugs, loader, mcVersion, exclude);
+                request.importedPack != null ? request.importedPack.seeds(initialSlugs)
+                        : request.assembly != null ? request.assembly.seeds(initialSlugs) : initialSlugs, loader, mcVersion, exclude);
+        if (request.assembly != null) for (String slug : initialSlugs) {
+            String expected = request.assembly.versions().get(slug);
+            if (expected == null) continue;
+            var selected = resolution.graph().selectedVersions.get(slug);
+            if (selected == null || !expected.equals(selected.path("id").asText())) return jsonBadRequest("构建选版未保留：" + slug);
+        }
         Set<String> fullResolvedSlugs = new LinkedHashSet<>(resolution.graph().getOrderedSlugs());
+        if (request.importedPack != null) {
+            for (var file : request.importedPack.files()) {
+                if (!initialSlugs.contains(file.slug()) || excludedSlugs.contains(file.slug())) continue;
+                JsonNode version = resolution.graph().selectedVersions.get(file.slug());
+                if (version == null || !file.versionId().equals(version.path("id").asText())
+                        || !file.projectId().equals(version.path("project_id").asText()))
+                    return jsonBadRequest("导入精确版本未保留：" + file.slug() + "。请检查依赖冲突或重新取数，系统不会升级替代。");
+                JsonNode matched = null;
+                for (JsonNode metadata : version.path("files")) if (file.matches(metadata)) matched = metadata;
+                if (matched == null) return jsonBadRequest("导入文件信息与精确版本不一致：" + file.slug());
+                ObjectNode copy = (ObjectNode) matched.deepCopy();
+                if (!file.env().isEmpty()) copy.set("env", objectMapper.valueToTree(file.env()));
+                importedFiles.put(file.slug(), copy);
+            }
+        }
 
         // 🚀 批量预取：把整张图的项目元数据一次取回（100 个/请求），下面的逐节点循环随即变成缓存命中。
         // 依赖引擎 BFS 已经把大部分灌进缓存了，这里只补它没覆盖到的（例如用户手动加的孤立模组）。
         apiClient.prefetchProjects(new ArrayList<>(fullResolvedSlugs));
 
         Set<String> processedProjectIds = ConcurrentHashMap.newKeySet();
+        Map<String, JsonNode> previewVersions = new ConcurrentHashMap<>();
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             List<CompletableFuture<Void>> futures = new ArrayList<>();
@@ -177,9 +213,11 @@ public class ModpackController {
                         String projectId = projectInfo.path("id").asText();
                         if (!processedProjectIds.add(projectId)) return;
 
-                        JsonNode latestVersion = apiClient.getLatestVersion(projectId, mcVersion, loadersParam);
+                        JsonNode latestVersion = resolution.graph().selectedVersions.get(slug);
+                        if (latestVersion == null) latestVersion = apiClient.getLatestVersion(projectId, mcVersion, loadersParam);
                         if (latestVersion == null || !latestVersion.has("version_number") || !latestVersion.has("files"))
                             return;
+                        previewVersions.put(slug, latestVersion);
 
                         ObjectNode node = objectMapper.createObjectNode();
                         node.put("id", projectId).put("slug", slug)
@@ -190,7 +228,7 @@ public class ModpackController {
                                 // 两者语义不同：同一个展示号在不同 loader 下会有多个版本 id）
                                 .put("versionId", latestVersion.path("id").asText())
                                 .put("versionNumber", latestVersion.path("version_number").asText())
-                                .set("fileInfo", pickPrimaryFile(latestVersion.path("files")));
+                                .set("fileInfo", importedFiles.containsKey(slug) ? importedFiles.get(slug) : pickPrimaryFile(latestVersion.path("files")));
                         synchronized (nodesArray) {
                             nodesArray.add(node);
                         }
@@ -232,6 +270,22 @@ public class ModpackController {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         }
 
+        Map<String, String> nodeIdBySlug = new HashMap<>();
+        for (JsonNode node : nodesArray) nodeIdBySlug.put(node.path("slug").asText(), node.path("id").asText());
+        edgesArray.removeAll();
+        for (String dependent : new TreeSet<>(resolution.graph().allSlugs)) {
+            for (String dependency : new TreeSet<>(resolution.graph().getDependenciesOf(dependent))) {
+                if (nodeIdBySlug.containsKey(dependent) && nodeIdBySlug.containsKey(dependency)) {
+                    ObjectNode edge = edgesArray.addObject();
+                    edge.put("from", nodeIdBySlug.get(dependency)).put("to", nodeIdBySlug.get(dependent));
+                    for (KnowledgeRule rule : activeRules) {
+                        if ("DEPENDS_ON".equals(rule.relationType) && rule.modA.equals(dependent) && rule.modB.equals(dependency)) {
+                            edge.put("dashes", true).put("sourceType", rule.sourceType.name());
+                        }
+                    }
+                }
+            }
+        }
         // 🗑️ 应用用户在图谱里的显式删除，并回填断链诊断（P2）
         ArrayNode conflictsArray = responseJson.putArray("conflicts");
         int conflictCount = applyExcludedSlugs(nodesArray, edgesArray, conflictsArray, excludedSlugs);
@@ -273,8 +327,35 @@ public class ModpackController {
             nodeIds.add(n.path("id").asText());
             nodeFiles.add(n.path("fileInfo"));
         }
+        var auditGraph = new yagen.waitmydawn.maa.model.DependencyGraph();
+        auditGraph.allSlugs.addAll(resolution.graph().allSlugs);
+        auditGraph.selectedVersions.putAll(previewVersions);
+        resolution.graph().depsOf.forEach((dependent, dependencies) -> dependencies.forEach(dependency -> auditGraph.addEdge(dependent, dependency)));
+        Map<String, String> slugById = new HashMap<>();
+        nodeIdBySlug.forEach((slug, id) -> slugById.put(id, slug));
+        var closure = yagen.waitmydawn.maa.model.DependencyClosure.capture(auditGraph, resolution.unresolved(), slugById);
+        Set<String> previewSlugs = new HashSet<>();
+        for (JsonNode node : nodesArray) previewSlugs.add(node.path("slug").asText());
+        var declaredRoots = request.assembly == null ? initialSlugs : request.assembly.rootsIn(initialSlugs);
+        var previewRoots = new TreeSet<String>();
+        declaredRoots.forEach(root -> { String slug = slugById.getOrDefault(root, root); if (previewSlugs.contains(slug)) previewRoots.add(slug); });
+        var pins = new TreeMap<String, String>();
+        var origins = new TreeMap<String, Set<String>>();
+        for (String slug : previewSlugs) {
+            pins.put(slug, previewVersions.get(slug).path("id").asText());
+            Set<String> roles = request.assembly == null ? Set.of() : request.assembly.origins().getOrDefault(slug, Set.of());
+            if (roles.isEmpty()) roles = !previewRoots.contains(slug) ? Set.of("DEPENDENCY")
+                    : request.assembly != null ? Set.of("EXPLICIT_ADD") : Set.of("RETAINED");
+            origins.put(slug, roles);
+        }
+        responseJson.set("assembly", objectMapper.valueToTree(new yagen.waitmydawn.maa.model.AssemblySnapshot(loader, mcVersion,
+                List.copyOf(previewRoots), pins, origins, request.importedPack == null && request.assembly != null && request.assembly.rootsKnown())));
+        responseJson.set("closure", objectMapper.valueToTree(closure.inspect(previewSlugs)));
+        responseJson.set("buildReport", objectMapper.valueToTree(yagen.waitmydawn.maa.service.BuildPresentation.create(
+                apiClient, auditGraph, resolution, closure.inspect(previewSlugs), previewSlugs, Map.of())));
         String manifestId = manifestService.register(nodeIds, nodeFiles,
-                loader, mcVersion);
+                loader, mcVersion, userController.validateToken(token), slugById, closure,
+                request.importedPack == null ? Map.of() : request.importedPack.dependencies());
         responseJson.put("manifestId", manifestId);
         responseJson.put("manifestSize", manifestService.sizeOf(manifestId));
         return ResponseEntity.ok(responseJson);
@@ -416,21 +497,38 @@ public class ModpackController {
     }
 
     @PostMapping("/build")
-    public ResponseEntity<byte[]> buildPack(@RequestBody BuildRequest request) {
+    public ResponseEntity<byte[]> buildPack(@RequestBody BuildRequest request,
+            @RequestHeader(value = "X-Auth-Token", required = false) String token) {
         try {
-            // P6-C：优先按服务端快照取件；快照不存在/过期时才回退到前端直传（兼容旧前端）
+            if (request.selectedIds == null || request.selectedIds.isEmpty() || request.selectedIds.size() > 500
+                    || (request.name != null && (request.name.length() > 128 || request.name.chars().anyMatch(Character::isISOControl)))) {
+                return textBadRequest("请选择 1 至 500 个模组，并使用有效包名");
+            }
+            // 只从账号所属的服务端快照取件，过期时必须重新预览。
             List<JsonNode> files;
+            yagen.waitmydawn.maa.model.DependencyClosure.Report closure;
+            Map<String, String> importedDependencies;
             if (request.manifestId != null && !request.manifestId.isBlank()) {
-                files = manifestService.filesFor(request.manifestId, request.selectedIds);
-                if (files == null) {
+                var selection = manifestService.selectionFor(request.manifestId, request.selectedIds, request.loader, request.mcVersion,
+                        userController.validateToken(token));
+                if (selection == null) {
                     System.err.println("buildPack: 清单快照已过期或不存在 -> " + request.manifestId);
                     return textBadRequest("清单快照已过期或不存在，请重新打开构筑台再打包。");
+                }
+                files = selection.files();
+                closure = selection.closure();
+                importedDependencies = selection.dependencies();
+                if (closure.status() != yagen.waitmydawn.maa.model.DependencyClosure.Status.COMPLETE && !request.allowIncomplete) {
+                    var diagnostic = objectMapper.createObjectNode().put("error", "当前选择的依赖清单不完整或尚未核实")
+                            .put("canExportIncomplete", true);
+                    diagnostic.set("closure", objectMapper.valueToTree(closure));
+                    return ResponseEntity.status(409).contentType(MediaType.APPLICATION_JSON)
+                            .body(objectMapper.writeValueAsBytes(diagnostic));
                 }
                 System.out.println("📦 buildPack 使用服务端快照 " + request.manifestId
                         + "，取件 " + files.size() + " 个");
             } else {
-                files = request.selectedFiles == null ? List.of() : request.selectedFiles;
-                System.out.println("📦 buildPack 使用前端直传文件（兼容路径），共 " + files.size() + " 个");
+                return textBadRequest("缺少清单快照，请重新预览后打包");
             }
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             ZipOutputStream zos = new ZipOutputStream(baos);
@@ -446,9 +544,13 @@ public class ModpackController {
             ObjectNode dependencies = indexJson.putObject("dependencies");
             dependencies.put("minecraft", request.mcVersion);
             try {
+                if (!importedDependencies.isEmpty()) {
+                    importedDependencies.forEach(dependencies::put);
+                } else {
                 dependencies.put(
                         loaderVersionService.dependencyKey(request.loader),
                         loaderVersionService.resolve(request.loader, request.mcVersion));
+                }
             } catch (IllegalArgumentException e) {
                 System.err.println("buildPack: " + e.getMessage());
                 // 以前是空体 400，前端只能显示"打包失败（HTTP 400），请重试"——用户完全不知道
@@ -457,8 +559,22 @@ public class ModpackController {
             }
 
             ArrayNode filesArray = indexJson.putArray("files");
+            Set<String> exportedNames = new HashSet<>();
 
             for (JsonNode fileInfo : files) {
+                String filename = fileInfo.path("filename").asText("");
+                java.net.URI download = java.net.URI.create(fileInfo.path("url").asText(""));
+                if (filename.isBlank() || filename.length() > 255 || filename.contains("..")
+                        || filename.contains("/") || filename.contains("\\") || filename.contains(":")
+                        || !"https".equalsIgnoreCase(download.getScheme()) || download.getHost() == null
+                        || download.getUserInfo() != null
+                        || !"cdn.modrinth.com".equalsIgnoreCase(download.getHost())
+                        || !exportedNames.add(filename.toLowerCase(Locale.ROOT))
+                        || !fileInfo.path("hashes").path("sha1").asText().matches("[a-fA-F0-9]{40}")
+                        || !fileInfo.path("hashes").path("sha512").asText().matches("[a-fA-F0-9]{128}")
+                        || fileInfo.path("size").asLong(-1) < 0) {
+                    return textBadRequest("清单包含无效文件信息，请重新预览");
+                }
                 ObjectNode fileNode = objectMapper.createObjectNode();
                 fileNode.put("path", "mods/" + fileInfo.path("filename").asText());
                 fileNode.put("fileSize", fileInfo.path("size").asLong());
@@ -467,6 +583,7 @@ public class ModpackController {
                 hashesNode.put("sha512", fileInfo.path("hashes").path("sha512").asText());
                 ArrayNode downloadsArray = fileNode.putArray("downloads");
                 downloadsArray.add(fileInfo.path("url").asText());
+                if (fileInfo.has("env")) fileNode.set("env", fileInfo.path("env").deepCopy());
                 filesArray.add(fileNode);
             }
 
@@ -474,6 +591,13 @@ public class ModpackController {
             ZipEntry entry = new ZipEntry("modrinth.index.json");
             zos.putNextEntry(entry);
             zos.write(finalJsonString.getBytes(StandardCharsets.UTF_8));
+            zos.closeEntry();
+            ObjectNode diagnostics = objectMapper.createObjectNode().put("schemaVersion", 1)
+                    .put("scope", "selected-metadata-and-dependency-rules").put("runtimeChecked", false)
+                    .put("loader", request.loader).put("mcVersion", request.mcVersion);
+            diagnostics.set("closure", objectMapper.valueToTree(closure));
+            zos.putNextEntry(new ZipEntry("maa-diagnostics.json"));
+            zos.write(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(diagnostics));
             zos.closeEntry();
             zos.close();
 
@@ -483,13 +607,14 @@ public class ModpackController {
             headers.add(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"MAA-Modpack.mrpack\"; filename*=UTF-8''" + encodedPackName + ".mrpack");
 
             return ResponseEntity.ok().headers(headers).body(baos.toByteArray());
+        } catch (IllegalArgumentException e) {
+            return textBadRequest(e.getMessage());
         } catch (Exception e) {
             return ResponseEntity.internalServerError().build();
         }
     }
 
     // 🔥 智能衍生过滤引擎 (Python 爬虫建池算法 Java 版)
-    @PostMapping("/suggest")
     public ResponseEntity<Map<String, Object>> suggestMods(
             @RequestHeader(value = "X-Auth-Token", required = false) String token,
             @RequestBody SuggestionRequest req) {
@@ -640,7 +765,6 @@ public class ModpackController {
     }
 
     /** 解析上传的 .mrpack 文件, 返回其中的 slug 列表 */
-    @PostMapping("/parse-mrpack")
     public ResponseEntity<Map<String, Object>> parseMrpack(@RequestParam("file") MultipartFile file) {
         try {
             Set<String> slugs = mrpackParser.extractProjectSlugs(file);
