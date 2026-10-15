@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -21,6 +22,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 这里盯两件事：**文案能不能照着做**、**该不该重试**。
  */
 class LlmErrorNoteTest {
+    @org.junit.jupiter.api.Test void localCallDeadlineAndCapacityDoNotTriggerRepeatedUpstreamCalls() {
+        for (var failure : java.util.List.of(new yagen.waitmydawn.maa.service.ModelCallLimiter.DeadlineExceeded(),
+                new yagen.waitmydawn.maa.service.ModelCallLimiter.CapacityExceeded())) {
+            assertFalse(ChatController.llmRetriable(failure));
+            assertNotNull(ChatController.llmErrorNote(failure));
+        }
+    }
 
     @Test
     @DisplayName("401：提示去设置页更新 Key，且不重试（重试也不会变好）")

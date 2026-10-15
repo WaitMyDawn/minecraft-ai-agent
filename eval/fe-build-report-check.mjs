@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {readBuildReport, readReplacementChoices, readRequirementReport, requirementStatus, issueReason, modProjectLink} from '../src/main/resources/static/js/utils/build-report.js';
+import {readBuildReport, readReplacementChoices, readRequirementReport, requirementStatus, requirementNote, requirementTone, issueReason, modProjectLink} from '../src/main/resources/static/js/utils/build-report.js';
 import {renderMarkdownSafe, cleanChatReply} from '../src/main/resources/static/js/utils/format.js';
 
 assert.equal(cleanChatReply('构建完成<mods>a,b</mods><trace>{}</trace><constraints>{}</constraints><build_report>{}</build_report>'), '构建完成<build_report>{}</build_report>');
@@ -30,7 +30,11 @@ const coverageText = '<requirement_report>' + JSON.stringify({schemaVersion: 1, 
         {id: 'r-1111111111111111', source: '包名', status: 'CONTEXT', mods: [], missing: [], note: ''}]}) + '</requirement_report>';
 assert.equal(readRequirementReport(coverageText).requirements.length, 1);
 assert.equal(readRequirementReport(coverageText).requirements[0].mods[0].purpose, '提供工厂自动化');
-assert.equal(requirementStatus('PARTIAL'), '部分覆盖');
+assert.equal(requirementStatus('PARTIAL'), '部分目标待核实');
+assert.equal(requirementStatus({status:'UNVERIFIED',evidenceState:{code:'VERSION_PENDING'}}), '版本待核实');
+assert.equal(requirementStatus({status:'PARTIAL',evidenceState:{code:'PROJECT_MISSING'}}), '点名项目未入包');
+assert.equal(requirementTone({status:'UNVERIFIED'}), 'bg-slate-100 text-slate-600');
+assert.equal(requirementNote({note:'用途尚未取得可核对的审核证据；检索命中和类别数量不能证明满足'}), '本项目标的用途仍待核实。');
 assert.doesNotMatch(renderMarkdownSafe(coverageText), /requirement_report|factory automation/);
 assert.equal(readRequirementReport('<requirement_report>{"schemaVersion":2}</requirement_report>'), null);
 const childCoverage = JSON.parse(coverageText.match(/<requirement_report>(.*?)<\/requirement_report>/s)[1]);
@@ -43,6 +47,13 @@ const readChildren = readRequirementReport('<requirement_report>' + JSON.stringi
 assert.equal(readChildren.criteria.length, 2);
 assert.equal(readChildren.criteria[1].status, 'UNVERIFIED');
 assert.equal(readRequirementReport(coverageText).requirements[0].criteria.length, 0);
+childCoverage.requirements[0].evidenceState = {code: 'VERSION_PENDING', projects: ['core', 'javascript:bad'], countsComplete: false};
+const pendingCoverage = readRequirementReport('<requirement_report>' + JSON.stringify(childCoverage) + '</requirement_report>');
+assert.deepEqual(pendingCoverage.requirements[0].evidenceState.projects, ['core']);
+assert.equal(pendingCoverage.requirements[0].evidenceState.countsComplete, false);
+assert.equal(requirementStatus(pendingCoverage.requirements[0]), '版本待核实');
+childCoverage.requirements[0].evidenceState.code = 'UNKNOWN';
+assert.equal(readRequirementReport('<requirement_report>' + JSON.stringify(childCoverage) + '</requirement_report>').requirements[0].evidenceState, null);
 
 // 运行生产预览收口，验证关系错误不会删除仍在最终图中的核心。
 const snapshot = await readFile(new URL('../src/main/resources/static/js/features/pack-snapshot.js', import.meta.url), 'utf8');

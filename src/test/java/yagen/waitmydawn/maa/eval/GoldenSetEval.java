@@ -93,6 +93,9 @@ class GoldenSetEval {
             String layer = c.path("layer").asText();
             if (!onlyThis(layer) || (!ONLY.isEmpty() && !ONLY.contains(id))) continue;
             runs.add(runCase(c));
+            writeArtifacts(runs, 0, 0, 0, 0, 0, false);
+            CaseRun completed = runs.getLast();
+            System.out.println("EVAL " + id + " " + (completed.failures.isEmpty() ? "PASS" : "FAIL") + " ms=" + completed.elapsedMs);
         }
         if (runs.isEmpty()) {
             throw new IllegalStateException("没有匹配的用例，检查 -Deval.layer / -Deval.cases 参数");
@@ -639,6 +642,10 @@ class GoldenSetEval {
 
     private void writeArtifacts(List<CaseRun> runs, double rate, double advRate,
                                 long avgMs, long p50, long p95) throws Exception {
+        writeArtifacts(runs, rate, advRate, avgMs, p50, p95, true);
+    }
+    private void writeArtifacts(List<CaseRun> runs, double rate, double advRate,
+                                long avgMs, long p50, long p95, boolean complete) throws Exception {
         Path dir = Paths.get("target/eval");
         Files.createDirectories(dir);
         String ts = Instant.now().toString().replace(':', '-');
@@ -649,6 +656,10 @@ class GoldenSetEval {
         out.put("repeat", REPEAT);
         out.put("timestamp", ts);
         out.put("metricsVersion", 3);
+        out.put("complete", complete);
+        out.put("completedCases", runs.size());
+        out.put("selectedCases", java.util.stream.StreamSupport.stream(dataset.path("cases").spliterator(), false)
+                .filter(c -> onlyThis(c.path("layer").asText()) && (ONLY.isEmpty() || ONLY.contains(c.path("id").asText()))).count());
         out.put("setVersion", dataset.path("version").asText());
         out.put("setPath", SET_PATH.toString());
         out.put("setSha256", java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(SET_PATH))));
@@ -656,11 +667,13 @@ class GoldenSetEval {
         out.put("attempts", runs.stream().mapToInt(r -> r.repeat).sum());
         out.put("passedAttempts", runs.stream().mapToInt(r -> r.passedRuns).sum());
         out.put("traceAttempts", runs.stream().flatMap(r -> r.attempts.stream()).filter(r -> r.traceFound).count());
-        out.put("passRate", rate);
-        out.put("adversarialRate", advRate);
-        out.put("avgMs", avgMs);
-        out.put("p50Ms", p50);
-        out.put("p95Ms", p95);
+        if (complete) {
+            out.put("passRate", rate);
+            out.put("adversarialRate", advRate);
+            out.put("avgMs", avgMs);
+            out.put("p50Ms", p50);
+            out.put("p95Ms", p95);
+        }
         ObjectNode coverage = out.putObject("capabilityCoverage");
         Set<String> capabilities = new java.util.TreeSet<>();
         runs.forEach(r -> capabilities.addAll(r.capabilities));
@@ -736,8 +749,13 @@ class GoldenSetEval {
             ArrayNode s = o.putArray("signals");
             r.signals.forEach(s::add);
         }
-        Path file = dir.resolve(LABEL + "-" + ts + ".json");
-        Files.writeString(file, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(out));
+        Path file = dir.resolve(LABEL + (complete ? "-" + ts : "-checkpoint") + ".json");
+        Path temporary = dir.resolve(LABEL + "-writing.tmp");
+        Files.writeString(temporary, mapper.writerWithDefaultPrettyPrinter().writeValueAsString(out));
+        try { Files.move(temporary, file, java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING); }
+        catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(temporary, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING); }
+        if (!complete) return;
+        Files.deleteIfExists(dir.resolve(LABEL + "-checkpoint.json"));
 
         Path csv = dir.resolve("summary-v3.csv");
         long sumIn = runs.stream().mapToLong(r -> r.inTokens).sum();

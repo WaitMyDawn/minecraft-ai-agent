@@ -59,9 +59,18 @@ public final class AgentSchemas {
         var contribution = object(RequirementReview.Contribution.class, "slug", project(),
                 "quote", text(4, 280), "purpose", text(1, 300));
         var criterion = object(CriterionReview.class, "source", text(1, 4000),
-                "evidence", array(contribution, 0, 6, false), "gap", text(0, 500));
+                "evidence", array(contribution, 0, CriterionReview.MAX_EVIDENCE, false), "gap", text(0, 500));
         var requirement = object(RequirementReview.class, "id", text(18, 18).put("pattern", "^r-[a-f0-9]{16}$"),
-                "evidence", array(contribution, 0, 12, false), "gap", text(0, 500), "criteria", array(criterion, 0, 16, false));
+                "evidence", array(contribution, 0, RequirementReview.MAX_EVIDENCE, false), "gap", text(0, 500), "criteria", array(criterion, 0, 16, false));
+        var hasChildren = MAPPER.createObjectNode();
+        hasChildren.putArray("required").add("criteria");
+        hasChildren.putObject("properties").putObject("criteria").put("minItems", 1);
+        var parentOnly = MAPPER.createObjectNode();
+        var parentFields = parentOnly.putObject("properties");
+        parentFields.putObject("evidence").put("maxItems", 0);
+        parentFields.putObject("gap").put("maxLength", 0);
+        var flattened = requirement.putArray("allOf").addObject();
+        flattened.set("if", hasChildren); flattened.set("then", parentOnly);
         ObjectNode rejection = object(ReviewDecision.Rejection.class,
                 "slug", project(), "reason", enumeration(ReviewDecision.Reason.class),
                 "explanation", text(1, ContractRules.MAX_REASON));

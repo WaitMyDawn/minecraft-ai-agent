@@ -20,10 +20,13 @@ public class AiAgentService {
     private String activeProfiles = "";
     /** 原始模型响应与调用成本；进入业务流程前必须通过对应的契约校验。 */
     public record AgentCallResult(String text, long elapsedMs, int modelCalls,
-                                  int inputTokens, int outputTokens) {
+                                  int inputTokens, int outputTokens, int truncatedCalls) {
+        public AgentCallResult(String text, long elapsedMs, int modelCalls, int inputTokens, int outputTokens) {
+            this(text, elapsedMs, modelCalls, inputTokens, outputTokens, 0);
+        }
         public AgentCallResult followedBy(AgentCallResult next) {
             return new AgentCallResult(next.text, elapsedMs + next.elapsedMs, modelCalls + next.modelCalls,
-                    inputTokens + next.inputTokens, outputTokens + next.outputTokens);
+                    inputTokens + next.inputTokens, outputTokens + next.outputTokens, truncatedCalls + next.truncatedCalls);
         }
     }
 
@@ -33,12 +36,17 @@ public class AiAgentService {
     private String modelName = "deepseek-chat";
     @Value("${ai.max-tokens:8192}")
     private int maxTokens = 8192;
+    @Value("${ai.critic-max-tokens:${AI_CRITIC_MAX_TOKENS:32768}}")
+    private int criticMaxTokens = 32768;
+    @Value("${ai.call-budget-ms:300000}")
+    private long callBudgetMs = 300000;
+    private final ModelCallLimiter modelCalls = new ModelCallLimiter(8);
 
-    private ChatModel createModel(String userApiKey, TokenUsageCollector usage) {
+    private ChatModel createModel(String userApiKey, TokenUsageCollector usage, int outputLimit) {
         // DeepSeek Chat Completions 支持 JSON object 模式；Schema 与跨字段约束由 Java 校验。
         // 重试由控制器统一管理，避免 SDK 与业务层重试叠加。
         return OpenAiChatModel.builder().baseUrl(apiUrl).apiKey(userApiKey).modelName(modelName)
-                .timeout(Duration.ofMinutes(5)).maxRetries(0).maxTokens(maxTokens)
+                .timeout(Duration.ofMinutes(5)).maxRetries(0).maxTokens(outputLimit)
                 .temperature(0.2).responseFormat("json_object").listeners(usage).build();
     }
 
@@ -85,6 +93,7 @@ public class AiAgentService {
             CAPABILITY 子目标各自提供英文搜索计划；ADDONS/PACK_INTEGRATIONS 保留真实扩展核心；不要将“有优化模组”解释为 UI、修复也已覆盖。
             同样适用于自动化与物流、职业与战斗、农业与装饰等任意组合；这些例子不是固定目标清单。
             纯玩法目标用 CAPABILITY 表达，并在 searches 给出最多3类逐项英文检索计划（category/weight/keywords）。
+            同一个 searchIntents 或 searches 数组内 category 不能重复；同类的不同关键词合并到一项。父项和不同子目标各自可以使用相同类别。
             同一原文片段同时包含点名项目、玩法和附属时，不拆分或遗漏原文：附属类型优先 ADDONS，明确包内联动优先 PACK_INTEGRATIONS，仍同时保留 projects/capabilities/searches；不能因含玩法而选择 CAPABILITY 覆盖附属语义。
             capabilities 是可选的已知用途提示，不是允许构建的玩法白名单。科技、自动化、仓储、物流、战斗、职业、烹饪、装饰等任意目标均须保留原文并提供对应 searches；不能强行归为 UTILITY 或 GENERAL 后忽略。
             每项 requirements.preferences 及 criteria.preferences 单独记录选择偏好：popularity=DEFAULT/POPULAR/LESS_POPULAR，freshness=DEFAULT/RECENT；无明确偏好两者 DEFAULT。
@@ -96,6 +105,10 @@ public class AiAgentService {
             kind 使用 PROJECTS/CAPABILITY/ADDONS/PACK_INTEGRATIONS/CHANGE/GENERAL；projects 使用规范项目引用。
             addonCores 仅记录该原文片段要扩展附属的核心，并同步到 expandAddons；不要把其它点名项目也当作附属核心。
             capabilities 覆盖 TERRAIN/BIOMES/STRUCTURES/CREATURE_ECOLOGY/NETHER/END/PERFORMANCE/MODERN_UI/FIXES/UTILITY。
+            该字段只能使用这些枚举值；其它玩法使用原文及 searches 表达，capabilities 可为空，不创造 WORLDGEN、WORLD_GENERATION 等新枚举。
+            capabilities 仅属于父 requirements。criteria 子目标只含 source/kind/projects/addonCores/searches/preferences，没有 capabilities 字段；Java 从子目标原文与父项提示派生用途。
+            不从项目 slug 内的 biome/nether/performance 等词增加独立用途要求；只有原文真正要求相关玩法时才填写对应能力。
+            用户明确“不额外推荐”或“只添加点名模组”时，不以数量目标扩大 mustHave/add，不自动规划额外核心或附属；只有原文明确要求的附属可以扩张。必需前置仍由 Java 补入。
             群系、结构和地形按原文分别规划；没有地形要求时不强制添加 TERRAIN，不用一个 worldgen 类别代替用途。
             仅下界/末地的结构或群系要求保留维度范围，不引入未请求的主世界内容。
             必须保留每个点名项目；包含列表不能遗漏 Alex 生物或海灵物语。未识别的名字保留原文并 CLARIFY，不猜 slug。
@@ -143,16 +156,22 @@ public class AiAgentService {
             每个玩法子目标通常列1个最直接的项目依据；一个项目可以支持多个目标，但须分别有对应描述依据。不存在对应依据的目标明确留空并填写 gap，不因父项已有其它证据而跳过。
             没有规划子目标的历史要求保持父项 evidence/gap、criteria=[]。Java 定向补缺复核时只评审给定子目标；原有项目只能作为事实依据，不能批准或否决候选池外项目。
             送审池已经由 Java 筛过目标环境兼容版本；项目说明未重复版本字段不等于未经筛选。数量、最终依赖及安装启动由后续 Java/MAA-Checker 核查，不写成内容 gap。
+            【Java审核范围】中的 compatibleCandidates 已取得 environment 的兼容版本依据；retainedProjects 是已有项目，可以引用其用途事实，不需要再次 approved。这不是启动或最终版本协调承诺。
+            rejected 只说明某候选不选，不等于该用户目标仍缺内容；其它候选已覆盖目标时，不把“部分候选被拒绝”“没有更多候选”写成 gap。
             优化用途以项目说明中的具体机制或改善对象为依据，不以名字、optimization分类或“性能很好”代替用途。
             客户端优化不能证明服务端优化，侧别未核实则保留不确定性；优先互补用途，但不能把用途线索宣称为实测收益。
             gap 只记录原文明确要求但当前组合缺少的内容或缺少用途依据；不要把尚未实测的启动、生态平衡、性能收益或接口互通作为自动缺口。只可在用户明确要求某项跨模组互联能力而无依据时报告该能力缺口，不能擅自新增统一检索、自动合成终端等要求。
+            例如用户只要求内存优化，有已选项目说明减少内存占用即可给对应 evidence、gap=""；只要求漏洞修复且有项目声明修复漏洞，不自行增加必须覆盖特定崩溃或复制漏洞的要求。
             纯 PROJECTS 要求的项目都在已有清单时 gap=""，无需因为候选池没有它们而声明缺口；名称、数量、环境上下文使用 evidence=[]、gap=""。
             evidence 每项含 slug、quote、purpose：slug 只能来自候选或已有清单；quote 必须逐字摘录【项目用途事实】中至少4字的标题/描述，purpose 简述该项目如何支持原文要求。
             检索词、类别、热度和模型常识不能替代 quote；无法判断时 evidence=[] 并在 gap 写明缺口或不确定性。
             每项通常只列1至3个最能说明用途的项目，quote 尽量不超过80字，purpose/gap 简短；不要复述整个候选池。
+            每个 evidence 数组均须遵守 JSON Schema 的 maxItems，不能把全部 approved 复制到单个子目标；修正响应时检查所有子目标的证据数量。
             一个项目只支持部分要求时明确 gap；不得因为有几个相关项目就宣称丰富程度、组合体验或启动能力已验证。
             明确拒绝的项目不能出现在 evidence；未批准但允许补位的候选可以作为有依据的补缺建议，Java 最终决定是否入包。
             不输出 Markdown、XML 或 JSON 外的文字。
+            审核 criteria 子目标只有 source/evidence/gap；不含 id/kind/projects/searches/preferences，也不嵌套 criteria。不要把父项审核对象或规划对象复制到子目标。
+            source/evidence/gap 三个字段每条都必须出现，即使 evidence=[]、gap=""。每个规划 source 恰好一条，不得拆分、重复或新增 source 来容纳更多证据。
             """;
 
     /** 规划阶段不执行写工具；重试只能重新生成计划，校验成功后由 Java 应用一次。 */
@@ -161,32 +180,52 @@ public class AiAgentService {
     }
 
     public AgentCallResult criticPools(String context, String userApiKey) {
-        return call(CRITIC + "\nJSON Schema:\n" + AgentSchemas.reviewDecision(), context, userApiKey);
+        return call(CRITIC + COMPACT_REVIEW + "\nJSON Schema:\n" + AgentSchemas.reviewDecision(), context, userApiKey, criticOutputLimit());
     }
 
     public AgentCallResult criticPools(String context, String userApiKey, Set<String> candidates, int approvalLimit) {
         var schema = AgentSchemas.reviewDecision();
         schema.withObject("properties").withObject("approved").put("maxItems", approvalLimit);
-        var permitted = schema.withObject("properties").withObject("approved").withObject("items").putArray("enum");
-        candidates.forEach(permitted::add);
-        return call(CRITIC + "\n本轮 approved 硬上限=" + approvalLimit
+        if (candidates.isEmpty()) {
+            // 纯事实复核没有新增或否决操作；空 enum 不是合法的 JSON Schema。
+            schema.withObject("properties").withObject("approved").put("maxItems", 0);
+            schema.withObject("properties").withObject("rejected").put("maxItems", 0);
+        } else {
+            var permitted = schema.withObject("properties").withObject("approved").withObject("items").putArray("enum");
+            candidates.forEach(permitted::add);
+        }
+        return call(CRITIC + COMPACT_REVIEW + "\n本轮 approved 硬上限=" + approvalLimit
                 + "。不能将全部适合的候选都写入 approved，必须从中选出限额以内的最佳组合。"
                 + "未选择不等于拒绝，不需要逐个写 rejected；rejected 仅写明确不应补入的项。"
                 + "同一个 slug 不能重复，也不能同时出现在 approved 和 rejected。"
-                + "\nJSON Schema:\n" + schema, context, userApiKey);
+                + "\nJSON Schema:\n" + schema, context, userApiKey, criticOutputLimit());
     }
 
+    private static final String COMPACT_REVIEW = "\n输出紧凑JSON。每个子目标优先选1～2条最有代表性的引用，不需要列出所有已批准项目。"
+            + "quote用能证明用途的最短连续原文，建议不超过160字；purpose和否决explanation建议不超过40字，gap不超过60字。"
+            + "不得截短或改写source，不得丢失规划子目标；有criteria的父项仍须evidence=[]、gap=空字符串。";
+
+    private int criticOutputLimit() { return Math.max(512, Math.min(32768, criticMaxTokens)); }
+
     private AgentCallResult call(String instructions, String input, String key) {
+        return call(instructions, input, key, maxTokens);
+    }
+
+    private AgentCallResult call(String instructions, String input, String key, int outputLimit) {
         long started = System.nanoTime();
         boolean capture = captureAgentIo && java.util.Arrays.asList(activeProfiles.split(",")).contains("eval")
                 && !java.util.Arrays.asList(activeProfiles.split(",")).contains("prod")
                 && !java.util.Arrays.asList(activeProfiles.split(",")).contains("production");
         if (capture) yagen.waitmydawn.maa.logging.MaaLog.user("[Agent input]\nSYSTEM:\n" + redact(instructions) + "\nUSER:\n" + redact(input));
         TokenUsageCollector usage = new TokenUsageCollector();
-        var response = createModel(key, usage).chat(List.of(SystemMessage.from(instructions), UserMessage.from(input)));
+        var response = modelCalls.call(() -> createModel(key, usage, outputLimit).chat(
+                List.of(SystemMessage.from(instructions), UserMessage.from(input))), callBudgetMs);
         if (capture) yagen.waitmydawn.maa.logging.MaaLog.user("[Agent output]\n" + redact(response.aiMessage().text()));
+        int truncated = response.finishReason() == dev.langchain4j.model.output.FinishReason.LENGTH ? 1 : 0;
+        yagen.waitmydawn.maa.logging.MaaLog.user("模型完成摘要：finishReason=" + response.finishReason()
+                + "，输出token=" + usage.outputTokens() + "，输出上限=" + outputLimit);
         return new AgentCallResult(response.aiMessage().text(), (System.nanoTime() - started) / 1_000_000,
-                usage.modelCalls(), usage.inputTokens(), usage.outputTokens());
+                usage.modelCalls(), usage.inputTokens(), usage.outputTokens(), truncated);
     }
     static String redact(String text) {
         return text.replaceAll("sk-[A-Za-z0-9_-]{8,}", "[REDACTED_KEY]")

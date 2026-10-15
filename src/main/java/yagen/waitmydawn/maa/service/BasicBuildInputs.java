@@ -6,7 +6,7 @@ import java.util.regex.Pattern;
 /** 新建缺省参数需确认；当前前端环境只提供建议，不证明用户已确认默认值。 */
 public final class BasicBuildInputs {
     private BasicBuildInputs() {}
-    private static final Pattern COUNT = Pattern.compile("(?:[0-9一二三四五六七八九十百两]+\\s*(?:个|款)?\\s*(?:模组|mods?\\b|文件)|(?:模组|mods?\\b|文件)(?:数量|数)?\\s*[:：=为]?\\s*[0-9一二三四五六七八九十百两]+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern COUNT = Pattern.compile("(?:[0-9一二三四五六七八九十百两]+\\s*(?:个|款)?\\s*(?:根|内容|新增)?\\s*(?:模组|mods?\\b|文件)|(?:模组|mods?\\b|文件)(?:数量|数)?\\s*(?:(?:严格|大概|大约|总共|约|共|exactly|about|around)\\s*)?[:：=为]?\\s*[0-9一二三四五六七八九十百两]+)", Pattern.CASE_INSENSITIVE);
     private static final Pattern LOADER = Pattern.compile("neoforge|(?<!neo)forge|fabric|新锻造|织物", Pattern.CASE_INSENSITIVE);
     private static final Pattern VERSION = Pattern.compile("(?<![\\d.])\\d{1,2}\\.\\d{1,2}(?:\\.\\d{1,2})?(?![\\d.])");
 

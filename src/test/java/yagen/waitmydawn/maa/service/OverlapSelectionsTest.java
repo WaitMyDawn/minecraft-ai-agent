@@ -35,11 +35,14 @@ class OverlapSelectionsTest {
                 + new AgentContractCodec().write(BuildConstraints.empty()) + "</constraints>";
     }
     private String prepare(OverlapSelections selections, boolean core) {
+        return prepare(selections, core, draft(core));
+    }
+    private String prepare(OverlapSelections selections, boolean core, String reply) {
         when(api.getProjectsBatch(anyCollection())).thenReturn(Map.of(
                 "animals-a", json.readTree("{\"title\":\"Wildlife A\",\"description\":\"Adds real-world animals\",\"downloads\":100,\"categories\":[\"mobs\"]}"),
                 "animals-b", json.readTree("{\"title\":\"Wildlife B\",\"description\":\"Adds real-world animals\",\"downloads\":10,\"categories\":[\"mobs\"]}"),
                 "library", json.readTree("{\"categories\":[\"library\"]}"), "other", json.readTree("{\"categories\":[\"utility\"]}")));
-        String result = selections.prepare(1L, 2L, payload, draft(core), assembly(core), closure(), api);
+        String result = selections.prepare(1L, 2L, payload, reply, assembly(core), closure(), api);
         assertFalse(result.contains("<mods>"));
         var match = java.util.regex.Pattern.compile("<replacement_options>(.*?)</replacement_options>", java.util.regex.Pattern.DOTALL).matcher(result);
         assertTrue(match.find()); return json.readTree(match.group(1)).path("ticket").asText();
@@ -71,6 +74,57 @@ class OverlapSelectionsTest {
         assertFalse(repeated.contains("replacement_options"));
         assertTrue(repeated.contains("<mods>"));
     }
+    @Test void selectingOneOfTwoSupportingProjectsRetainsRemainingPurposeEvidence() {
+        String reply = draft(false).replace("\"modCount\":1", "\"modCount\":2")
+                .replace("\"mods\":[{\"slug\":\"animals-b\"", "\"mods\":[{\"slug\":\"animals-a\",\"purpose\":\"生态\",\"quote\":\"Adds real-world animals\"},{\"slug\":\"animals-b\"");
+        var selections = new OverlapSelections(); String ticket = prepare(selections, false, reply);
+        String result = selections.admit(ticket, 1L, 2L, choices("animals-a"), OverlapSelections.Confirmed::complete);
+        var match = java.util.regex.Pattern.compile("<requirement_report>(.*?)</requirement_report>", java.util.regex.Pattern.DOTALL).matcher(result);
+        assertTrue(match.find()); var row = json.readTree(match.group(1)).path("requirements").get(0);
+        assertEquals("SUPPORTING_EVIDENCE", row.path("status").asText());
+        assertEquals("VERIFIED", row.path("evidenceState").path("code").asText());
+        assertEquals("animals-a", row.path("mods").get(0).path("slug").asText());
+        assertEquals(1, row.path("modCount").asInt());
+    }
+    @Test void truncatedEvidenceCannotBecomeAnExactRecountAfterSelection() {
+        String reply = draft(false).replace("\"modCount\":1", "\"modCount\":30");
+        var selections = new OverlapSelections(); String ticket = prepare(selections, false, reply);
+        String result = selections.admit(ticket, 1L, 2L, choices("animals-a"), OverlapSelections.Confirmed::complete);
+        var match = java.util.regex.Pattern.compile("<requirement_report>(.*?)</requirement_report>", java.util.regex.Pattern.DOTALL).matcher(result);
+        assertTrue(match.find()); var row = json.readTree(match.group(1)).path("requirements").get(0);
+        assertFalse(row.path("evidenceState").path("countsComplete").asBoolean(true));
+        assertEquals("DISPLAY_TRUNCATED", row.path("evidenceState").path("code").asText());
+        assertEquals(0, row.path("missingCount").asInt());
+    }
+    @Test void changedIntegrationPartnerDoesNotTurnRetainedIdentityOrPurposeIntoMissingProject() {
+        for (String type : List.of("PROJECT_IDENTITY", "REVIEW_QUOTE", "VERSION_RELATION")) {
+            var report = json.readTree("""
+                    {"mods":[{"slug":"retained-addon","purpose":"作用","quote":"Adds content","evidenceType":"%s"}],
+                    "modCount":1,"missing":[],"missingCount":0,"status":"SUPPORTING_EVIDENCE","criteria":[],"note":""}
+                    """.formatted(type));
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(OverlapSelections.class, "adjustCoverage", report,
+                    Set.of("removed-partner"), Set.of("removed-partner", "retained-addon"));
+            assertEquals(0, report.path("missingCount").asInt(), type);
+            if (type.equals("VERSION_RELATION")) {
+                assertEquals("RELATION_PENDING", report.path("evidenceState").path("code").asText());
+                assertEquals("UNVERIFIED", report.path("status").asText());
+            } else {
+                assertEquals(1, report.path("mods").size(), type);
+                assertEquals("SUPPORTING_EVIDENCE", report.path("status").asText(), type);
+            }
+        }
+    }
+    @Test void actualRemovalOfNamedProjectIsDistinctFromLossOfPurposeEvidence() {
+        var report = json.readTree("""
+                {"mods":[{"slug":"named","purpose":"点名","quote":"","evidenceType":"PROJECT_IDENTITY"}],
+                "modCount":1,"missing":[],"missingCount":0,"status":"VERIFIED_PROJECTS","criteria":[],"note":""}
+                """);
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(OverlapSelections.class, "adjustCoverage", report,
+                Set.of("named"), Set.of("named"));
+        assertEquals("PROJECT_MISSING", report.path("evidenceState").path("code").asText());
+        assertEquals("named", report.path("missing").get(0).asText());
+        assertEquals(1, report.path("missingCount").asInt());
+    }
     @Test void queueRejectionPreservesTicketAndProtectedCoreCannotBeUnchecked() {
         var selections = new OverlapSelections(); String ticket = prepare(selections, true);
         assertThrows(IllegalArgumentException.class, () -> selections.admit(ticket, 1L, 2L, choices("animals-b"), OverlapSelections.Confirmed::complete));
@@ -91,6 +145,51 @@ class OverlapSelectionsTest {
         var nanos = new java.util.concurrent.atomic.AtomicLong(); var selections = new OverlapSelections(nanos::get);
         String ticket = prepare(selections, false); nanos.set(TimeUnit.MINUTES.toNanos(16));
         assertThrows(IllegalArgumentException.class, () -> selections.admit(ticket, 1L, 2L, choices("animals-a"), OverlapSelections.Confirmed::complete));
+    }
+    @Test void concurrentDuplicateConfirmationEnqueuesAtMostOnce() throws Exception {
+        var selections = new OverlapSelections(); String ticket = prepare(selections, false);
+        var start = new CountDownLatch(1); var submitted = new java.util.concurrent.atomic.AtomicInteger();
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            Callable<Boolean> confirm = () -> {
+                start.await();
+                try {
+                    selections.admit(ticket, 1L, 2L, choices("animals-a"), value -> { submitted.incrementAndGet(); return value.complete(); });
+                    return true;
+                } catch (IllegalArgumentException consumed) { return false; }
+            };
+            var first = executor.submit(confirm); var second = executor.submit(confirm); start.countDown();
+            assertNotEquals(first.get(2, TimeUnit.SECONDS), second.get(2, TimeUnit.SECONDS));
+            assertEquals(1, submitted.get());
+        } finally { start.countDown(); executor.shutdownNow(); }
+    }
+    @Test void cancellingQueuedConfirmationDoesNotAcknowledgeOrPublishDraft() throws Exception {
+        var selections = new OverlapSelections(); String ticket = prepare(selections, false);
+        var started = new CountDownLatch(1); var release = new CountDownLatch(1);
+        var tasks = new DelegationTasks(true, 5000, 1, 8);
+        try {
+            var blocker = tasks.submit(null, 2L, "owner-two", null, () -> { started.countDown(); release.await(); return "done"; });
+            assertTrue(started.await(2, TimeUnit.SECONDS));
+            var queued = selections.admit(ticket, 1L, 2L, choices("animals-a", "animals-b"),
+                    value -> tasks.submit(null, 1L, "owner-one", null, value::complete));
+            assertEquals(1, tasks.queuePosition(queued)); tasks.cancel(queued);
+            release.countDown(); assertEquals("done", blocker.result().get(2, TimeUnit.SECONDS));
+            assertTrue(queued.result().isCancelled());
+            assertTrue(selections.prepare(1L, 2L, payload, draft(false), assembly(false), closure(), api).contains("replacement_options"));
+        } finally { release.countDown(); tasks.close(); }
+    }
+    @Test void expiredTicketNeverCallsSubmissionAndAnotherAccountRemainsUsable() {
+        var nanos = new java.util.concurrent.atomic.AtomicLong(); var selections = new OverlapSelections(nanos::get);
+        String ticket = prepare(selections, false); nanos.set(TimeUnit.MINUTES.toNanos(15));
+        var submitted = new java.util.concurrent.atomic.AtomicInteger();
+        assertThrows(IllegalArgumentException.class, () -> selections.admit(ticket, 1L, 2L, choices("animals-a"),
+                value -> { submitted.incrementAndGet(); return value.complete(); }));
+        assertEquals(0, submitted.get());
+        String reply = selections.prepare(2L, 3L, payload, draft(false), assembly(false), closure(), api);
+        var match = java.util.regex.Pattern.compile("<replacement_options>(.*?)</replacement_options>", java.util.regex.Pattern.DOTALL).matcher(reply);
+        assertTrue(match.find());
+        assertTrue(selections.admit(json.readTree(match.group(1)).path("ticket").asText(), 2L, 3L,
+                choices("animals-a"), OverlapSelections.Confirmed::complete).contains("<mods>"));
     }
     @Test void pendingSelectionReleasesSingleWorkerForOtherAccounts() throws Exception {
         var selections = new OverlapSelections();

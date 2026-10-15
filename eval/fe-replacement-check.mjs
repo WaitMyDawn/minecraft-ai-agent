@@ -112,3 +112,61 @@ await sendMessage();
 assert.equal(readClarificationTicket(globalThis.chatHistory.value.at(-1).content), 'fixture-ticket');
 assert.equal(globalThis.isLoading.value, false);
 console.log('基础确认检查通过：历史票据解析、续建提交、无效协议忽略、队列拒绝保留上下文及思考状态收口。');
+
+const waitFor = async predicate => {
+    for (let i = 0; i < 100; i++) {
+        if (predicate()) return;
+        await new Promise(resolve => setTimeout(resolve, 1));
+    }
+    assert.fail('未进入预期确认状态');
+};
+const resetWorkspace = () => {
+    globalThis.packData = {modSlugs: ['original'], mcVersion: '1.21.1', loader: 'neoforge'};
+    globalThis.chatHistory.value = [];
+    globalThis.userInput.value = '增加生态内容';
+};
+resetWorkspace();
+const submissions = [];
+globalThis.apiFetch = async (url, opts) => {
+    const body = JSON.parse(opts.body); submissions.push(body);
+    if (!body.replacementTicket) return new Response('<replacement_options>' + JSON.stringify(overlap) + '</replacement_options>');
+    if (submissions.length === 2) throw Object.assign(new Error('队列繁忙'), {status: 429});
+    return new Response('已按选择完成<mods>core,c</mods>');
+};
+let building = sendMessage();
+await waitFor(() => replacementPrompt.value);
+await new Promise(resolve => setTimeout(resolve, 15));
+assert.equal(submissions.length, 1, '等待确认不自动提交默认选择');
+assert.deepEqual(globalThis.packData.modSlugs, ['original']);
+syncReplacementSelection('a', false);
+confirmReplacement();
+await waitFor(() => replacementPrompt.value?.error.includes('服务繁忙'));
+assert.deepEqual(replacementPrompt.value.groups[0].choice.slugs, ['core']);
+assert.deepEqual(replacementPrompt.value.groups[1].choice.slugs, ['c']);
+assert.deepEqual(globalThis.packData.modSlugs, ['original'], '排队拒绝不发布草案');
+confirmReplacement(); confirmReplacement();
+await building;
+assert.equal(submissions.length, 3, '重复点击不重复提交确认');
+assert.deepEqual(globalThis.packData.modSlugs, ['core', 'c']);
+
+for (const expired of [false, true]) {
+    resetWorkspace();
+    const calls = [];
+    globalThis.apiFetch = async (url, opts) => {
+        calls.push(url);
+        if (url.endsWith('/cancel')) return new Response('{}');
+        const body = JSON.parse(opts.body);
+        if (body.replacementTicket) throw Object.assign(new Error('组合确认已过期'), {status: 400});
+        return new Response('<replacement_options>' + JSON.stringify(overlap) + '</replacement_options>');
+    };
+    building = sendMessage();
+    await waitFor(() => replacementPrompt.value);
+    if (expired) confirmReplacement(); else cancelReplacement();
+    await building;
+    assert.deepEqual(globalThis.packData.modSlugs, ['original'], '取消或过期不发布草案');
+    assert.equal(replacementPrompt.value, null);
+    assert.equal(globalThis.isLoading.value, false);
+    assert.equal(calls.length, 2);
+    assert.equal(calls.at(-1).endsWith('/cancel'), !expired);
+}
+console.log('确认续建检查通过：等待不提交、429保留选择、重复点击、取消和过期均不误发布草案。');

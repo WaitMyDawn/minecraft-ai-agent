@@ -12,6 +12,30 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AgentContractTest {
+    @Test void repeatedSearchCategoriesHaveIndexedRepairGuidanceAtEveryPlanningLevel() {
+        var search = new BuildIntent.SearchIntent("optimization", 100, List.of("memory"));
+        var child = new RequirementCriterion("优化内存", BuildRequirement.Kind.CAPABILITY, List.of(), List.of(), List.of(search));
+        var requirement = new BuildRequirement("r-0000000000000001", "优化内存", BuildRequirement.Kind.CAPABILITY,
+                List.of(), List.of(BuildRequirement.Capability.PERFORMANCE), List.of(), List.of(search), SelectionPreferences.DEFAULT, List.of(child));
+        var root = buildJson();
+        var row = (ObjectNode) mapper.valueToTree(requirement);
+        root.withArray("requirements").add(row);
+        row.withArray("searches").add(mapper.valueToTree(new BuildIntent.SearchIntent("optimization", 50, List.of("private-search-marker"))));
+        var criterion = (ObjectNode) row.withArray("criteria").get(0);
+        criterion.withArray("searches").add(mapper.valueToTree(search));
+        var error = assertThrows(AgentContractCodec.ValidationException.class, () -> codec.readBuildIntent(root.toString()));
+        assertEquals("/requirements/0/searches/1/category", error.failure().pointer());
+        assertTrue(error.failure().guidance().contains("category 只能出现一次"));
+        assertFalse(error.getMessage().contains("private-search-marker"));
+        row.withArray("searches").remove(1);
+        error = assertThrows(AgentContractCodec.ValidationException.class, () -> codec.readBuildIntent(root.toString()));
+        assertEquals("/requirements/0/criteria/0/searches/1/category", error.failure().pointer());
+        criterion.withArray("searches").remove(1);
+        assertDoesNotThrow(() -> codec.readBuildIntent(root.toString()));
+        root.withArray("searchIntents").add(root.withArray("searchIntents").get(0).deepCopy());
+        error = assertThrows(AgentContractCodec.ValidationException.class, () -> codec.readBuildIntent(root.toString()));
+        assertEquals("/searchIntents/2/category", error.failure().pointer());
+    }
     @Test void semanticFieldSurvivesBuildIntentParsingAndNoRawCauseEscapes() {
         var invalid = buildJson();
         invalid.withArray("exclude").add("irons-spells-n-spellbooks");

@@ -37,8 +37,7 @@ public final class OptimizationPortfolio {
             if (infrastructure || !(goal.side() == Side.BOTH || side == Side.BOTH || side == goal.side())) return Set.of();
             return roles.keySet().stream().filter(goal.desired()::contains)
                     .filter(role -> goal.side() != Side.SERVER || !CLIENT_ROLES.contains(role))
-                    .filter(role -> goal.side() != Side.SERVER || !CLIENT_ONLY.matcher(roles.get(role)).find())
-                    .filter(role -> goal.side() != Side.CLIENT || !SERVER_ONLY.matcher(roles.get(role)).find())
+                    .filter(role -> permitsSide(roles.get(role), goal.side()))
                     .collect(java.util.stream.Collectors.toSet());
         }
     }
@@ -56,6 +55,18 @@ public final class OptimizationPortfolio {
     private static final Pattern BENEFIT = p("optimi[sz]\\w*|improv\\w*|reduc\\w*|lower\\w*|faster|speed\\w* up|fix\\w*.{0,20}(?:memory leak|allocation)|优化|提高|提升|减少|降低|加快|修复.{0,6}内存泄漏");
     private static final Set<Role> CLIENT_ROLES = Set.of(Role.RENDERER, Role.ENTITY_CULLING, Role.BLOCK_CULLING, Role.LEAF_CULLING, Role.RENDER_SUPPORT);
     private static final Pattern CLIENT_ONLY = p("client.only|only on (?:the )?client|仅.{0,6}客户端"), SERVER_ONLY = p("server.only|only on (?:the )?server|仅.{0,6}服务端");
+    private static final Pattern CLIENT_SCOPE = p("\\bclient\\b|客户端"), SERVER_SCOPE = p("\\bserver\\b|服务端|服务器");
+    private static final Pattern REQUESTED_CLIENT_SCOPE = p("\\bclient\\b|客户端|\\bfps\\b|帧率"), REQUESTED_SERVER_SCOPE = p("\\bserver\\b|服务端|服务器|\\btps\\b");
+    private static Side purposeSide(String text) {
+        if (CLIENT_ONLY.matcher(text).find()) return Side.CLIENT;
+        if (SERVER_ONLY.matcher(text).find()) return Side.SERVER;
+        boolean client = CLIENT_SCOPE.matcher(text).find(), server = SERVER_SCOPE.matcher(text).find();
+        return client && server ? Side.BOTH : client ? Side.CLIENT : server ? Side.SERVER : Side.UNKNOWN;
+    }
+    private static boolean permitsSide(String text, Side target) {
+        Side declared = purposeSide(text);
+        return target != Side.SERVER && target != Side.CLIENT || declared == Side.UNKNOWN || declared == Side.BOTH || declared == target;
+    }
     private static final Pattern CULLING = p("\\bcull\\w*\\b|\\bocclusion\\b|path[- ]tracing|skip\\w*.{0,12}render|不渲染|裁剪");
     private static final Pattern CHUNK_IMPROVEMENT = p("(?:chunks?|worldgen|world generation).{0,55}(?:performance|optimi[sz]|faster|stutter|overhead|speed|latency)|(?:optimi[sz]\\w*|reduc\\w*|improv\\w*|faster).{0,35}(?:chunk (?:generation|loading|rendering)|worldgen (?:performance|speed)|world generation (?:performance|speed))|(?:优化|降低|减少).{0,15}(?:区块|世界生成)");
     private static final Pattern GAMEPLAY_RATE = p("brews?|brewing|smelt\\w*|cooking|crafting|酿造|烹饪|冶炼");
@@ -90,7 +101,10 @@ public final class OptimizationPortfolio {
                 if (match.find() && (mechanism || benefit && !culling)) {
                     // 引用保持原文连续片段，超长句仅保留匹配附近，避免单项历史放大。
                     int start = Math.max(0, match.start() - 35), end = Math.min(sentence.length(), start + 160);
-                    result.putIfAbsent(rule.getKey(), sentence.substring(start, end).trim());
+                    String quote = sentence.substring(start, end).trim();
+                    // 截断不能丢失句中的侧别限定，否则双侧可安装项目会被误算为双侧用途。
+                    if (purposeSide(sentence) != purposeSide(quote)) continue;
+                    result.putIfAbsent(rule.getKey(), quote);
                 }
             }
         }
@@ -119,6 +133,21 @@ public final class OptimizationPortfolio {
         return Side.UNKNOWN;
     }
     public static Optional<Goal> goal(BuildRequirement requirement) {
+        return goal(requirement, Side.UNKNOWN);
+    }
+    private static Side requestedSide(String source) {
+        boolean server = REQUESTED_SERVER_SCOPE.matcher(source).find();
+        boolean client = REQUESTED_CLIENT_SCOPE.matcher(source).find();
+        return server && client ? Side.BOTH : server ? Side.SERVER : client ? Side.CLIENT : Side.UNKNOWN;
+    }
+    private static Side inheritedSide(BuildRequirement parent) {
+        String context = parent.source();
+        // 点名或解除子句不声明其余正向优化目标的侧别。
+        for (var criterion : parent.criteria()) if (criterion.kind() == BuildRequirement.Kind.PROJECTS || criterion.kind() == BuildRequirement.Kind.CHANGE)
+            context = context.replace(criterion.source(), "");
+        return requestedSide(context);
+    }
+    private static Optional<Goal> goal(BuildRequirement requirement, Side inheritedSide) {
         if (!Set.of(BuildRequirement.Kind.CAPABILITY, BuildRequirement.Kind.GENERAL).contains(requirement.kind())) return Optional.empty();
         String source = requirement.source();
         boolean explicit = p("性能|优化模组|优化mod|帧率|\\bfps\\b|\\btps\\b|performance|optimi[sz]ation|(?:改善|优化|提高|降低|减少).{0,10}(?:渲染|内存|区块|游戏逻辑|网络|启动)").matcher(source).find();
@@ -126,9 +155,9 @@ public final class OptimizationPortfolio {
         if (!explicit && !performanceSearch && !requirement.capabilities().contains(BuildRequirement.Capability.PERFORMANCE)) return Optional.empty();
         if (!requirement.capabilities().isEmpty() && !requirement.capabilities().contains(BuildRequirement.Capability.PERFORMANCE)) return Optional.empty();
         if (p("不需要优化|不要优化|无需优化|不需要性能|no optimization").matcher(source).find()) return Optional.empty();
-        boolean server = p("服务端|服务器|server|\\btps\\b").matcher(source).find();
-        boolean client = p("客户端|client|\\bfps\\b|帧率").matcher(source).find();
-        Side side = server && !client ? Side.SERVER : client && !server ? Side.CLIENT : Side.BOTH;
+        Side side = requestedSide(source);
+        // 并列子目标沿用同一父要求的单侧限定；双侧或未声明的上下文不推断单侧。
+        if (side == Side.UNKNOWN) side = inheritedSide == Side.CLIENT || inheritedSide == Side.SERVER ? inheritedSide : Side.BOTH;
         var focused = EnumSet.noneOf(Role.class);
         if (p("内存|memory|\\bram\\b").matcher(source).find()) focused.add(Role.MEMORY);
         if (p("游戏逻辑|寻路|tick|\\btps\\b").matcher(source).find()) focused.add(Role.TICK);
@@ -149,8 +178,9 @@ public final class OptimizationPortfolio {
     public static List<Goal> goals(BuildIntent intent, Set<String> freshIds, boolean freshOnly) {
         if (intent == null || intent.mode() == BuildIntent.Mode.EMPTY) return List.of();
         return intent.requirements().stream().filter(r -> !freshOnly || intent.mode() != BuildIntent.Mode.EDIT || freshIds.contains(r.id()))
-                .flatMap(r -> r.criteria().isEmpty() ? java.util.stream.Stream.of(r) : r.criteria().stream().map(c -> c.target(r)))
-                .map(OptimizationPortfolio::goal).flatMap(Optional::stream).flatMap(g -> expand(g).stream()).toList();
+                .flatMap(r -> r.criteria().isEmpty() ? goal(r).stream()
+                        : r.criteria().stream().flatMap(c -> goal(c.target(r), inheritedSide(r)).stream()))
+                .flatMap(g -> expand(g).stream()).toList();
     }
     private static List<Goal> expand(Goal goal) {
         if (goal.side() != Side.BOTH || !p("客户端|client|\\bfps\\b|帧率").matcher(goal.source()).find()
@@ -245,7 +275,7 @@ public final class OptimizationPortfolio {
             var evidence = filter(review.evidence(), parentGoal, facts);
             var criteria = review.criteria().stream().map(c -> {
                 var planned = parent.criteria().stream().filter(t -> t.source().equals(c.source())).findFirst();
-                var target = planned.flatMap(t -> goal(t.target(parent)));
+                var target = planned.flatMap(t -> goal(t.target(parent), inheritedSide(parent)));
                 var filtered = filter(c.evidence(), target, facts);
                 return new CriterionReview(c.source(), filtered, reviewedGap(c.gap(), target, filtered, facts));
             }).toList();
@@ -266,7 +296,8 @@ public final class OptimizationPortfolio {
             var fact = facts.get(e.slug());
             if (fact == null || !fact.supports(goal.get())) return false;
             var quoted = new Fact(e.slug(), fact.side(), classify(e.quote()), fact.infrastructure());
-            return quoted.supports(goal.get()) || goal.get().broad() && BENEFIT.matcher(e.quote()).find()
+            return quoted.supports(goal.get()) || goal.get().broad() && quoted.roles().isEmpty()
+                    && !NEGATIVE.matcher(e.quote()).find() && permitsSide(e.quote(), goal.get().side()) && BENEFIT.matcher(e.quote()).find()
                     && p("performance|optimi[sz]ation|性能|优化").matcher(e.quote()).find();
         }).toList();
     }

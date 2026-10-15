@@ -4,6 +4,7 @@ import java.util.List;
 
 /** 审核用途关联；原文摘录须由 Java 对照项目元数据，不能以模型解释替代证据。 */
 public record RequirementReview(String id, List<Contribution> evidence, String gap, List<CriterionReview> criteria) {
+    public static final int MAX_EVIDENCE = 12;
     public RequirementReview(String id, List<Contribution> evidence, String gap) { this(id, evidence, gap, List.of()); }
     public record Contribution(String slug, String quote, String purpose) {
         public Contribution {
@@ -14,7 +15,7 @@ public record RequirementReview(String id, List<Contribution> evidence, String g
     }
     public RequirementReview {
         ContractRules.require(id != null && id.matches("r-[a-f0-9]{16}"), "requirements.id");
-        evidence = ContractRules.list(evidence, "requirements.evidence", 12);
+        evidence = ContractRules.list(evidence, "requirements.evidence", MAX_EVIDENCE);
         ContractRules.projects(evidence.stream().map(Contribution::slug).toList(), "requirements.evidence");
         gap = ContractRules.text(gap, "requirements.gap", 0, 500);
         criteria = ContractRules.list(criteria, "requirements.criteria", 16);

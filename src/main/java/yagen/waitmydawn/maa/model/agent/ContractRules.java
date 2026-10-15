@@ -21,7 +21,10 @@ final class ContractRules {
     static final class Violation extends IllegalArgumentException {
         final String field;
         Violation(String field) {
-            super("Agent 协议字段无效: " + field);
+            this(field, "");
+        }
+        Violation(String field, String guidance) {
+            super("Agent 协议字段无效: " + field + (guidance.isEmpty() ? "" : "；" + guidance));
             this.field = field;
         }
     }

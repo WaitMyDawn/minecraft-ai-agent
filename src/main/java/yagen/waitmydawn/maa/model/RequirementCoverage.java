@@ -6,24 +6,78 @@ import java.util.*;
 /** 最终覆盖以选版和留存项目为准；元数据用途关联不证明丰富程度或游戏运行效果。 */
 public final class RequirementCoverage {
     private RequirementCoverage() {}
-    public record Item(String slug, String purpose, String quote) {}
+    public record Item(String slug, String purpose, String quote, String evidenceType) {
+        public Item(String slug, String purpose, String quote) { this(slug, purpose, quote, "REVIEW_QUOTE"); }
+    }
+    public record EvidenceState(String code, List<String> projects, boolean countsComplete) {
+        public EvidenceState(String code, List<String> projects) { this(code, projects, true); }
+        public EvidenceState { projects = List.copyOf(projects.stream().distinct().limit(24).toList()); }
+    }
     public record CriterionRow(String id, String source, String status, List<Item> mods, int modCount,
-                               List<String> missing, int missingCount, String note) {}
+                               List<String> missing, int missingCount, String note, EvidenceState evidenceState) {}
     public record Row(String id, String source, String status, List<Item> mods, int modCount,
-                      List<String> missing, int missingCount, String note, List<CriterionRow> criteria) {}
+                      List<String> missing, int missingCount, String note, List<CriterionRow> criteria, EvidenceState evidenceState) {}
     public record Report(int schemaVersion, List<Row> requirements, String repairStatus, List<String> repaired) {}
+    public record VerificationCounts(int provided, int accepted, int vetoed, int missingFacts, int quoteMismatch,
+                                     int unknownRequirement, int unknownCriterion) {}
+    public record EvidenceCheck(int provided, int accepted, String reason) {}
+    public record Verification(List<RequirementReview> reviews, VerificationCounts counts, Map<String, EvidenceCheck> checks) {}
 
     public static List<RequirementReview> verified(List<BuildRequirement> requirements, List<RequirementReview> reviews,
                                                   Map<String, String> facts, Set<String> vetoes) {
-        var byId = new HashMap<String, BuildRequirement>(); requirements.forEach(r -> byId.put(r.id(), r));
-        return reviews.stream().filter(r -> byId.containsKey(r.id())).map(r -> new RequirementReview(r.id(),
-                quoted(r.evidence(), facts, vetoes), r.gap(), r.criteria().stream()
-                        .filter(c -> byId.get(r.id()).criteria().stream().anyMatch(planned -> planned.source().equals(c.source())))
-                        .map(c -> new CriterionReview(c.source(), quoted(c.evidence(), facts, vetoes), c.gap())).toList())).toList();
+        return verify(requirements, reviews, facts, vetoes).reviews();
     }
-    private static List<RequirementReview.Contribution> quoted(List<RequirementReview.Contribution> evidence, Map<String, String> facts, Set<String> vetoes) {
-        return evidence.stream().filter(e -> !vetoes.contains(e.slug()))
-                .filter(e -> facts.containsKey(e.slug()) && facts.get(e.slug()).contains(e.quote())).toList();
+
+    public static Verification verify(List<BuildRequirement> requirements, List<RequirementReview> reviews,
+                                      Map<String, String> facts, Set<String> vetoes) {
+        var byId = new HashMap<String, BuildRequirement>(); requirements.forEach(r -> byId.put(r.id(), r));
+        int[] count = new int[7];
+        var checks = new LinkedHashMap<String, EvidenceCheck>();
+        var accepted = new ArrayList<RequirementReview>();
+        for (var review : reviews) {
+            if (!byId.containsKey(review.id())) {
+                int size = review.evidence().size() + review.criteria().stream().mapToInt(c -> c.evidence().size()).sum();
+                count[0] += size; count[5] += size; continue;
+            }
+            var criteria = new ArrayList<CriterionReview>();
+            for (var child : review.criteria()) {
+                if (byId.get(review.id()).criteria().stream().noneMatch(c -> c.source().equals(child.source()))) {
+                    count[0] += child.evidence().size(); count[6] += child.evidence().size(); continue;
+                }
+                String key = byId.get(review.id()).criteria().stream().filter(c -> c.source().equals(child.source()))
+                        .findFirst().orElseThrow().key(review.id());
+                criteria.add(new CriterionReview(child.source(), checked(key, child.evidence(), facts, vetoes, count, checks), child.gap()));
+            }
+            accepted.add(new RequirementReview(review.id(), checked(review.id(), review.evidence(), facts, vetoes, count, checks), review.gap(), criteria));
+        }
+        return new Verification(List.copyOf(accepted), new VerificationCounts(count[0], count[1], count[2], count[3], count[4], count[5], count[6]), Map.copyOf(checks));
+    }
+    private static List<RequirementReview.Contribution> checked(String key, List<RequirementReview.Contribution> evidence,
+            Map<String, String> facts, Set<String> vetoes, int[] total, Map<String, EvidenceCheck> checks) {
+        int[] count = new int[7];
+        var accepted = quoted(evidence, facts, vetoes, count);
+        for (int i = 0; i < count.length; i++) total[i] += count[i];
+        String reason = !accepted.isEmpty() ? "VERIFIED" : evidence.isEmpty() ? "NO_EVIDENCE"
+                : count[4] > 0 ? "QUOTE_MISMATCH" : count[3] > 0 ? "FACTS_UNAVAILABLE" : "VETOED";
+        checks.put(key, new EvidenceCheck(evidence.size(), accepted.size(), reason));
+        return accepted;
+    }
+
+    private static boolean quoteMatches(String fact, String quote) {
+        String normalizedQuote = quote.replaceAll("(?U)\\s+", " ").trim();
+        if (normalizedQuote.replace(" ", "").length() < 4) return false;
+        return fact.contains(quote) || fact.replaceAll("(?U)\\s+", " ").trim().contains(normalizedQuote);
+    }
+    private static List<RequirementReview.Contribution> quoted(List<RequirementReview.Contribution> evidence, Map<String, String> facts, Set<String> vetoes, int[] count) {
+        var accepted = new ArrayList<RequirementReview.Contribution>();
+        for (var item : evidence) {
+            count[0]++;
+            if (vetoes.contains(item.slug())) count[2]++;
+            else if (!facts.containsKey(item.slug())) count[3]++;
+            else if (!quoteMatches(facts.get(item.slug()), item.quote())) count[4]++;
+            else { count[1]++; accepted.add(item); }
+        }
+        return List.copyOf(accepted);
     }
     public static void validateReviews(List<BuildRequirement> requirements, List<RequirementReview> reviews) {
         var byId = new HashMap<String, RequirementReview>(); reviews.forEach(r -> byId.put(r.id(), r));
@@ -39,11 +93,18 @@ public final class RequirementCoverage {
     public static Report assess(List<BuildRequirement> requirements, List<RequirementReview> reviews,
                                 DependencyGraph graph, Set<String> selected, Map<String, String> identities,
                                 Map<String, PackAddonPolicy.Project> metadata, String repairStatus, List<String> repaired) {
-        return assess(requirements, reviews, graph, selected, identities, metadata, repairStatus, repaired, true);
+        return assess(requirements, reviews, graph, selected, identities, metadata, repairStatus, repaired, Map.of());
+    }
+    public static Report assess(List<BuildRequirement> requirements, List<RequirementReview> reviews,
+                                DependencyGraph graph, Set<String> selected, Map<String, String> identities,
+                                Map<String, PackAddonPolicy.Project> metadata, String repairStatus, List<String> repaired,
+                                Map<String, EvidenceCheck> checks) {
+        return assess(requirements, reviews, graph, selected, identities, metadata, repairStatus, repaired, checks, true);
     }
     private static Report assess(List<BuildRequirement> requirements, List<RequirementReview> reviews,
                                 DependencyGraph graph, Set<String> selected, Map<String, String> identities,
-                                Map<String, PackAddonPolicy.Project> metadata, String repairStatus, List<String> repaired, boolean truncate) {
+                                Map<String, PackAddonPolicy.Project> metadata, String repairStatus, List<String> repaired,
+                                Map<String, EvidenceCheck> checks, boolean truncate) {
         var byId = new HashMap<String, RequirementReview>();
         reviews.forEach(r -> byId.put(r.id(), r));
         var versionProjects = new HashMap<String, String>();
@@ -56,16 +117,20 @@ public final class RequirementCoverage {
             if (r.kind() == BuildRequirement.Kind.CHANGE) continue;
             var items = new LinkedHashMap<String, Item>();
             var missing = new ArrayList<String>();
+            var pendingVersions = new ArrayList<String>();
             for (String reference : r.projects()) {
                 String slug = identities.getOrDefault(reference, reference);
                 if (selected.contains(slug) && graph.selectedVersions.containsKey(slug))
-                    items.put(slug, new Item(slug, "点名项目，已选兼容版本", ""));
+                    items.put(slug, new Item(slug, "点名项目，已选兼容版本", "", "PROJECT_IDENTITY"));
+                else if (selected.contains(slug)) pendingVersions.add(slug);
                 else missing.add(slug);
             }
             var review = byId.get(r.id());
             if (review != null) for (var e : review.evidence()) {
                 if (selected.contains(e.slug()) && graph.selectedVersions.containsKey(e.slug()))
-                    items.put(e.slug(), new Item(e.slug(), e.purpose(), e.quote()));
+                    items.put(e.slug(), new Item(e.slug(), e.purpose(), e.quote(),
+                            items.containsKey(e.slug()) ? items.get(e.slug()).evidenceType() : "REVIEW_QUOTE"));
+                else if (selected.contains(e.slug())) pendingVersions.add(e.slug());
             }
             boolean addons = r.criteria().isEmpty() && (r.kind() == BuildRequirement.Kind.ADDONS || r.kind() == BuildRequirement.Kind.PACK_INTEGRATIONS);
             var missingCores = new ArrayList<String>();
@@ -83,39 +148,57 @@ public final class RequirementCoverage {
                     if (match) {
                         found = true;
                         items.put(slug, new Item(slug, "已选版本声明与 " + core + " 的"
-                                + (r.kind() == BuildRequirement.Kind.PACK_INTEGRATIONS ? "包内内容联动" : "附属关系"), ""));
+                                + (r.kind() == BuildRequirement.Kind.PACK_INTEGRATIONS ? "包内内容联动" : "附属关系"), "", "VERSION_RELATION"));
                     }
                 }
                 if (!found) missingCores.add(core);
             }
             String gap = review == null ? "" : review.gap();
             boolean gameplay = r.kind() != BuildRequirement.Kind.PROJECTS && (r.kind() == BuildRequirement.Kind.CAPABILITY || !r.capabilities().isEmpty()
-                    || !r.searches().isEmpty() || (r.kind() == BuildRequirement.Kind.GENERAL && review != null && !review.evidence().isEmpty()));
+                    || (!addons && !r.searches().isEmpty()) || (r.kind() == BuildRequirement.Kind.GENERAL && review != null && !review.evidence().isEmpty()));
             boolean semanticEvidence = review != null && review.evidence().stream()
                     .anyMatch(e -> selected.contains(e.slug()) && graph.selectedVersions.containsKey(e.slug()));
             String status;
             String note;
+            EvidenceState evidenceState = new EvidenceState("VERIFIED", List.of());
             if (!missing.isEmpty()) {
                 status = items.isEmpty() ? "NOT_RETAINED" : "PARTIAL";
                 note = "部分点名项目未在最终兼容清单中保留";
+                evidenceState = new EvidenceState("PROJECT_MISSING", missing);
+            } else if (!pendingVersions.isEmpty()) {
+                status = items.isEmpty() ? "UNVERIFIED" : "PARTIAL";
+                note = "项目已入清单，兼容版本仍待核实";
+                evidenceState = new EvidenceState("VERSION_PENDING", pendingVersions);
             } else if (!missingCores.isEmpty()) {
                 status = items.isEmpty() ? "UNVERIFIED" : "PARTIAL";
-                note = "尚无足够的最终版本关系证据：" + String.join("、", missingCores);
+                note = "附属或包内联动关系仍待核实";
+                evidenceState = new EvidenceState("RELATION_PENDING", missingCores);
             } else if (gameplay && !semanticEvidence) {
                 status = items.isEmpty() ? "UNVERIFIED" : "PARTIAL";
-                note = "用途尚未取得可核对的审核证据；检索命中和类别数量不能证明满足";
+                var check = checks.get(r.id());
+                String reason = review != null && !review.evidence().isEmpty() ? "NOT_SELECTED"
+                        : check != null && !check.reason().equals("VERIFIED") ? check.reason()
+                        : check != null ? "PURPOSE_PENDING" : review == null ? "NO_REVIEW" : "NO_EVIDENCE";
+                evidenceState = new EvidenceState(reason, List.of());
+                note = switch (reason) {
+                    case "NOT_SELECTED" -> "此前关联的候选未进入最终清单，当前用途待核实";
+                    case "QUOTE_MISMATCH" -> "审核引用未能与项目说明对应，用途待核实";
+                    case "FACTS_UNAVAILABLE" -> "项目资料暂不完整，用途待核实";
+                    case "VETOED" -> "此前关联的候选已被否决，当前用途待核实";
+                    default -> "本项目标的用途仍待核实";
+                };
             } else if (!gap.isBlank() && (gameplay || addons)) {
                 status = items.isEmpty() ? "UNVERIFIED" : "PARTIAL";
                 note = "审核尚待复核：" + gap;
+                evidenceState = new EvidenceState("REVIEW_GAP", List.of());
                 if (review.evidence().stream().anyMatch(e -> repaired.contains(e.slug())))
                     note += "；本轮已补入关联候选，此审核意见尚未重新裁决";
             } else if (gameplay || addons) {
                 status = "SUPPORTING_EVIDENCE";
-                note = "已有入包依据；丰富程度、组合体验及运行效果仍需实际评估"
-                        + (addons ? "，附属目录未作穷尽承诺" : "");
+                note = addons ? "已取得当前版本的附属或联动关系依据" : "已保留相关项目，并取得用途依据";
             } else if (!r.projects().isEmpty()) {
                 status = "VERIFIED_PROJECTS";
-                note = "点名项目已保留，不代表游戏启动检查通过";
+                note = "点名项目及兼容版本已保留";
             } else {
                 status = "CONTEXT";
                 note = "名称、环境、数量或主题上下文；以最终成果及数量检查为准";
@@ -129,22 +212,26 @@ public final class RequirementCoverage {
                     var evidence = scoped.get(c.source());
                     var childReviews = evidence == null ? List.<RequirementReview>of()
                             : List.of(new RequirementReview(target.id(), evidence.evidence(), evidence.gap()));
-                    var child = assess(List.of(target), childReviews, graph, selected, identities, metadata, repairStatus, repaired, false).requirements();
+                    var child = assess(List.of(target), childReviews, graph, selected, identities, metadata, repairStatus, repaired, checks, false).requirements();
                     if (child.isEmpty()) continue;
                     var row = child.getFirst();
                     row.mods().forEach(m -> items.put(m.slug(), m));
                     criteria.add(new CriterionRow(row.id(), row.source(), row.status(), row.mods().stream().limit(24).toList(), row.modCount(),
-                            row.missing().stream().limit(24).toList(), row.missingCount(), row.note()));
+                            row.missing().stream().limit(24).toList(), row.missingCount(), row.note(), row.evidenceState()));
                 }
                 if ((!missing.isEmpty() || !missingCores.isEmpty()) && !items.isEmpty()) status = "PARTIAL";
                 var lacking = criteria.stream().filter(c -> lacking(c.status())).toList();
-                if (missing.isEmpty() && missingCores.isEmpty()) {
+                if (missing.isEmpty() && missingCores.isEmpty() && pendingVersions.isEmpty()) {
                     if (!lacking.isEmpty()) {
                         status = items.isEmpty() ? "UNVERIFIED" : "PARTIAL";
-                        note = "尚缺独立子目标依据：" + String.join("、", lacking.stream().map(CriterionRow::source).toList());
+                        boolean contentMissing = lacking.stream().anyMatch(c -> c.evidenceState().code().equals("PROJECT_MISSING"));
+                        evidenceState = new EvidenceState(contentMissing ? "PROJECT_MISSING" : "PURPOSE_PENDING",
+                                lacking.stream().flatMap(c -> c.evidenceState().projects().stream()).toList());
+                        note = contentMissing ? "有点名项目未保留，请查看子项" : "还有 " + lacking.size() + " 项目标待核实，请查看子项";
                     } else if (criteria.stream().anyMatch(c -> c.status().equals("SUPPORTING_EVIDENCE"))) {
                         status = "SUPPORTING_EVIDENCE";
-                        note = "有效子目标分别有入包依据；不代表丰富程度或运行效果已验证";
+                        note = "各项目标已有对应依据";
+                        evidenceState = new EvidenceState("VERIFIED", List.of());
                     } else if (criteria.stream().anyMatch(c -> c.status().equals("VERIFIED_PROJECTS"))) {
                         status = "VERIFIED_PROJECTS";
                         note = "有效子目标的点名项目已分别保留";
@@ -152,7 +239,7 @@ public final class RequirementCoverage {
                 }
             }
             rows.add(new Row(r.id(), r.source(), status, items.values().stream().limit(truncate ? 24 : Long.MAX_VALUE).toList(), items.size(),
-                    missing.stream().limit(truncate ? 24 : Long.MAX_VALUE).toList(), missing.size(), note, List.copyOf(criteria)));
+                    missing.stream().limit(truncate ? 24 : Long.MAX_VALUE).toList(), missing.size(), note, List.copyOf(criteria), evidenceState));
         }
         return new Report(1, List.copyOf(rows), repairStatus, List.copyOf(repaired));
     }

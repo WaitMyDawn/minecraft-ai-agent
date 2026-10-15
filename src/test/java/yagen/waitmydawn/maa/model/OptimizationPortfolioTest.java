@@ -92,6 +92,51 @@ class OptimizationPortfolioTest {
         var valid = new RequirementReview(req.id(), List.of(new RequirementReview.Contribution("mem", "Reduces memory usage", "内存")), "");
         assertEquals(1, filterReviews(List.of(req), List.of(valid), facts).getFirst().evidence().size());
     }
+    @Test void broadReviewFallbackCannotUseNegatedOrOppositeSidePurpose() {
+        var req = requirement("增加服务器优化模组");
+        String description = "Reduces server memory usage. Client-only rendering performance optimization. "
+                + "Does not provide network performance optimization. Minecraft performance optimization.";
+        var facts = Map.of("multi", fact("multi", description, Side.BOTH));
+        for (String quote : List.of("Client-only rendering performance optimization", "Does not provide network performance optimization")) {
+            var review = new RequirementReview(req.id(), List.of(new RequirementReview.Contribution("multi", quote, "优化")), "");
+            assertTrue(filterReviews(List.of(req), List.of(review), facts).getFirst().evidence().isEmpty(), quote);
+        }
+        var valid = new RequirementReview(req.id(), List.of(new RequirementReview.Contribution("multi", "Minecraft performance optimization", "优化")), "");
+        assertEquals(1, filterReviews(List.of(req), List.of(valid), facts).getFirst().evidence().size());
+    }
+    @Test void installabilityOnBothSidesDoesNotChangeDeclaredPurposeSide() {
+        var server = goal(requirement("降低服务端内存")).orElseThrow();
+        var client = goal(requirement("降低客户端内存")).orElseThrow();
+        assertFalse(fact("a", "Reduces client memory usage", Side.BOTH).supports(server));
+        assertFalse(fact("b", "Reduces memory usage on the server", Side.BOTH).supports(client));
+        assertTrue(fact("c", "Reduces memory usage on both client and server", Side.BOTH).supports(server));
+        assertTrue(fact("c", "Reduces memory usage on both client and server", Side.BOTH).supports(client));
+        assertFalse(fact("d", "减少客户端内存占用", Side.BOTH).supports(server));
+    }
+    @Test void boundedPurposeExcerptCannotLoseDistantSideQualifier() {
+        String description = "Client-only " + "additional implementation detail ".repeat(6) + "reduces memory usage";
+        var roles = classify(description);
+        assertTrue(roles.isEmpty() || roles.values().stream().allMatch(q -> q.contains("Client-only")));
+        assertFalse(new Fact("long", Side.BOTH, roles, false).supports(goal(requirement("服务端内存优化")).orElseThrow()));
+    }
+    @Test void projectMetadataAndDeclaredPurposeMustBothPermitTheRequestedSide() {
+        var client = goal(requirement("降低客户端内存")).orElseThrow();
+        var server = goal(requirement("降低服务端内存")).orElseThrow();
+        var info = json.createObjectNode().put("description", "Reduces memory usage");
+        info.put("client_side", "required").put("server_side", "unsupported");
+        assertTrue(OptimizationPortfolio.fact("mod", info).supports(client));
+        assertFalse(OptimizationPortfolio.fact("mod", info).supports(server));
+        info.put("client_side", "unsupported").put("server_side", "required");
+        assertFalse(OptimizationPortfolio.fact("mod", info).supports(client));
+        assertTrue(OptimizationPortfolio.fact("mod", info).supports(server));
+        info.put("client_side", "unknown").put("server_side", "unknown");
+        assertFalse(OptimizationPortfolio.fact("mod", info).supports(client));
+        assertFalse(OptimizationPortfolio.fact("mod", info).supports(server));
+        info.putArray("environment").add("client_only_server_optional");
+        info.put("description", "Reduces client memory usage");
+        assertTrue(OptimizationPortfolio.fact("mod", info).supports(client));
+        assertFalse(OptimizationPortfolio.fact("mod", info).supports(server));
+    }
     @Test void explicitClientAndServerDemandRetainsMissingSide() {
         var req = requirement("客户端和服务器内存优化");
         var intent = intent(BuildIntent.Mode.NEW, List.of(req));
@@ -103,6 +148,70 @@ class OptimizationPortfolioTest {
         assertEquals(0, report.targets().stream().filter(t -> t.side() == Side.SERVER).findFirst().orElseThrow().modCount());
         var review = new RequirementReview(req.id(), List.of(new RequirementReview.Contribution("mem", "Reduces memory usage", "内存")), "");
         assertTrue(filterReviews(List.of(req), List.of(review), facts).getFirst().gap().contains("服务端"));
+    }
+    private BuildRequirement scopedCriteria(String source, String... parts) {
+        var searches = List.of(new BuildIntent.SearchIntent("optimization", 100, List.of("performance")));
+        return new BuildRequirement("r-0000000000000001", source, BuildRequirement.Kind.CAPABILITY,
+                List.of(), List.of(BuildRequirement.Capability.PERFORMANCE), List.of(), searches,
+                SelectionPreferences.DEFAULT, Arrays.stream(parts).map(part -> new RequirementCriterion(part,
+                        BuildRequirement.Kind.CAPABILITY, List.of(), List.of(), searches)).toList());
+    }
+    @Test void parallelOptimizationCriteriaInheritTheirParentsSingleSideWithoutChangingSource() {
+        for (var pair : Map.of(Side.CLIENT, "客户端", Side.SERVER, "服务端").entrySet()) {
+            var req = scopedCriteria("改善" + pair.getValue() + "内存和加载", "改善" + pair.getValue() + "内存", "加载");
+            var targets = goals(intent(BuildIntent.Mode.NEW, List.of(req)), Set.of(), false);
+            assertEquals(2, targets.size());
+            assertTrue(targets.stream().allMatch(g -> g.side() == pair.getKey()));
+            var loading = targets.stream().filter(g -> g.source().equals("加载")).findFirst().orElseThrow();
+            assertEquals(req.criteria().get(1).key(req.id()), loading.id());
+            assertEquals(Set.of(Role.LOADING), loading.desired());
+            var opposite = pair.getKey() == Side.CLIENT ? Side.SERVER : Side.CLIENT;
+            assertFalse(fact("wrong-side", "Improves loading times", opposite).supports(loading));
+        }
+    }
+    @Test void inheritedSideAlsoFiltersReviewEvidence() {
+        var req = scopedCriteria("改善客户端渲染、实体裁剪和内存", "改善客户端渲染", "实体裁剪和内存");
+        var facts = Map.of("client-memory", fact("client-memory", "Reduces memory usage", Side.CLIENT),
+                "server-memory", fact("server-memory", "Reduces memory usage", Side.SERVER));
+        var contributions = List.of(new RequirementReview.Contribution("client-memory", "Reduces memory usage", "内存"),
+                new RequirementReview.Contribution("server-memory", "Reduces memory usage", "内存"));
+        var review = new RequirementReview(req.id(), List.of(), "", List.of(new CriterionReview("实体裁剪和内存", contributions, "")));
+        var filtered = filterReviews(List.of(req), List.of(review), facts).getFirst().criteria().getFirst();
+        assertEquals(List.of("client-memory"), filtered.evidence().stream().map(RequirementReview.Contribution::slug).toList());
+        var targets = goals(intent(BuildIntent.Mode.NEW, List.of(req)), Set.of(), false);
+        var report = report(targets, facts, Map.of("client-memory", "V1"), Set.of("client-memory"), 1, true);
+        assertTrue(report.targets().stream().anyMatch(t -> t.side() == Side.CLIENT && t.covered().contains(Role.MEMORY)));
+    }
+    @Test void ambiguousAndSeparateRequirementsDoNotBorrowASingleSide() {
+        var mixed = scopedCriteria("客户端渲染、服务端加载和内存", "客户端渲染", "服务端加载", "内存");
+        var targets = goals(intent(BuildIntent.Mode.NEW, List.of(mixed)), Set.of(), false);
+        assertEquals(Side.CLIENT, targets.stream().filter(g -> g.source().equals("客户端渲染")).findFirst().orElseThrow().side());
+        assertEquals(Side.SERVER, targets.stream().filter(g -> g.source().equals("服务端加载")).findFirst().orElseThrow().side());
+        assertEquals(Side.BOTH, targets.stream().filter(g -> g.source().equals("内存")).findFirst().orElseThrow().side());
+        var separate = new BuildRequirement("r-0000000000000002", "优化内存", BuildRequirement.Kind.CAPABILITY,
+                List.of(), List.of(BuildRequirement.Capability.PERFORMANCE));
+        targets = goals(intent(BuildIntent.Mode.NEW, List.of(requirement("改善服务端加载"), separate)), Set.of(), false);
+        assertEquals(Side.BOTH, targets.stream().filter(g -> g.id().equals(separate.id())).findFirst().orElseThrow().side());
+    }
+    @Test void projectNamesDoNotDeclareTheSideOfParallelOptimizationCriteria() {
+        var performance = scopedCriteria("改善内存", "改善内存").criteria().getFirst();
+        var named = new RequirementCriterion("添加client-tweaks", BuildRequirement.Kind.PROJECTS,
+                List.of("client-tweaks"), List.of(), List.of());
+        var parent = new BuildRequirement("r-0000000000000001", "添加client-tweaks，并改善内存", BuildRequirement.Kind.CAPABILITY,
+                List.of("client-tweaks"), List.of(BuildRequirement.Capability.PERFORMANCE), List.of(), List.of(),
+                SelectionPreferences.DEFAULT, List.of(named, performance));
+        var targets = goals(intent(BuildIntent.Mode.NEW, List.of(parent)), Set.of(), false);
+        assertEquals(1, targets.size()); assertEquals(Side.BOTH, targets.getFirst().side());
+        assertEquals(Side.BOTH, goal(requirement("servercore之外补充内存优化模组")).orElseThrow().side());
+    }
+    @Test void excludedSideDoesNotDiluteThePositiveSideOfParallelCriteria() {
+        var positive = scopedCriteria("改善客户端渲染和内存，不优化服务端", "改善客户端渲染", "内存");
+        var criteria = new ArrayList<>(positive.criteria());
+        criteria.add(new RequirementCriterion("不优化服务端", BuildRequirement.Kind.CHANGE, List.of(), List.of(), List.of()));
+        var req = new BuildRequirement(positive.id(), positive.source(), positive.kind(), positive.projects(), positive.capabilities(),
+                positive.addonCores(), positive.searches(), positive.preferences(), criteria);
+        var targets = goals(intent(BuildIntent.Mode.NEW, List.of(req)), Set.of(), false);
+        assertEquals(2, targets.size()); assertTrue(targets.stream().allMatch(g -> g.side() == Side.CLIENT));
     }
     @Test void unrelatedEditsAndExplicitPinsDoNotStartPerformanceRecall() {
         var req = requirement("优化模组");

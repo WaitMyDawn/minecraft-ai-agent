@@ -1,5 +1,5 @@
 import {computed, ref, watch} from 'vue';
-import {readBuildReport, readReplacementChoices, readRequirementReport, requirementStatus, modProjectLink, issueReason, optimizationRole, optimizationSide} from '../utils/build-report.js';
+import {readBuildReport, readReplacementChoices, readRequirementReport, requirementStatus, requirementTone, requirementNote, modProjectLink, issueReason, optimizationRole, optimizationSide} from '../utils/build-report.js';
 import {categoryGloss, modInfoCache} from '../store.js';
 import {loadModInfoCache} from '../features/prefs.js';
 
@@ -10,8 +10,8 @@ export default {
         const replacements = computed(() => readReplacementChoices(props.content));
         const coverage = computed(() => readRequirementReport(props.content));
         const loadRequirementIcons = (event, row) => {
-            if (event.target.open) loadModInfoCache([...new Set([...row.mods.map(m => m.slug), ...row.missing,
-                ...row.criteria.flatMap(c => [...c.mods.map(m => m.slug), ...c.missing])])].slice(0, 100));
+            if (event.target.open) loadModInfoCache([...new Set([...row.mods.map(m => m.slug), ...row.missing, ...(row.evidenceState?.projects || []),
+                ...row.criteria.flatMap(c => [...c.mods.map(m => m.slug), ...c.missing, ...(c.evidenceState?.projects || [])])])].slice(0, 100));
         };
         watch(replacements, rows => {
             const slugs = [...new Set(rows.flatMap(row => [row.original, ...row.selected]))];
@@ -33,7 +33,7 @@ export default {
                 return url.protocol === 'https:' && url.hostname === 'cdn.modrinth.com' ? value : '';
             } catch { return ''; }
         };
-        return {optimizationRole, optimizationSide, loadOptimizationIcons, report, replacements, coverage, requirementStatus, loadRequirementIcons, chart, categoryGloss, modProjectLink, issueReason, loadIssueIcons, icon};
+        return {optimizationRole, optimizationSide, loadOptimizationIcons, report, replacements, coverage, requirementStatus, requirementTone, requirementNote, loadRequirementIcons, chart, categoryGloss, modProjectLink, issueReason, loadIssueIcons, icon};
     },
     template: `
       <div v-if="report || replacements.length || coverage" class="mt-4 space-y-3">
@@ -59,21 +59,24 @@ export default {
           <details v-for="row in coverage.requirements" :key="row.id" @toggle="loadRequirementIcons($event, row)" class="border-t border-slate-100">
             <summary class="px-4 py-3 cursor-pointer text-sm flex items-start justify-between gap-3">
               <span class="text-slate-700">{{ row.source }}</span>
-              <span class="shrink-0 rounded-full px-2 py-0.5 text-xs" :class="['PARTIAL','UNVERIFIED','NOT_RETAINED'].includes(row.status) ? 'bg-amber-50 text-amber-800' : 'bg-indigo-50 text-indigo-700'">{{ requirementStatus(row.status) }}</span>
+              <span class="shrink-0 rounded-full px-2 py-0.5 text-xs" :class="requirementTone(row)">{{ requirementStatus(row) }}</span>
             </summary>
             <div class="px-4 pb-4 space-y-2">
               <div v-for="criterion in row.criteria" :key="criterion.id" class="rounded-lg border border-slate-100 bg-slate-50/50 p-3 space-y-2">
-                <div class="flex items-start justify-between gap-2 text-xs"><span class="font-semibold text-slate-700">{{ criterion.source }}</span><span class="shrink-0 text-slate-500">{{ requirementStatus(criterion.status) }}</span></div>
+                <div class="flex items-start justify-between gap-2 text-xs"><span class="font-semibold text-slate-700">{{ criterion.source }}</span><span class="shrink-0 text-slate-500">{{ requirementStatus(criterion) }}</span></div>
                 <div v-for="mod in criterion.mods" :key="mod.slug" class="text-xs">
                   <a :href="modProjectLink(mod.slug)" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 text-indigo-700">
                     <img v-if="icon(mod.slug)" :src="icon(mod.slug)" alt="" loading="lazy" class="w-6 h-6 rounded">
                     <span v-else class="w-6 h-6 rounded bg-slate-100 inline-flex items-center justify-center">📦</span>
                     <span class="break-all">{{ mod.slug }}</span>
                   </a><p class="mt-1 text-slate-600">{{ mod.purpose }}</p>
+                  <details v-if="mod.quote" class="mt-1 text-xs text-slate-400"><summary class="cursor-pointer">查看用途依据</summary><p class="mt-1">{{ mod.quote }}</p></details>
                 </div>
                 <p v-if="criterion.missing.length" class="text-xs text-amber-700">未保留：<a v-for="slug in criterion.missing" :key="slug" :href="modProjectLink(slug)" target="_blank" rel="noopener noreferrer" class="mr-2 underline">{{ slug }}</a></p>
-                <p v-if="criterion.modCount > criterion.mods.length || criterion.missingCount > criterion.missing.length" class="text-xs text-slate-400">仅列前24项；关联项目共 {{ criterion.modCount }} 项，未保留项目共 {{ criterion.missingCount }} 项。</p>
-                <p class="text-xs text-slate-500">{{ criterion.note }}</p>
+                <p v-if="criterion.evidenceState?.countsComplete !== false && (criterion.modCount > criterion.mods.length || criterion.missingCount > criterion.missing.length)" class="text-xs text-slate-400">仅列前24项；关联项目共 {{ criterion.modCount }} 项，未保留项目共 {{ criterion.missingCount }} 项。</p>
+                <p v-if="criterion.evidenceState?.code === 'VERSION_PENDING'" class="text-xs text-slate-600">已在清单：<a v-for="slug in criterion.evidenceState.projects" :key="slug" :href="modProjectLink(slug)" target="_blank" rel="noopener noreferrer" class="mr-2 underline">{{ slug }}</a></p>
+                <p v-if="criterion.evidenceState?.countsComplete === false" class="text-xs text-slate-400">仅展示仍可核对的关联项目，不作为完整数量统计。</p>
+                <p class="text-xs text-slate-500">{{ requirementNote(criterion) }}</p>
               </div>
               <template v-if="!row.criteria.length">
               <div v-for="mod in row.mods" :key="mod.slug" class="rounded-lg border border-slate-100 p-2">
@@ -83,12 +86,14 @@ export default {
                   <span class="break-all">{{ mod.slug }}</span>
                 </a>
                 <p class="mt-1 text-xs text-slate-600">{{ mod.purpose }}</p>
-                <p v-if="mod.quote" class="mt-1 text-xs text-slate-400">项目说明依据：{{ mod.quote }}</p>
+                <details v-if="mod.quote" class="mt-1 text-xs text-slate-400"><summary class="cursor-pointer">查看用途依据</summary><p class="mt-1">{{ mod.quote }}</p></details>
               </div>
               <p v-if="row.missing.length" class="text-xs text-amber-800">未保留：<a v-for="slug in row.missing" :key="slug" :href="modProjectLink(slug)" target="_blank" rel="noopener noreferrer" class="mr-2 underline">{{ slug }}</a></p>
-              <p v-if="row.modCount > row.mods.length || row.missingCount > row.missing.length" class="text-xs text-slate-400">仅列前24项依据或缺口；关联项目共 {{ row.modCount }} 项，未保留项目共 {{ row.missingCount }} 项。</p>
+              <p v-if="row.evidenceState?.countsComplete !== false && (row.modCount > row.mods.length || row.missingCount > row.missing.length)" class="text-xs text-slate-400">仅列前24项依据或缺口；关联项目共 {{ row.modCount }} 项，未保留项目共 {{ row.missingCount }} 项。</p>
               </template>
-              <p class="text-xs text-slate-500">{{ row.note }}</p>
+              <p v-if="!row.criteria.length && row.evidenceState?.code === 'VERSION_PENDING'" class="text-xs text-slate-600">已在清单：<a v-for="slug in row.evidenceState.projects" :key="slug" :href="modProjectLink(slug)" target="_blank" rel="noopener noreferrer" class="mr-2 underline">{{ slug }}</a></p>
+              <p v-if="row.evidenceState?.countsComplete === false" class="text-xs text-slate-400">仅展示仍可核对的关联项目，不作为完整数量统计。</p>
+              <p v-if="!row.criteria.length || row.missing.length" class="text-xs text-slate-500">{{ requirementNote(row) }}</p>
             </div>
           </details>
           <p class="px-4 py-3 text-xs text-slate-500">用途依据来自项目说明及已选版本关系，不等于丰富程度或运行效果已验证。</p>

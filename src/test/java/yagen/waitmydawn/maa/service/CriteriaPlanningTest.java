@@ -9,6 +9,27 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class CriteriaPlanningTest {
+    @Test void inventedCapabilityEnumHasAllowedValuesAndGenericGoalRepairGuidance() {
+        var codec = new AgentContractCodec();
+        var p = plan("世界生成", List.of(goal("世界生成", "worldgen", "world generation")), List.of());
+        var tree = (ObjectNode)new ObjectMapper().readTree(codec.write(p));
+        ((ObjectNode)tree.path("requirements").get(0)).putArray("capabilities").add("WORLD_GENERATION");
+        var error = assertThrows(AgentContractCodec.ValidationException.class, () -> codec.readBuildIntent(tree.toString()));
+        assertTrue(error.failure().guidance().contains("capabilities 可为空"));
+        assertTrue(error.failure().guidance().contains("TERRAIN"));
+        assertEquals("/requirements/0/capabilities/0", error.failure().pointer());
+    }
+    @Test void mistakenParentFieldInCriterionHasSafeIndexedRepairGuidance() {
+        var codec = new AgentContractCodec();
+        var plan = plan("群系", List.of(goal("群系", "worldgen", "biomes")), List.of());
+        var tree = (ObjectNode)new ObjectMapper().readTree(codec.write(plan));
+        ((ObjectNode)tree.path("requirements").get(0).path("criteria").get(0)).putArray("capabilities").add("BIOMES");
+        var error = assertThrows(AgentContractCodec.ValidationException.class, () -> codec.readBuildIntent(tree.toString()));
+        assertEquals("requirements.criteria.capabilities", error.failure().field());
+        assertEquals("/requirements/0/criteria/0/capabilities", error.failure().pointer());
+        assertTrue(RequirementPlanning.repairInput("original", tree.toString(), error).contains("criteria 子目标没有 capabilities"));
+        assertNull(error.getCause());
+    }
     private RequirementCriterion goal(String source, String category, String keyword) {
         return new RequirementCriterion(source, BuildRequirement.Kind.CAPABILITY, List.of(), List.of(), List.of(new BuildIntent.SearchIntent(category, 100, List.of(keyword))));
     }

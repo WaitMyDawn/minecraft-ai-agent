@@ -33,6 +33,49 @@ class ContentOverlapTest {
         var inventory = project("arbitrary-inventory", "Helps you keep your inventory sorted", 200);
         assertTrue(ContentOverlap.detect(List.of(pipes, inventory), Set.of()).isEmpty());
     }
+    @Test void automaticItemRoutingIsNotAPlayerInventorySortingInterface() {
+        var organizer = project("organizer", "Sorts your inventory and chests with a click", 100);
+        for (String description : List.of("Routes items between inventories, sorting them automatically into connected machines",
+                "Provides item routing and inventory sorting across a network of machines")) {
+            assertTrue(ContentOverlap.detect(List.of(project("routing", description, 200), organizer), Set.of()).isEmpty(), description);
+        }
+        assertEquals(1, ContentOverlap.detect(List.of(organizer,
+                project("organizer-two", "Organizes your containers with a sorting button", 200)), Set.of()).size());
+    }
+    @Test void anItemPipesFilterInventoryIsNotAPlayerSortingInterface() {
+        var organizer = project("organizer", "Help you keep your inventory sorted", 100);
+        String pipeDescription = "<li>diamond item pipe (sorts items based on filters in its inventory)";
+        assertTrue(ContentOverlap.detect(List.of(organizer, project("pipes", pipeDescription, 200)), Set.of()).isEmpty());
+        var hybrid = new ContentOverlap.Project("hybrid", "Hybrid", pipeDescription,
+                "Adds buttons to sort your inventory", "", 200);
+        assertEquals("inventory-sort", ContentOverlap.detect(List.of(organizer, hybrid), Set.of()).getFirst().original());
+    }
+    @Test void recommendedExternalRecipeViewersAreNotOwnFunctionEvidence() {
+        var viewer = project("viewer", "Shows crafting recipes", 100);
+        for (String reference : List.of(
+                "<p><strong>Important</strong>: In order to be able to see all recipes required in this mod, consider installing a Recipe Viewer mod",
+                "An external interface is recommended for viewing recipes and the available machines",
+                "Requires a recipe browser to inspect all processing steps",
+                "建议安装配方查看器以查询合成方式")) {
+            assertTrue(ContentOverlap.detect(List.of(viewer, project("machine", reference, 200)), Set.of()).isEmpty(), reference);
+        }
+        var ownViewer = new ContentOverlap.Project("own-viewer", "Viewer", "Adds a recipe browser",
+                "An external interface is recommended for viewing recipes", "", 200);
+        assertEquals("recipe-viewer", ContentOverlap.detect(List.of(viewer, ownViewer), Set.of()).getFirst().original());
+    }
+    @Test void recipeIntegrationsAndViewerVisibilityControlsDoNotBecomeCompetingViewers() {
+        var viewer = project("standalone-viewer", "Browse crafting recipes", 100);
+        for (String reference : List.of("- Keypad 3: Show recipes (Requires JEI)",
+                "Show recipes using REI", "Displays recipes via EMI",
+                "Automatically hides the recipe viewer when not searching",
+                "Toggles the recipe browser visibility with a hotkey", "隐藏配方查看器以减少界面干扰")) {
+            assertTrue(ContentOverlap.detect(List.of(viewer, project("helper", reference, 200)), Set.of()).isEmpty(), reference);
+        }
+        var primaryViewer = new ContentOverlap.Project("primary-viewer", "Viewer", "Browse crafting recipes",
+                "Requires Fabric API", "", 200);
+        assertEquals("recipe-viewer", ContentOverlap.detect(List.of(viewer, primaryViewer), Set.of()).getFirst().original());
+    }
+
     @Test void majorWorldgenGroupsDifferentDimensionsAndOrdinaryStructuresStayOutside() {
         var groups = ContentOverlap.detect(List.of(project("terralith", "Overhauls the Overworld with 95 new biomes", 1000),
                 project("biomes-o-plenty", "Adds 80 new biomes to the Overworld", 500),

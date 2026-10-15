@@ -13,6 +13,30 @@ spec.loader.exec_module(report)
 capture_spec = importlib.util.spec_from_file_location("capture_final_logs", Path(__file__).with_name("capture-final-logs.py"))
 capture = importlib.util.module_from_spec(capture_spec)
 capture_spec.loader.exec_module(capture)
+session_spec = importlib.util.spec_from_file_location("final_build_session", Path(__file__).with_name("final-build-session.py"))
+session = importlib.util.module_from_spec(session_spec)
+session_spec.loader.exec_module(session)
+
+
+class BrowserSessionCaptureTest(unittest.TestCase):
+    def test_production_page_preserves_ui_and_adds_only_http_telemetry(self):
+        page = session.production_page('<head></head><main>production chat</main>')
+        self.assertIn('<main>production chat</main>', page)
+        self.assertIn('[Modrinth HTTP]', page)
+        self.assertNotIn('X-LLM-Api-Key', page)
+
+    def test_operation_poll_download_is_captured_only_for_successful_zip(self):
+        self.assertTrue(session.is_pack_response('/api/operations/fixture', 200, 'application/zip', b'PK\x03\x04fixture'))
+        self.assertFalse(session.is_pack_response('/api/operations/fixture', 400, 'application/zip', b'PK\x03\x04fixture'))
+        self.assertFalse(session.is_pack_response('/api/modpack/build', 202, 'application/json', b'{}'))
+
+    def test_browser_login_token_is_redacted_before_protocol_capture(self):
+        old = list(session.STATE['secrets'])
+        try:
+            session.remember_auth_response('/api/user/login', b'{"token":"fixture-browser-token"}')
+            self.assertNotIn('fixture-browser-token', session.clean('{"token":"fixture-browser-token"}'))
+        finally:
+            session.STATE['secrets'] = old
 
 
 class CaptureRedactionTest(unittest.TestCase):
@@ -133,6 +157,8 @@ class FinalBuildReportTest(unittest.TestCase):
         evaluation = (self.output / "eval.md").read_text(encoding="utf-8")
         self.assertIn("未导出", evaluation)
         self.assertIn("未采集", evaluation)
+        self.assertEqual(evaluation.count("未评估（未导出）"), 8)
+        self.assertNotIn("部分证据，关系待核实", evaluation)
 
     def test_missing_browser_hash_does_not_claim_download_verified(self):
         self.fixture()

@@ -19,6 +19,27 @@ STATE = {"token": "", "key": "", "secrets": []}
 LOCK = threading.Lock()
 
 
+def production_page(index):
+    telemetry = '<script>const originalInfo=console.info;console.info=(...args)=>{originalInfo(...args);if(args[0]==="[Modrinth HTTP]")fetch("/capture",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({event:"browser-http",detail:args[1]})}).catch(()=>{});};</script>'
+    return index.replace('</head>', telemetry + '</head>', 1)
+
+
+def remember_auth_response(path, data):
+    if path != "/api/user/login":
+        return
+    try:
+        token = json.loads(data).get("token")
+        if token:
+            STATE["secrets"].append(token)
+    except (ValueError, AttributeError):
+        pass
+
+
+def is_pack_response(path, status, mime, data):
+    return status == 200 and data.startswith(b"PK\x03\x04") and (
+        path == "/api/modpack/build" or "zip" in mime or "octet-stream" in mime)
+
+
 def clean(value):
     if isinstance(value, dict):
         return {k: "[REDACTED]" if k.lower() in {"token", "password", "apikey", "key", "authorization"} else clean(v) for k, v in value.items()}
@@ -98,7 +119,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 status, response_headers, data = upstream(self.path, self.command, body if self.command == "POST" else None, headers)
                 mime = response_headers.get("Content-Type", "application/octet-stream")
-                binary = self.path == "/api/modpack/build" and status == 200 and "json" not in mime and "text" not in mime
+                remember_auth_response(self.path, data)
+                binary = is_pack_response(self.path, status, mime, data)
                 if binary:
                     (RUN / "result/朝花夕拾.mrpack").write_bytes(data)
                     record({"event": "download", "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
@@ -128,6 +150,7 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--app-port", type=int, default=8781)
     parser.add_argument("--runtime-jar", type=Path, help="Exact jar started for this evaluation")
+    parser.add_argument("--full-site", action="store_true", help="Serve the production index and use the normal chat UI")
     parser.add_argument("--delegation-budget-ms", type=int, help="Verified runtime per-call delegation budget; omit if unknown")
     args = parser.parse_args()
     if args.delegation_budget_ms is not None and args.delegation_budget_ms <= 0:
@@ -148,11 +171,14 @@ if __name__ == "__main__":
     PAGE += 'import {createApp,ref,nextTick} from "vue";import BuildReport from "/js/components/BuildReport.js";import {renderMarkdownSafe,cleanChatReply} from "/js/utils/format.js";import {apiFetch} from "/js/api.js";import {authUser} from "/js/store.js";import {chooseReplacements,replacementPrompt,replacementLink,confirmReplacement,cancelReplacement,syncReplacementSelection} from "/js/features/chat.js";'
     PAGE += 'const input=' + json.dumps(prompt, ensure_ascii=False) + ';const capture=e=>fetch("/capture",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(e)});const info=console.info;console.info=(...args)=>{info(...args);if(args[0]==="[Modrinth HTTP]")capture({event:"browser-http",detail:args[1]});};'
     PAGE += 'createApp({components:{BuildReport},setup(){const busy=ref(false),started=ref(false),status=ref("等待开始"),reply=ref("");const run=async()=>{if(started.value)return;started.value=true;busy.value=true;authUser.value={token:"relay-session"};const signal=new AbortController().signal;const body={prompt:input,currentMods:"",uuid:"final-' + FINAL.name + '",loader:"neoforge",mcVersion:"1.21.1",constraints:"",importedPack:"",excludedSlugs:""};try{status.value="浏览器取数与构建中";await capture({event:"phase-start",phase:"build-round"});let response=await apiFetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});let text=await response.text();await capture({event:"phase-end",phase:"build-round"});for(let round=0;round<5;round++){const match=text.match(/<replacement_options>([\\s\\S]*?)<\\/replacement_options>/);if(!match)break;const options=JSON.parse(match[1]);await capture({event:"candidates",options});status.value="等待选择兼容候选";const choices=await chooseReplacements(options,signal);if(!choices)throw new Error("候选选择已取消");await capture({event:"choices",choices});status.value="续建中";await capture({event:"phase-start",phase:"build-round"});response=await apiFetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,selectionKind:options.kind||"REPLACEMENT",replacementTicket:options.ticket,replacementChoices:JSON.stringify(choices)})});text=await response.text();await capture({event:"phase-end",phase:"build-round"});}reply.value=text;await nextTick();await capture({event:"chat-visible",content:document.getElementById("chat-output").innerText,renderer:"production-markdown-build-report",scope:"evaluation-relay"});await capture({event:"chat-final",reply:text});const mods=text.match(/<mods>(.*?)<\\/mods>/s);if(!mods)throw new Error("未产生可导出的清单");const slugs=mods[1].split(",").filter(Boolean);const name=(text.match(/<name>(.*?)<\\/name>/s)||[])[1]||"朝花夕拾";status.value="预览与导出中";const trace=JSON.parse(text.split("<trace>")[1]?.split("</trace>")[0]||"{}");const pack={name,loader:"neoforge",mcVersion:"1.21.1",modSlugs:slugs,excludedSlugs:[],assembly:trace.assembly||null};await capture({event:"phase-start",phase:"preview"});const preview=await(await apiFetch("/api/modpack/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(pack)})).json();await capture({event:"phase-end",phase:"preview"});if(preview.assembly)pack.assembly=preview.assembly;await capture({event:"phase-start",phase:"export"});const downloaded=await apiFetch("/api/modpack/build",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...pack,manifestId:preview.manifestId,selectedIds:preview.nodes.map(n=>n.id),allowIncomplete:true})});await capture({event:"phase-end",phase:"export"});if(!downloaded.ok)throw new Error("导出失败");const bytes=await downloaded.arrayBuffer();const sha256=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes))).map(v=>v.toString(16).padStart(2,"0")).join("");await capture({event:"final",reply:text,preview,download:{bytes:bytes.byteLength,sha256}});status.value="测试完成，实际清单已保存";}catch(e){status.value="测试失败："+e.message;await capture({event:"failure",message:e.message,reply:reply.value});}finally{busy.value=false;}};return{renderMarkdownSafe,cleanChatReply,busy,started,status,reply,run,replacementPrompt,replacementLink,confirmReplacement,cancelReplacement,syncReplacementSelection};}}).mount("#app");</script>'
+    if args.full_site:
+        PAGE = production_page(index)
     (RUN / "input.md").write_text("# 实际输入\n\n" + prompt + "\n\n测试方式：真实浏览器使用生产取数器；本机评测代理持有账号令牌，认证与模型 key 不写入产物。\n", encoding="utf-8")
     git_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
     metadata = {"captureKind": "final-build-session", "captureDirectory": str(RUN), "publicationDirectory": str(FINAL),
                 "gitHead": git_head, "startedAt": datetime.now(timezone.utc).isoformat(),
-                "appPort": args.app_port, "relayPort": PORT, "relayPid": os.getpid(), "browserHttpCapture": True}
+                "appPort": args.app_port, "relayPort": PORT, "relayPid": os.getpid(), "browserHttpCapture": True,
+                "renderScope": "production-site" if args.full_site else "evaluation-relay"}
     if args.runtime_jar:
         metadata["jarSha256"] = hashlib.sha256(args.runtime_jar.read_bytes()).hexdigest()
     if args.delegation_budget_ms is not None:

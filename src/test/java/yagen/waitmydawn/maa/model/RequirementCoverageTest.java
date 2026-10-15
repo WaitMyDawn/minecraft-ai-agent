@@ -8,6 +8,17 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class RequirementCoverageTest {
+    @Test void discardedQuotesExposeMutuallyExclusiveCausesWithoutRelaxingEvidenceChecks() {
+        var r = requirement("自动化", BuildRequirement.Kind.CAPABILITY, List.of());
+        var values = List.of(new RequirementReview.Contribution("kept", "Adds automation", "自动化"),
+                new RequirementReview.Contribution("vetoed", "Adds automation", "自动化"),
+                new RequirementReview.Contribution("missing", "Adds automation", "自动化"),
+                new RequirementReview.Contribution("paraphrase", "Automatic machine networks", "自动化"));
+        var verified = RequirementCoverage.verify(List.of(r), List.of(new RequirementReview(r.id(), values, "")),
+                Map.of("kept", "Adds automation", "vetoed", "Adds automation", "paraphrase", "Adds automation"), Set.of("vetoed"));
+        assertEquals(new RequirementCoverage.VerificationCounts(4, 1, 1, 1, 1, 0, 0), verified.counts());
+        assertEquals(List.of("kept"), verified.reviews().getFirst().evidence().stream().map(RequirementReview.Contribution::slug).toList());
+    }
     private BuildRequirement requirement(String source, BuildRequirement.Kind kind, List<String> projects) {
         return new BuildRequirement(RequirementPlanning.anchors(source).keySet().iterator().next(), source,
                 kind, projects, List.of(), List.of(), kind == BuildRequirement.Kind.CAPABILITY
@@ -29,8 +40,29 @@ class RequirementCoverageTest {
         assertEquals("PARTIAL", row(r, List.of(), graph("core")).status());
         assertEquals(List.of("storage"), row(r, List.of(), graph("core")).missing());
         assertEquals("VERIFIED_PROJECTS", row(r, List.of(), graph("core", "storage")).status());
+        var single = requirement("包含核心", BuildRequirement.Kind.PROJECTS, List.of("core"));
         var unresolved = graph("core"); unresolved.selectedVersions.clear();
-        assertEquals("NOT_RETAINED", row(r, List.of(), unresolved).status());
+        var pending = row(single, List.of(), unresolved);
+        assertEquals("UNVERIFIED", pending.status());
+        assertTrue(pending.missing().isEmpty());
+        assertEquals("VERSION_PENDING", pending.evidenceState().code());
+        assertEquals(List.of("core"), pending.evidenceState().projects());
+    }
+    @Test void whitespaceNormalizationPreservesTextMeaningAndReportsRejectedQuotes() {
+        var r = requirement("自动化", BuildRequirement.Kind.CAPABILITY, List.of());
+        var facts = Map.of("factory", "Supports\nfactory\u00a0automation, but not logistics.");
+        var good = new RequirementReview(r.id(), List.of(new RequirementReview.Contribution("factory", "factory automation", "自动化")), "");
+        assertEquals(1, RequirementCoverage.verify(List.of(r), List.of(good), facts, Set.of()).counts().accepted());
+        assertThrows(IllegalArgumentException.class, () -> new RequirementReview.Contribution("factory", "    \n  ", "自动化"));
+        for (String quote : List.of("supports factory automation", "Supports factory automation and logistics", "but logistics")) {
+            var bad = new RequirementReview(r.id(), List.of(new RequirementReview.Contribution("factory", quote, "自动化")), "");
+            var verification = RequirementCoverage.verify(List.of(r), List.of(bad), facts, Set.of());
+            assertEquals(0, verification.counts().accepted(), quote);
+            var report = RequirementCoverage.assess(List.of(r), verification.reviews(), graph("factory"), Set.of("factory"),
+                    Map.of(), Map.of(), "NONE", List.of(), verification.checks());
+            assertEquals("QUOTE_MISMATCH", report.requirements().getFirst().evidenceState().code());
+            assertTrue(report.requirements().getFirst().missing().isEmpty());
+        }
     }
     @Test void namedIdentityVerificationDoesNotRequireUnusedCandidateOrLaunchEvidence() {
         var r = requirement("包含核心", BuildRequirement.Kind.PROJECTS, List.of("core"));

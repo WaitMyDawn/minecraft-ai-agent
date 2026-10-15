@@ -6,6 +6,24 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class RequirementPlanningTest {
+    @Test void namedOnlyNewPlanCannotSmuggleExtraCoreOrUnrequestedAddons() {
+        String prompt = "包含core-mod，不额外推荐";
+        var r = requirement(prompt, BuildRequirement.Kind.PROJECTS, List.of("core-mod"), List.of());
+        assertDoesNotThrow(() -> RequirementPlanning.bind(prompt, plan(2, r.projects(), count(), List.of(r)), Map.of()));
+        assertThrows(RequirementPlanning.InvalidPlan.class, () -> RequirementPlanning.bind(prompt,
+                plan(2, List.of("core-mod", "extra-mod"), count(), List.of(r)), Map.of()));
+    }
+    @Test void projectSlugKeywordsDoNotCreateIndependentCapabilityRequirements() {
+        for (String slug : List.of("biomes-o-plenty", "nether-portal-fix", "performance-monitor", "terrain-tools")) {
+            String source = "包含" + slug;
+            var r = requirement(source, BuildRequirement.Kind.PROJECTS, List.of(slug), List.of());
+            assertDoesNotThrow(() -> RequirementPlanning.bind(source, plan(2, List.of(slug), count(), List.of(r)), Map.of(slug, slug)));
+        }
+        String source = "包含biomes-o-plenty，丰富群系";
+        var r = requirement(source, BuildRequirement.Kind.PROJECTS, List.of("biomes-o-plenty"), List.of());
+        assertThrows(RequirementPlanning.InvalidPlan.class,
+                () -> RequirementPlanning.bind(source, plan(2, r.projects(), count(), List.of(r)), Map.of("biomes-o-plenty", "biomes-o-plenty")));
+    }
     private static final Map<String, String> ALIASES = Map.of("alex生物", "alexs-mobs", "海灵物语", "aquamirae", "农夫乐事", "farmers-delight", "ae2", "ae2");
     private BuildIntent plan(int version, List<String> required, BuildIntent.CountTarget count, List<BuildRequirement> requirements) {
         return new BuildIntent(version, BuildIntent.Mode.NEW, "组合", "", BuildEnvironment.current("1.21.1", "neoforge"),

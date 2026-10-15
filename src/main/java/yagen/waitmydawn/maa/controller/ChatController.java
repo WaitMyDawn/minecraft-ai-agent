@@ -715,6 +715,10 @@ public class ChatController {
      * @return 面向用户的文案；{@code null} 表示"不是能识别的 LLM 错误"，交给上层旧逻辑
      */
     static String llmErrorNote(Throwable e) {
+        if (e instanceof yagen.waitmydawn.maa.service.ModelCallLimiter.DeadlineExceeded)
+            return "⏱️ 模型调用超过本次等待上限，本轮已停止等待，请稍后重试。";
+        if (e instanceof yagen.waitmydawn.maa.service.ModelCallLimiter.CapacityExceeded)
+            return "⏳ 模型调用暂时繁忙，请稍后重试。";
         if (e == null) return null;
         int code = (e instanceof dev.langchain4j.exception.HttpException http) ? http.statusCode() : -1;
         if (e instanceof dev.langchain4j.exception.AuthenticationException || code == 401) {
@@ -756,7 +760,7 @@ public class ChatController {
     /**
      * 带退避的 LLM 调用：只对"值得重试"的失败重试（最多 {@link #LLM_MAX_ATTEMPTS} 次），
      * 且用户已点"终止思考"就立刻放弃 —— 不能用自动重试违背用户的终止意图
-     * （langchain4j 自己的 maxRetries 设成 1 就是为此，这里是在它外层再加一层有界重试）。
+     * （langchain4j 的 maxRetries 设为 0，重试统一由此处控制）。
      */
     private AiAgentService.AgentCallResult callAgentWithRetry(String label, String uuid,
                                                               java.util.function.Supplier<AiAgentService.AgentCallResult> call) {
@@ -2326,6 +2330,7 @@ public class ChatController {
                     ? envIntent.mcVersion()
                     : extractTag(aiBlueprint, "mc",
                         defaultMc == null || defaultMc.isBlank() ? "1.21.1" : defaultMc.trim());
+            boolean namedOnly = RecommendationPolicy.namedOnly(prompt);
             int targetCount = Integer.parseInt(extractTag(aiBlueprint, "target_count", "100"));
             long maxDownloads = Long.parseLong(extractTag(aiBlueprint, "max_downloads", "2100000000"));
             if (structured != null) {
@@ -2427,7 +2432,7 @@ public class ChatController {
                     && structured.count().scope() == BuildIntent.CountScope.TOTAL_FILES && state.getAssembly() != null)
                 needed = targetCount - (originalFiles.size() - (int) originalFiles.stream().filter(excludedSlugs::contains).count()
                         + (int) initialMods.stream().filter(s -> !originalFiles.contains(s)).count());
-            List<GoalCatalog.Profile> goalProfiles = GoalCatalog.active(structured, targetCount);
+            List<GoalCatalog.Profile> goalProfiles = namedOnly ? List.of() : GoalCatalog.active(structured, targetCount);
             if (structured != null && structured.mode() == BuildIntent.Mode.EDIT) {
                 Set<String> currentRequirementIds = RequirementPlanning.anchors(prompt).keySet();
                 var freshCapabilities = structured.requirements().stream().filter(r -> currentRequirementIds.contains(r.id()))
@@ -2435,12 +2440,12 @@ public class ChatController {
                         .flatMap(r -> r.capabilities().stream()).collect(Collectors.toSet());
                 goalProfiles = goalProfiles.stream().filter(p -> freshCapabilities.contains(p.capability())).toList();
             }
-            var optimizationGoals = OptimizationPortfolio.goals(structured, RequirementPlanning.anchors(prompt).keySet(), true);
+            var optimizationGoals = namedOnly ? List.<OptimizationPortfolio.Goal>of() : OptimizationPortfolio.goals(structured, RequirementPlanning.anchors(prompt).keySet(), true);
             var reportOptimizationGoals = OptimizationPortfolio.goals(structured, Set.of(), false);
             Map<String, OptimizationPortfolio.Fact> optimizationFacts = new LinkedHashMap<>();
             final List<GoalCatalog.Profile> activeGoals = goalProfiles.stream()
                     .filter(p -> optimizationGoals.isEmpty() || p.capability() != yagen.waitmydawn.maa.model.agent.BuildRequirement.Capability.PERFORMANCE).toList();
-            var genericGoals = RequirementRetrieval.active(structured, RequirementPlanning.anchors(prompt).keySet());
+            var genericGoals = namedOnly ? List.<yagen.waitmydawn.maa.model.agent.BuildRequirement>of() : RequirementRetrieval.active(structured, RequirementPlanning.anchors(prompt).keySet());
             Map<String, Set<String>> requirementHints = new LinkedHashMap<>();
             Map<String, CandidateMod> requirementCandidates = new LinkedHashMap<>();
             Map<String, Set<yagen.waitmydawn.maa.model.agent.BuildRequirement.Capability>> goalRoles = new LinkedHashMap<>();
@@ -2459,10 +2464,11 @@ public class ChatController {
             int addonCores = structured != null ? structured.expandAddons().size() : expandAddonsStr.isEmpty() ? 0
                     : (int) Arrays.stream(expandAddonsStr.split(","))
                     .map(String::trim).filter(s -> !s.isEmpty()).count();
+            if (namedOnly) { rootBudget = 0; intents = List.of(); }
             int roundBudget = roundBudgetOf(rootBudget, addonCores);
             if (structured != null && structured.count() != null
                     && structured.count().precision() == BuildIntent.Precision.EXACT) roundBudget = rootBudget;
-            if ((!activeGoals.isEmpty() || !genericGoals.isEmpty()) && structured.mode() == BuildIntent.Mode.EDIT) {
+            if (!namedOnly && (!activeGoals.isEmpty() || !genericGoals.isEmpty()) && structured.mode() == BuildIntent.Mode.EDIT) {
                 int requested = activeGoals.stream().mapToInt(GoalCatalog.Profile::target).sum() + genericGoals.size();
                 int room = structured.count() == null ? requested : Math.max(0,
                         (structured.count().range() || structured.count().precision() == BuildIntent.Precision.EXACT
@@ -2498,6 +2504,9 @@ public class ChatController {
             AiAgentService.AgentCallResult criticCall = null;
             /** Critic 输出是否未通过协议校验；确定性补位必须同时标记降级。 */
             boolean criticDegraded = false;
+            boolean criticCoverageDegraded = false;
+            RequirementCoverage.VerificationCounts coverageVerification = null;
+            Map<String, RequirementCoverage.EvidenceCheck> coverageChecks = new LinkedHashMap<>();
             int criticOverlapRemoved = 0, criticExcessApproved = 0, criticRejectedCount = 0;
             boolean criticBackfillAllowed = true;
             int candidatePoolSize = 0;
@@ -2588,37 +2597,6 @@ public class ChatController {
                 Map<String, PoolEntry> poolIndex = new LinkedHashMap<>();
                 /** 意图候选池（已按最终分 → 下载量排序），用于审核不足时的确定性补位 */
                 List<CandidateMod> rankedPool = new ArrayList<>();
-                if (goalMode) {
-                    criticContext.append("【逐项需求目标】以下数值是内容召回参考，不是玩法满足证明。优先覆盖缺失目标，不能用类别标签代替用途。\n")
-                            .append(new tools.jackson.databind.ObjectMapper().writeValueAsString(structured.requirements())).append('\n');
-                    var optimizationPool = buildOptimizationPool(optimizationGoals, initialMods, loader, mcVersion,
-                            maxDownloads, execution, retrieval, uuid, requirementHints, optimizationFacts, targetCount);
-                    var goalPool = new ArrayList<>(buildRequirementPool(genericGoals, initialMods, loader, mcVersion,
-                            maxDownloads, execution, retrieval, uuid, requirementHints));
-                    Set<String> recalled = goalPool.stream().map(c -> c.slug).collect(Collectors.toSet());
-                    optimizationPool.stream().filter(c -> !recalled.contains(c.slug)).limit(Math.max(0, POOL_CAP - goalPool.size())).forEach(goalPool::add);
-                    if (!optimizationGoals.isEmpty()) criticContext.append("【优化组合参考】仅根据介绍提供用途线索；宽泛需求以总文件数5%～10%为软参考，不是额度或性能承诺。优先互补用途，保留点名核心和已选渲染器；客户端和Minecraft服务端分开判断。\n")
-                            .append(MessageJson.write(optimizationGoals)).append('\n');
-                    var specialized = buildGoalPool(activeGoals, initialMods, loader, mcVersion, maxDownloads, execution, retrieval, uuid, goalRoles, goalFacets);
-                    Set<String> genericSlugs = goalPool.stream().map(c -> c.slug).collect(Collectors.toSet());
-                    specialized.stream().filter(c -> !genericSlugs.contains(c.slug)).limit(Math.max(0, POOL_CAP - goalPool.size())).forEach(goalPool::add);
-                    for (var profile : activeGoals) criticContext.append(profile.capability()).append(" 参考 ").append(profile.target())
-                            .append(" 项，用途方面：").append(GoalCatalog.desiredFacets(profile)).append('\n');
-                    for (var c : goalPool) {
-                        requirementCandidates.put(c.slug, c);
-                        criticContext.append("- ").append(c.slug).append(c.preferenceFacts()).append(" | 召回需求:").append(requirementHints.getOrDefault(c.slug, Set.of()))
-                                .append("（检索线索，须结合原文和描述审核，不代表满足） | 用途证据:").append(c.goalEvidence)
-                                .append(" | 描述:").append(c.desc).append('\n');
-                        poolIndex.put(c.slug, new PoolEntry("需求用途(" + c.goalEvidence.keySet() + ")", null));
-                        rankedPool.add(c); poolReserved.add(c.slug);
-                        if (c.category != null) poolCategoryOfSlug.put(c.slug, c.category);
-                    }
-                    criticContext.append("已在包内的用途证据：");
-                    for (var e : goalRoles.entrySet()) if (initialMods.contains(e.getKey())) criticContext.append(e).append(' ');
-                    criticContext.append('\n');
-                    requiresCritic = !goalPool.isEmpty();
-                }
-
                 System.out.println("\n=======================================================");
                 System.out.println("🌐 [阶段 2] Java 捕手启动多路召回，开始建立候选池...");
 
@@ -2647,15 +2625,20 @@ public class ChatController {
                         }
                         cores = checkedCores;
                     }
+                    boolean hasOtherGoals = !genericGoals.isEmpty() || !optimizationGoals.isEmpty() || !activeGoals.isEmpty()
+                            || (needed > 0 && !intents.isEmpty());
+                    int addonPoolLimit = hasOtherGoals ? POOL_CAP / 2 : POOL_CAP;
+                    int remainingCores = cores.size();
                     for (String core : cores) {
-                        if (poolIndex.size() >= POOL_CAP) {
-                            quotaShortfalls.add("附属候选已达 " + POOL_CAP + " 项上限，剩余核心未继续召回");
+                        int coreLimit = Math.max(1, (addonPoolLimit - poolIndex.size()) / remainingCores--);
+                        if (poolIndex.size() >= addonPoolLimit) {
+                            quotaShortfalls.add("附属候选已达 " + addonPoolLimit + " 项上限，剩余核心未继续召回");
                             break;
                         }
                         List<CandidateMod> addons = buildAddonPool(core, loader, mcVersion, initialMods, retrieval,
                                 addonPreferences(structured.requirements(), core));
                         addons = filterPlanCandidates(addons, execution);
-                        addons = addons.stream().limit(POOL_CAP - poolIndex.size()).toList();
+                        addons = addons.stream().limit(Math.min(coreLimit, addonPoolLimit - poolIndex.size())).toList();
                         criticContext.append("--> ").append(core).append(" 的附属候选：\n");
                         for (CandidateMod c : addons) {
                             var previous = addonCandidates.putIfAbsent(c.slug, c);
@@ -2677,6 +2660,47 @@ public class ChatController {
                     }
                     criticContext.append("\n");
                     requiresCritic = true;
+                }
+
+                // 点名核心附属先使用同一轮预算；普通召回只补剩余容量，不能挤掉关系候选。
+                if (goalMode) {
+                    criticContext.append("【逐项需求目标】以下数值是内容召回参考，不是玩法满足证明。优先覆盖缺失目标，不能用类别标签代替用途。\n")
+                            .append(new tools.jackson.databind.ObjectMapper().writeValueAsString(structured.requirements())).append('\n');
+                    var optimizationPool = buildOptimizationPool(optimizationGoals, initialMods, loader, mcVersion,
+                            maxDownloads, execution, retrieval, uuid, requirementHints, optimizationFacts, targetCount);
+                    var goalPool = new ArrayList<>(buildRequirementPool(genericGoals, initialMods, loader, mcVersion,
+                            maxDownloads, execution, retrieval, uuid, requirementHints));
+                    Set<String> recalled = goalPool.stream().map(c -> c.slug).collect(Collectors.toSet());
+                    optimizationPool.stream().filter(c -> !recalled.contains(c.slug)).limit(Math.max(0, POOL_CAP - goalPool.size())).forEach(goalPool::add);
+                    if (!optimizationGoals.isEmpty()) criticContext.append("【优化组合参考】仅根据介绍提供用途线索；宽泛需求以总文件数5%～10%为软参考，不是额度或性能承诺。优先互补用途，保留点名核心和已选渲染器；客户端和Minecraft服务端分开判断。\n")
+                            .append(MessageJson.write(optimizationGoals)).append('\n');
+                    var specialized = buildGoalPool(activeGoals, initialMods, loader, mcVersion, maxDownloads, execution, retrieval, uuid, goalRoles, goalFacets);
+                    Set<String> genericSlugs = goalPool.stream().map(c -> c.slug).collect(Collectors.toSet());
+                    specialized.stream().filter(c -> !genericSlugs.contains(c.slug)).limit(Math.max(0, POOL_CAP - goalPool.size())).forEach(goalPool::add);
+                    for (var profile : activeGoals) criticContext.append(profile.capability()).append(" 参考 ").append(profile.target())
+                            .append(" 项，用途方面：").append(GoalCatalog.desiredFacets(profile)).append('\n');
+                    for (var c : goalPool) {
+                        boolean alreadySubmitted = poolIndex.containsKey(c.slug);
+                        if (!alreadySubmitted && poolIndex.size() >= POOL_CAP) continue;
+                        CandidateMod addon = addonCandidates.get(c.slug);
+                        if (addon != null) {
+                            addon.goalEvidence.putAll(c.goalEvidence);
+                            requirementCandidates.put(c.slug, addon);
+                        } else requirementCandidates.put(c.slug, c);
+                        criticContext.append("- ").append(c.slug).append(c.preferenceFacts()).append(" | 召回需求:").append(requirementHints.getOrDefault(c.slug, Set.of()))
+                                .append("（检索线索，须结合原文和描述审核，不代表满足） | 用途证据:").append(c.goalEvidence)
+                                .append(" | 描述:").append(c.desc).append('\n');
+                        if (!alreadySubmitted) {
+                            poolIndex.put(c.slug, new PoolEntry("需求用途(" + c.goalEvidence.keySet() + ")", null));
+                            rankedPool.add(c);
+                        }
+                        poolReserved.add(c.slug);
+                        if (c.category != null) poolCategoryOfSlug.put(c.slug, c.category);
+                    }
+                    criticContext.append("已在包内的用途证据：");
+                    for (var e : goalRoles.entrySet()) if (initialMods.contains(e.getKey())) criticContext.append(e).append(' ');
+                    criticContext.append('\n');
+                    requiresCritic |= !goalPool.isEmpty();
                 }
 
                 // 2. 构建意图搜索多路召回池
@@ -2785,6 +2809,11 @@ public class ChatController {
 
                     final Set<String> submittedCandidates = Collections.unmodifiableSet(new LinkedHashSet<>(poolIndex.keySet()));
                     final int approvalLimit = Math.min(roundBudget, submittedCandidates.size());
+                    var evidenceSources = new LinkedHashSet<>(submittedCandidates); evidenceSources.addAll(initialMods);
+                    if (structured != null) criticContext.append("\n【Java审核范围】\n")
+                            .append(MessageJson.write(yagen.waitmydawn.maa.model.agent.ReviewInputScope.of(
+                                    yagen.waitmydawn.maa.model.agent.ReviewInputScope.Mode.SELECT_AND_REVIEW,
+                                    loader, mcVersion, submittedCandidates, initialMods)));
                     yagen.waitmydawn.maa.runtime.BuildProgress.stage("审核候选用途与组合");
                     criticCall = callAgentWithRetry("审核员(Critic)", uuid,
                             () -> aiAgentService.criticPools(criticContext.toString(), effectiveApiKey,
@@ -2804,12 +2833,26 @@ public class ChatController {
                     List<String> decisionApproved = cleanSlugs(approvedStr);
                     Set<String> decisionRejected = new HashSet<>();
                     boolean allowBackfill = true;
+                    Set<String> validatedVetoes = new HashSet<>();
+                    boolean validatedBackfillOptOut = false;
+                    ReviewResponse.Selection validatedSelection = null;
                     boolean structuredReview = criticReply != null && criticReply.stripLeading().startsWith("{");
                     if (structured != null || structuredReview) {
                         try {
                             ReviewDecision decision;
                             try {
-                                var selected = AGENT_CODEC.readReviewResponse(criticReply).select(submittedCandidates, approvalLimit);
+                                var selectionOnly = readValidatedSelection(criticReply, submittedCandidates, approvalLimit);
+                                if (selectionOnly != null) {
+                                    validatedSelection = selectionOnly;
+                                    selectionOnly.decision().rejected().forEach(r -> validatedVetoes.add(r.slug()));
+                                    if (!selectionOnly.decision().allowBackfill()) validatedBackfillOptOut = true;
+                                }
+                                var response = AGENT_CODEC.readReviewResponse(criticReply);
+                                if (response.rejected().stream().allMatch(r -> submittedCandidates.contains(r.slug()))) {
+                                    response.rejected().forEach(r -> validatedVetoes.add(r.slug()));
+                                    if (!response.allowBackfill()) validatedBackfillOptOut = true;
+                                }
+                                var selected = response.select(submittedCandidates, approvalLimit, evidenceSources);
                                 decision = selected.decision();
                                 if (structured != null) RequirementCoverage.validateReviews(structured.requirements(), decision.requirements());
                                 criticOverlapRemoved = selected.overlapRemoved();
@@ -2819,25 +2862,43 @@ public class ChatController {
                                 if (forceCriticDegraded) throw invalid;
                                 if (isAborted(uuid)) return "⛔ 思考已手动终止。";
                                 final String invalidDecision = criticReply;
+                                final String correctionReason = invalid.getMessage() + (criticCall.truncatedCalls() > 0
+                                        ? "；上游报告finish_reason=length，JSON因输出额度截断。每个子目标只保留1～2条代表性引用，缩短quote/purpose及否决说明，不丢失目标和必填字段"
+                                        : "");
                                 var repair = callAgentWithRetry("审核员格式修正", uuid,
                                         () -> aiAgentService.criticPools(criticContext + "\n【裁决修正】上一响应未通过校验："
-                                                + invalid.getMessage() + "。请重新裁决，批准最多 " + approvalLimit
+                                                + correctionReason + "。请重新裁决，批准最多 " + approvalLimit
                                                 + " 项，检查候选范围、重复和批准/拒绝互斥。"
                                                 + "先确定明确拒绝项，再从其余候选中选取 approved；不要输出每个未选项的解释。"
                                                 + "修正以下上一响应，返回完整 JSON 对象：\n" + invalidDecision, effectiveApiKey,
                                                 submittedCandidates, approvalLimit));
                                 criticCall = criticCall.followedBy(repair);
                                 criticReply = repair.text();
-                                var selected = AGENT_CODEC.readReviewResponse(criticReply).select(submittedCandidates, approvalLimit);
+                                var selectionOnly = readValidatedSelection(criticReply, submittedCandidates, approvalLimit);
+                                if (selectionOnly != null) {
+                                    validatedSelection = selectionOnly;
+                                    selectionOnly.decision().rejected().forEach(r -> validatedVetoes.add(r.slug()));
+                                    if (!selectionOnly.decision().allowBackfill()) validatedBackfillOptOut = true;
+                                }
+                                var response = AGENT_CODEC.readReviewResponse(criticReply);
+                                if (response.rejected().stream().allMatch(r -> submittedCandidates.contains(r.slug()))) {
+                                    response.rejected().forEach(r -> validatedVetoes.add(r.slug()));
+                                    if (!response.allowBackfill()) validatedBackfillOptOut = true;
+                                }
+                                var selected = response.select(submittedCandidates, approvalLimit, evidenceSources);
                                 decision = selected.decision();
                                 if (structured != null) RequirementCoverage.validateReviews(structured.requirements(), decision.requirements());
                                 criticOverlapRemoved = selected.overlapRemoved();
                                 criticExcessApproved = selected.excessApproved();
                             }
                             decisionApproved = decision.approved();
-                            coverageReviews = structured == null ? List.of() : RequirementCoverage.verified(
-                                    structured.requirements(), decision.requirements(), coverageFacts,
+                            var verification = RequirementCoverage.verify(structured == null ? List.of() : structured.requirements(),
+                                    decision.requirements(), coverageFacts,
                                     decision.rejected().stream().map(ReviewDecision.Rejection::slug).collect(Collectors.toSet()));
+                            coverageReviews = verification.reviews();
+                            coverageVerification = verification.counts();
+                            coverageChecks.putAll(verification.checks());
+                            MaaLog.user("用途证据校验摘要：" + MessageJson.write(coverageVerification));
                             decision.rejected().forEach(item -> decisionRejected.add(item.slug()));
                             allowBackfill = decision.allowBackfill();
                             criticRejectedCount = decisionRejected.size();
@@ -2850,11 +2911,28 @@ public class ChatController {
                             criticDegraded = false;
                         } catch (IllegalArgumentException invalid) {
                             MaaLog.app("Critic 修正后契约校验失败: " + invalid.getMessage());
-                            criticDegraded = true;
-                            decisionApproved = List.of();
-                            // 无效裁决无法提供可信否决集合，必须在响应中标明确定性补位。
+                            // 修正失败不能扩大权限；累计否决和补位禁令优先于任何已批准项。
+                            decisionRejected.addAll(validatedVetoes);
+                            allowBackfill = !validatedBackfillOptOut;
+                            if (validatedSelection != null && !forceCriticDegraded) {
+                                decisionApproved = validatedSelection.decision().approved().stream()
+                                        .filter(slug -> !decisionRejected.contains(slug)).toList();
+                                criticOverlapRemoved = validatedSelection.overlapRemoved();
+                                criticExcessApproved = validatedSelection.excessApproved();
+                                criticDegraded = false;
+                                criticCoverageDegraded = true;
+                                MaaLog.user("用途报告未通过校验：保留合法批准 " + decisionApproved.size()
+                                        + "，已核实否决 " + decisionRejected.size() + "，允许补位 " + allowBackfill
+                                        + "；用途证据仍待核实，不计作满足");
+                            } else {
+                                criticDegraded = true;
+                                decisionApproved = List.of();
+                                MaaLog.user("审核降级边界：保留已核实否决 " + decisionRejected.size() + "，允许补位 " + allowBackfill);
+                            }
+                            criticRejectedCount = decisionRejected.size();
                         }
                     } else criticDegraded = looksLikeCriticDegeneration(criticReply);
+                    criticBackfillAllowed = allowBackfill;
 
                     coverageEligible.addAll(decisionApproved);
                     if (allowBackfill && !criticDegraded) coverageEligible.addAll(poolIndex.keySet());
@@ -2865,21 +2943,21 @@ public class ChatController {
                     // 当成"审核员一个都没挑"就把整条兜底链跳过——那会让用户拿到 0.25 倍的包且毫不知情（坏例 B16）。
                     if (criticDegraded) {
                         String note = "⚠️ 审核员输出未通过契约校验（结构或候选引用不合法），"
-                                + "本轮改由 Java 按相关性顺序补足额度";
+                                + (allowBackfill ? "本轮改由 Java 在未否决候选中按相关性补位" : "本轮未获补位许可，保留已有清单");
                         System.out.println("   " + note);
                         MaaLog.user(note);
                     }
                     addonVetoes.addAll(decisionRejected);
                     addonEligible.addAll(decisionApproved.stream().filter(addonCandidates::containsKey).toList());
                     addonApproved.addAll(addonEligible);
-                    if (allowBackfill || criticDegraded) addonCandidates.keySet().stream()
+                    if (allowBackfill) addonCandidates.keySet().stream()
                             .filter(s -> !addonVetoes.contains(s)).forEach(addonEligible::add);
                     var currentRoots = Set.copyOf(initialMods);
                     int presentCoreAddons = (int) addonEligible.stream().map(addonCandidates::get)
                             .filter(c -> c.addonCores.keySet().stream().anyMatch(currentRoots::contains)).count();
                     int addonReserve = Math.min(roundBudget, Math.min(presentCoreAddons, addonCores * ADDON_QUOTA_PER_CORE));
                     boolean hasContentChoice = decisionApproved.stream().anyMatch(s -> !addonCandidates.containsKey(s))
-                            || ((allowBackfill || criticDegraded) && rankedPool.stream().anyMatch(c -> !addonCandidates.containsKey(c.slug) && !decisionRejected.contains(c.slug)));
+                            || (allowBackfill && rankedPool.stream().anyMatch(c -> !addonCandidates.containsKey(c.slug) && !decisionRejected.contains(c.slug)));
                     if (hasContentChoice) addonReserve = Math.min(addonReserve, Math.max(0, roundBudget - 1));
                     int contentBudget = roundBudget - addonReserve;
                     decisionApproved = decisionApproved.stream().filter(s -> !addonCandidates.containsKey(s)).toList();
@@ -3091,6 +3169,19 @@ public class ChatController {
                     && state.getAssembly().matches(loader, mcVersion)
                     ? dependencyEngine.resolvePreferred(resolutionSeeds, loader, mcVersion, excludeRuleSource, state.getAssembly().versions())
                     : dependencyEngine.resolveCachedResult(resolutionSeeds, loader, mcVersion, excludeRuleSource);
+            if (!initialMods.isEmpty() && resolution.graph().allSlugs.isEmpty() && !resolution.isComplete()
+                    && resolution.unresolved().stream().anyMatch(item -> item.reason() == ResolutionResult.Reason.UPSTREAM_UNAVAILABLE)) {
+                // 取数失败不能发布空清单；前端仅在收到 mods 协议后提交工作区变更。
+                TraceData unavailable = new TraceData();
+                unavailable.architect = architectCall; unavailable.critic = criticCall; unavailable.intent = structured;
+                unavailable.plannerFailures = state.getPlannerFailures(); unavailable.requiredMods = state.getRequiredMods();
+                unavailable.resolutionStatus = "INCOMPLETE"; unavailable.unresolvedCount = resolution.unresolved().size();
+                unavailable.dependencyMs = System.currentTimeMillis() - depT0; unavailable.inputRoots = initialMods.size();
+                unavailable.retrieval = retrieval.snapshot(); unavailable.coverageVerification = coverageVerification;
+                MaaLog.user("依赖取数失败，最终未取得任何可留存项目，本轮不提交清单");
+                return "⚠️ 依赖取数失败，尚未取得可用的项目或版本资料，本轮未修改整合包清单。请稍后重试。\n<trace>"
+                        + buildTrace(unavailable) + "</trace>";
+            }
             var canonicalIdentities = new HashMap<String, String>();
             resolution.graph().selectedVersions.forEach((slug, version) -> {
                 String id = version.path("project_id").asText();
@@ -3118,9 +3209,9 @@ public class ChatController {
                     || !optimizationCandidateInScope(slug, optimizationFacts, optimizationGoals, requirementHints, goalRoles));
             String coverageRepairStatus = "NOT_REQUESTED";
             List<String> coverageRepaired = List.of();
-            if (structured != null && !structured.requirements().isEmpty()) {
+            if (!namedOnly && structured != null && !structured.requirements().isEmpty()) {
                 var beforeCoverage = RequirementCoverage.assess(structured.requirements(), coverageReviews,
-                        resolution.graph(), resolution.graph().allSlugs, canonicalIdentities, addonMetadata, "PENDING", List.of());
+                        resolution.graph(), resolution.graph().allSlugs, canonicalIdentities, addonMetadata, "PENDING", List.of(), coverageChecks);
                 var freshIds = RequirementPlanning.anchors(prompt).keySet();
                 var repairRequirements = structured.requirements().stream()
                         .filter(r -> structured.mode() != BuildIntent.Mode.EDIT || freshIds.contains(r.id())).toList();
@@ -3133,8 +3224,9 @@ public class ChatController {
                         try { apiClient.getProjectsBatch(unclassified).forEach((slug, info) -> optimizationFacts.put(slug, OptimizationPortfolio.fact(slug, info))); }
                         catch (RuntimeException unavailable) { retrieval.unknown(); }
                     }
-                    rawOptimizationReviews = RequirementCoverage.merge(rawOptimizationReviews, followup.reviews());
-                    coverageReviews = OptimizationPortfolio.filterReviews(structured.requirements(), followup.reviews(), optimizationFacts);
+                    rawOptimizationReviews = RequirementCoverage.merge(rawOptimizationReviews, followup.updates());
+                    coverageChecks.putAll(followup.checks());
+                    coverageReviews = OptimizationPortfolio.filterReviews(structured.requirements(), rawOptimizationReviews, optimizationFacts);
                     coverageEligible = new LinkedHashSet<>(followup.eligible());
                     coverageEligible.removeIf(slug -> !OptimizationPortfolio.canAdd(slug, optimizationFacts, optimizationBaseline)
                     || !optimizationCandidateInScope(slug, optimizationFacts, optimizationGoals, requirementHints, goalRoles));
@@ -3249,7 +3341,7 @@ public class ChatController {
                 cleanReply = cleanReply + "\n\n⚠️ 本轮审核员（Critic）的输出未通过校验（结构或候选引用不合法），"
                         + (backfilledCount > 0
                             ? "系统已按相关性顺序补足本轮额度（补位 " + backfilledCount + " 个）。"
-                            : "但候选池也已取空，本轮未能补足数量。")
+                            : criticBackfillAllowed ? "本轮未能从可用候选中补足数量。" : "本轮未获补位许可，保留已有清单。")
                         + "建议复核这些模组，或再说一次重新生成。";
                 MaaLog.user("审核员输出退化: 补位 " + backfilledCount + " 个，已告知用户");
             }
@@ -3287,7 +3379,7 @@ public class ChatController {
             cleanReply += "\n<build_report>" + MessageJson.write(presentation) + "</build_report>";
             coverageReviews = OptimizationPortfolio.filterReviews(structured == null ? List.of() : structured.requirements(), rawOptimizationReviews, optimizationFacts);
             var requirementCoverage = structured == null ? null : RequirementCoverage.assess(structured.requirements(),
-                    coverageReviews, resolvedGraph, finalPerfectMods, canonicalIdentities, addonMetadata, coverageRepairStatus, coverageRepaired);
+                    coverageReviews, resolvedGraph, finalPerfectMods, canonicalIdentities, addonMetadata, coverageRepairStatus, coverageRepaired, coverageChecks);
             if (requirementCoverage != null && !requirementCoverage.requirements().isEmpty()) {
                 cleanReply += "\n<requirement_report>" + MessageJson.write(requirementCoverage) + "</requirement_report>";
                 for (var row : requirementCoverage.requirements()) MaaLog.user("最终要求 " + row.id() + ": " + row.status()
@@ -3331,6 +3423,8 @@ public class ChatController {
             trace.architect = architectCall;
             trace.critic = criticCall;
             trace.criticDegraded = criticDegraded;
+            trace.criticCoverageDegraded = criticCoverageDegraded;
+            trace.coverageVerification = coverageVerification;
             trace.criticOverlapRemoved = criticOverlapRemoved;
             trace.criticExcessApproved = criticExcessApproved;
             trace.criticRejectedCount = criticRejectedCount;
@@ -3553,6 +3647,8 @@ public class ChatController {
         RequiredModsReport requiredMods;
         /** 协议校验失败时标记审核降级，供评测识别确定性补位。 */
         boolean criticDegraded;
+        boolean criticCoverageDegraded;
+        RequirementCoverage.VerificationCounts coverageVerification;
         int criticOverlapRemoved, criticExcessApproved, criticRejectedCount;
         boolean criticBackfillAllowed;
         String resolutionStatus = "COMPLETE";
@@ -3563,6 +3659,11 @@ public class ChatController {
         RequirementCoverage.Report requirementCoverage;
         int constraintActual;
         List<String> missingMustHave = List.of();
+    }
+
+    private static ReviewResponse.Selection readValidatedSelection(String reply, Set<String> candidates, int limit) {
+        try { return AGENT_CODEC.readReviewSelection(reply).select(candidates, limit); }
+        catch (IllegalArgumentException invalid) { return null; }
     }
 
     /**
@@ -3577,6 +3678,8 @@ public class ChatController {
         sb.append("\"branch\":\"").append(d.formatViolation ? "FORMAT_VIOLATION" : d.awaitingInput ? "AWAITING_INPUT" : "NORMAL").append("\"");
         sb.append(",\"awaitingInput\":").append(d.awaitingInput);
         sb.append(",\"criticDegraded\":").append(d.criticDegraded);
+        sb.append(",\"criticCoverageDegraded\":").append(d.criticCoverageDegraded);
+        if (d.coverageVerification != null) sb.append(",\"coverageVerification\":").append(MessageJson.write(d.coverageVerification));
         sb.append(",\"plannerValidation\":{\"status\":\"").append(d.formatViolation ? "FAILED" : "VALID")
                 .append("\",\"failures\":").append(new tools.jackson.databind.ObjectMapper().writeValueAsString(d.plannerFailures)).append('}');
         sb.append(",\"retrieval\":").append(new tools.jackson.databind.ObjectMapper().writeValueAsString(d.retrieval));
@@ -3664,7 +3767,8 @@ public class ChatController {
 
     private static String callStat(AiAgentService.AgentCallResult r) {
         return "\"ms\":" + r.elapsedMs() + ",\"calls\":" + r.modelCalls()
-                + ",\"in\":" + r.inputTokens() + ",\"out\":" + r.outputTokens();
+                + ",\"in\":" + r.inputTokens() + ",\"out\":" + r.outputTokens()
+                + ",\"truncatedCalls\":" + r.truncatedCalls();
     }
 
     // 🚀 建池器 1：获取附属候选池
@@ -3852,8 +3956,8 @@ public class ChatController {
                 hints.computeIfAbsent(entry.getKey(), ignored -> new LinkedHashSet<>()).add(requirement.id());
     }
 
-    private record CoverageFollowup(List<yagen.waitmydawn.maa.model.agent.RequirementReview> reviews, Set<String> eligible,
-                                    AiAgentService.AgentCallResult call, String status) {}
+    private record CoverageFollowup(List<yagen.waitmydawn.maa.model.agent.RequirementReview> updates, Set<String> eligible,
+                                    AiAgentService.AgentCallResult call, String status, Map<String, RequirementCoverage.EvidenceCheck> checks) {}
 
     /** 一次有界定向复核；已保留清单仅提供证据，候选批准不授予改变既有版本或否决核心的权限。 */
     private CoverageFollowup reviewMissingCriteria(List<yagen.waitmydawn.maa.model.agent.BuildRequirement> requirements, RequirementCoverage.Report report,
@@ -3881,24 +3985,30 @@ public class ChatController {
             facts.put(c.slug, text.length() > 800 ? text.substring(0, 800) : text);
         });
         candidates.removeAll(vetoes); candidates.removeAll(selected);
-        if (candidates.isEmpty()) return new CoverageFollowup(reviews, priorEligible, null, "NO_QUALIFIED_CANDIDATE");
         var neededFacts = new LinkedHashMap<String, String>();
         facts.forEach((slug, text) -> { if (selected.contains(slug) || candidates.contains(slug)) neededFacts.put(slug, text); });
+        if (candidates.isEmpty() && neededFacts.isEmpty())
+            return new CoverageFollowup(List.of(), priorEligible, null, "NO_PROJECT_FACTS", Map.of());
         var mapper = new tools.jackson.databind.ObjectMapper();
         String context = "【定向补缺复核】只审核给出的缺失子目标；最多批准3个候选，不改动或否决已有清单。"
                 + "gap 说明即使采纳有证据候选仍缺失的内容；候选尚未入包由Java追踪，不当作用途缺口。"
                 + "\n【完整有效需求账本（本次仅列待补子目标）】\n" + mapper.writeValueAsString(scoped)
                 + "\n【已有项目（仅可作为证据）】\n" + mapper.writeValueAsString(selected)
                 + "\n【候选池】\n" + mapper.writeValueAsString(candidates)
+                + "\n【Java审核范围】\n" + mapper.writeValueAsString(yagen.waitmydawn.maa.model.agent.ReviewInputScope.of(
+                        yagen.waitmydawn.maa.model.agent.ReviewInputScope.Mode.REVIEW_MISSING_CONTENT,
+                        loader, mc, candidates, selected))
                 + "\n【项目用途事实】\n" + mapper.writeValueAsString(neededFacts);
         AiAgentService.AgentCallResult call = null;
         try {
             if (isAborted(uuid)) throw new java.util.concurrent.CancellationException();
-            call = callAgentWithRetry("审核员定向补缺", uuid, () -> aiAgentService.criticPools(context, key, candidates, 3));
-            var decision = AGENT_CODEC.readReviewResponse(call.text()).select(candidates, 3).decision();
+            call = callAgentWithRetry("审核员定向补缺", uuid, () -> aiAgentService.criticPools(context, key, candidates, Math.min(3, candidates.size())));
+            var evidenceSources = new LinkedHashSet<>(selected); evidenceSources.addAll(candidates);
+            var decision = AGENT_CODEC.readReviewResponse(call.text()).select(candidates, 3, evidenceSources).decision();
             RequirementCoverage.validateReviews(scoped, decision.requirements());
             var blocked = new HashSet<>(vetoes); decision.rejected().forEach(r -> blocked.add(r.slug()));
-            var verified = RequirementCoverage.verified(scoped, decision.requirements(), neededFacts, blocked);
+            var verification = RequirementCoverage.verify(scoped, decision.requirements(), neededFacts, blocked);
+            var verified = verification.reviews();
             var eligible = new HashSet<>(priorEligible); eligible.removeAll(blocked);
             var hints = new HashMap<String, Set<String>>();
             for (var r : scoped) for (var criterion : r.criteria()) verified.stream().filter(row -> row.id().equals(r.id()))
@@ -3907,12 +4017,12 @@ public class ChatController {
             eligible.addAll(RequirementRetrieval.order(decision.approved(), hints, selected).stream().filter(s -> !blocked.contains(s)).limit(3).toList());
             MaaLog.user("子目标定向复核：目标 " + targets.stream().map(yagen.waitmydawn.maa.model.agent.BuildRequirement::source).toList()
                     + "，候选 " + candidates.size() + "，允许试解 " + decision.approved());
-            return new CoverageFollowup(RequirementCoverage.merge(reviews, verified), Set.copyOf(eligible), call, "REVIEWED_ONCE");
+            return new CoverageFollowup(verified, Set.copyOf(eligible), call, "REVIEWED_ONCE", verification.checks());
         } catch (java.util.concurrent.CancellationException canceled) { throw canceled; }
         catch (RuntimeException unavailable) {
             if (isAborted(uuid)) throw new java.util.concurrent.CancellationException();
             MaaLog.user("子目标定向复核未核实，保留原清单与原用途证据");
-            return new CoverageFollowup(reviews, priorEligible, call, "REPAIR_REVIEW_UNVERIFIED");
+            return new CoverageFollowup(List.of(), priorEligible, call, "REPAIR_REVIEW_UNVERIFIED", Map.of());
         }
     }
 

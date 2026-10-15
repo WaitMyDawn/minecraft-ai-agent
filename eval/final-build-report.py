@@ -255,14 +255,18 @@ def publish(work, output):
                   f"最终清单可对应项目证据：{len(nodes)} / {count}；缺少映射不等于模组不存在。",
                   f"第八项输入：{'已记录' if '8）' in input_text else '未在输入中确认，不能作为本轮已测试要求'}。",
                   "", "| 要求 | 自动判断 | 实际项目证据 | 缺口与核对事项 |", "| --- | --- | --- | --- |"]
-    assessment += ["| " + " | ".join(cell(v) for v in row) + " |" for row in assess(nodes, bool(pack) and len(nodes) == count)]
+    rows = assess(nodes, bool(pack) and len(nodes) == count)
+    if not pack:
+        rows = [(row[0], "未评估（未导出）", "无最终清单", "构建或导出未完成，不能据此判断内容是否满足。") for row in rows]
+    assessment += ["| " + " | ".join(cell(v) for v in row) + " |" for row in rows]
     assessment += [""] + timings + ["", "## 网络与采集概况", "", f"浏览器 HTTP：{len(browser) if browser or run.get('browserHttpCapture') else '未采集'}；浏览器状态：{dict(statuses)}。",
                    f"服务端 HTTP：{sum(int(t.get('serverHttp', 0)) for t in tasks.values()) if tasks and all('serverHttp' in t for t in tasks.values()) else '未采集'}；"
                    f"兜底事实：{sum(int(t.get('fallbackFacts', 0)) for t in tasks.values()) if tasks and all('fallbackFacts' in t for t in tasks.values()) else '未采集'}。",
                    f"成功回执超预算：{sum(s['late'] for s in receipts.values()) if any(s['compared'] for s in receipts.values()) else '未采集预算，无法判断'}"
                    f"（已核对 {sum(s['compared'] for s in receipts.values())} 项）；原因见 log.md 的回执时间与异常汇总。",
                    "", "未进行安装及启动检查。待核实项不能按通过处理；优化效果和内容丰富度待人工评估。", "", "# 人工评估", "", "请在此追加评价、修正及新的要求。", ""]
-    evidence = ["", "## 对话显示采集", "", "渲染范围：评测代理复用生产 Markdown 与 BuildReport 组件，不包含网站完整页面布局。",
+    render_scope = "完整生产页面，经本机评测代理采集；截图的可见范围和展开状态见 chat-output.md。" if run.get("renderScope") == "production-site" else "评测代理复用生产 Markdown 与 BuildReport 组件，不包含网站完整页面布局。"
+    evidence = ["", "## 对话显示采集", "", "渲染范围：" + render_scope,
                 f"可见文本：{'chat-output.md' if (work / 'result/chat-output.md').is_file() else '未采集'}；"
                 f"浏览器截图：{'chat-output.png' if (work / 'result/chat-output.png').is_file() else '未采集，不能据原始协议判断显示质量'}。"]
     human = assessment.index("# 人工评估")

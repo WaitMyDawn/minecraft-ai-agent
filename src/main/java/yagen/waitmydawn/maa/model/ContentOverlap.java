@@ -23,7 +23,9 @@ public final class ContentOverlap {
             pattern("(?:view|browse|look up|show|display|search)\\w*[^.!?\\n]{0,30}(?:item\\s+)?recipes|recipes?\\s+(?:viewer|browser)|(?:配方查询|配方浏览|查询配方|浏览配方)"))
     );
     private static final Pattern EXCLUDED_CONTEXT = pattern("compatible with|compatibility with|integration with|support for|unlike |does not |doesn't |without |not provided|不添加|不提供|不改变|兼容|联动|不包含");
-    private static final Pattern LOGISTICS_SORT = pattern("network(?:ed)?\\s+pipes?|transport\\s+pipes?|logistics|自动物流|物流管道");
+    private static final Pattern LOGISTICS_SORT = pattern("network(?:ed)?\\s+pipes?|(?:item|transport)\\s+pipes?|logistics|item\\s+(?:routing|transport(?:ation)?)|routes?\\s+items\\s+between|自动物流|物流管道|物品路由|物品运输");
+    private static final Pattern RECIPE_REFERENCE = pattern("(?:consider|recommend\\w*|suggest\\w*|requir\\w*|needs?|install\\w*|download\\w*)[^.!?\\n]{0,70}(?:recipes?[- ](?:viewer|browser)|(?:view|brows|show|look up)\\w*[^.!?\\n]{0,30}recipes)|(?:建议|推荐|需要|安装).{0,25}(?:配方查询|配方浏览|配方查看器)");
+    private static final Pattern RECIPE_INTEGRATION = pattern("(?:requir\\w*|needs?|using|via)\\s+(?:\\*{1,2}|\\[)?(?:JEI|REI|EMI|Just Enough Items|Roughly Enough Items)\\b|(?:hid\\w*|hide\\w*|toggl\\w*|mov\\w*|reposition\\w*)[^.!?\\n]{0,35}recipes?[- ](?:viewer|browser)|(?:隐藏|移动|切换).{0,15}配方(?:查看器|浏览器)");
     private static final Pattern NETHER = pattern("\\bnether\\b|下界"), END = pattern("\\bend\\b|末地"), OVERWORLD = pattern("\\boverworld\\b|主世界");
     private static final Pattern WORLD_FEATURE = pattern("\\b(?:adds?|introduces?|overhauls?|overhauling|revamps?|revamping|reshapes?|reshaping|transforms?|transforming|explore|features?)\\b|with\\s+(?:over|more than)\\s+\\d+|expansive\\s+biome|new (?:and unique )?biomes|新增|添加|大幅|重塑");
     private static String evidence(Project project, Rule rule) {
@@ -35,6 +37,9 @@ public final class ContentOverlap {
             if (EXCLUDED_CONTEXT.matcher(sentence).find()) continue;
             // 物流网络分拣不是玩家背包整理，即使介绍同时提及箱子和排序。
             if (rule.id().equals("inventory-sort") && LOGISTICS_SORT.matcher(sentence).find()) continue;
+            // 安装建议或依赖说明中的查看器不构成当前项目自身的配方浏览功能。
+            if (rule.id().equals("recipe-viewer") && (RECIPE_REFERENCE.matcher(sentence).find()
+                    || RECIPE_INTEGRATION.matcher(sentence).find())) continue;
             if (rule.id().equals("major-worldgen") && !WORLD_FEATURE.matcher(sentence).find()) continue;
             var match = rule.pattern().matcher(sentence);
             if (match.find()) return sentence.trim();

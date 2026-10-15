@@ -18,6 +18,13 @@ export const readBuildReport = (content) => {
 };
 
 export const modProjectLink = slug => 'https://modrinth.com/mod/' + encodeURIComponent(slug);
+const evidenceState = value => {
+    const codes = ['VERIFIED','PROJECT_MISSING','VERSION_PENDING','RELATION_PENDING','NOT_SELECTED','QUOTE_MISMATCH',
+        'FACTS_UNAVAILABLE','VETOED','NO_REVIEW','NO_EVIDENCE','PURPOSE_PENDING','REVIEW_GAP','EVIDENCE_REMOVED','DISPLAY_TRUNCATED'];
+    if (!value || !codes.includes(value.code) || !Array.isArray(value.projects)) return null;
+    return {code: value.code, projects: value.projects.filter(s => typeof s === 'string' && /^[a-zA-Z0-9_.-]{1,128}$/.test(s)).slice(0, 24),
+        countsComplete: value.countsComplete !== false};
+};
 export const readRequirementReport = content => {
     const match = String(content || '').match(/<requirement_report>([\s\S]*?)<\/requirement_report>/);
     if (!match || match[1].length > 1_000_000) return null;
@@ -33,16 +40,32 @@ export const readRequirementReport = content => {
             && text(r.source, 4000) && text(r.status, 40) && text(r.note, 4000)
             && Array.isArray(r.mods) && Array.isArray(r.missing))
             .filter(r => r.status !== 'CONTEXT').map(r => ({...r,
+                evidenceState: evidenceState(r.evidenceState),
                 mods: items(r.mods),
                 missing: r.missing.filter(s => text(s, 128)).slice(0, 100),
                 criteria: Array.isArray(r.criteria) ? r.criteria.slice(0, 16).filter(validRow).filter(c => c.status !== 'CONTEXT').map(c => ({...c,
+                    evidenceState: evidenceState(c.evidenceState),
                     mods: items(c.mods), missing: c.missing.filter(s => text(s, 128)).slice(0, 24)})) : []}));
         if (requirements.reduce((total, r) => total + r.criteria.length, 0) > 128) return null;
         return {...data, requirements};
     } catch { return null; }
 };
-export const requirementStatus = code => ({VERIFIED_PROJECTS: '点名项目已保留',
-    SUPPORTING_EVIDENCE: '有入包依据', PARTIAL: '部分覆盖', UNVERIFIED: '待复核', NOT_RETAINED: '未保留'}[code] || '待复核');
+export const requirementStatus = value => {
+    const row = typeof value === 'string' ? {status: value} : value || {};
+    const state = row.evidenceState?.code;
+    if (state === 'PROJECT_MISSING') return '点名项目未入包';
+    if (state === 'VERSION_PENDING') return '版本待核实';
+    if (state === 'RELATION_PENDING') return '关系待核实';
+    return {VERIFIED_PROJECTS: '点名项目已保留', SUPPORTING_EVIDENCE: '有用途依据', PARTIAL: '部分目标待核实',
+        UNVERIFIED: '用途待核实', NOT_RETAINED: '项目待复核'}[row.status] || '待核实';
+};
+export const requirementTone = row => row.evidenceState?.code === 'PROJECT_MISSING' ? 'bg-rose-50 text-rose-800'
+    : ['VERIFIED_PROJECTS','SUPPORTING_EVIDENCE'].includes(row.status) ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-600';
+export const requirementNote = row => {
+    const note = String(row.note || '');
+    if (note.startsWith('用途尚未取得可核对的审核证据')) return '本项目标的用途仍待核实。';
+    return note;
+};
 export const readReplacementChoices = content => {
     const match = String(content || '').match(/<replacement_choices>([\s\S]*?)<\/replacement_choices>/);
     if (!match || match[1].length > 50_000) return [];

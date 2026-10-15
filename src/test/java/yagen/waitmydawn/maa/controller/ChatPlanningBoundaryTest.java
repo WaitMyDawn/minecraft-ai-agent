@@ -62,6 +62,39 @@ class ChatPlanningBoundaryTest {
         return new AiAgentService.AgentCallResult(json, 1, 1, 10, 10);
     }
 
+    @Test void boundedFollowupCanReviewRetainedFactsWithoutCandidatesAndReturnsOnlyScopedUpdates() {
+        var storage = new RequirementCriterion("仓储", BuildRequirement.Kind.CAPABILITY, List.of(), List.of(),
+                List.of(new BuildIntent.SearchIntent("storage", 100, List.of("storage"))));
+        var automation = new RequirementCriterion("自动化", BuildRequirement.Kind.CAPABILITY, List.of(), List.of(),
+                List.of(new BuildIntent.SearchIntent("technology", 100, List.of("automation"))));
+        var requirement = new BuildRequirement("r-0000000000000001", "自动化和仓储", BuildRequirement.Kind.CAPABILITY,
+                List.of(), List.of(), List.of(), List.of(), SelectionPreferences.DEFAULT, List.of(automation, storage));
+        var supported = new CriterionReview("自动化", List.of(new RequirementReview.Contribution("factory", "factory automation", "提供自动化")), "");
+        var prior = new RequirementReview(requirement.id(), List.of(), "", List.of(supported, new CriterionReview("仓储", List.of(), "")));
+        var graph = new DependencyGraph(); graph.allSlugs.add("factory");
+        graph.selectedVersions.put("factory", new tools.jackson.databind.ObjectMapper().createObjectNode().put("id", "V1"));
+        var report = RequirementCoverage.assess(List.of(requirement), List.of(prior), graph, graph.allSlugs,
+                Map.of(), Map.of(), "NONE", List.of());
+        var update = new RequirementReview(requirement.id(), List.of(), "", List.of(new CriterionReview("仓储",
+                List.of(new RequirementReview.Contribution("factory", "bulk storage", "提供仓储")), "")));
+        when(agents.criticPools(anyString(), anyString(), eq(Set.of()), eq(0))).thenReturn(response(
+                new AgentContractCodec().write(new ReviewDecision(1, List.of(), List.of(), false, List.of(update)))));
+        var budget = new RetrievalBudget();
+        for (int i = 0; i < RetrievalBudget.MAX_SEARCHES; i++) budget.search("used-" + i);
+        var intent = new AgentContractCodec().readBuildIntent(decision("1.20.1", BuildIntent.Loader.FABRIC, false));
+        Object followup = ReflectionTestUtils.invokeMethod(controller, "reviewMissingCriteria", List.of(requirement), report,
+                List.of(prior), Map.of("factory", "factory automation with bulk storage"), Set.of("factory"), Set.of("factory"), Set.of(),
+                new BuildExecutionPlan(intent, Set.of("factory"), Set.of()), budget, "fabric", "1.20.1", Long.MAX_VALUE, "fixture-session", "fixture-key");
+        assertEquals("REVIEWED_ONCE", ReflectionTestUtils.invokeMethod(followup, "status"));
+        List<RequirementReview> updates = ReflectionTestUtils.invokeMethod(followup, "updates");
+        assertEquals(List.of(update), updates);
+        var merged = RequirementCoverage.merge(List.of(prior), updates);
+        assertEquals(supported, merged.getFirst().criteria().getFirst());
+        assertEquals("bulk storage", merged.getFirst().criteria().get(1).evidence().getFirst().quote());
+        verify(agents, times(1)).criticPools(anyString(), anyString(), eq(Set.of()), eq(0));
+        verifyNoInteractions(api);
+    }
+
     private String run(String prompt) {
         return ReflectionTestUtils.invokeMethod(controller, "doChat",
                 Map.of("prompt", prompt, "currentMods", "create", "uuid", "fixture-session",

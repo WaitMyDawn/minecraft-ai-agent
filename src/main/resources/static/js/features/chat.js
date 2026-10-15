@@ -102,7 +102,7 @@ const startThinking = (reset = true) => {
     clearInterval(timerInterval);
     timerInterval = setInterval(() => {
         thinkTime.value = ((Date.now() - thinkingStartedAt) / 1000).toFixed(1);
-    }, 250);
+    }, 100);
 };
 
 const stopThinking = () => {

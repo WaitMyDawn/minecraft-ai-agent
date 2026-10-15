@@ -162,7 +162,7 @@ public final class OverlapSelections {
         var invalidatedEvidence = new HashSet<>(removed);
         for (var addon : trace.path("addonEvidence")) for (var evidence : addon.path("finalEvidence"))
             for (var partner : evidence.path("partners")) if (removed.contains(partner.asText())) invalidatedEvidence.add(addon.path("slug").asText());
-        adjustCoverage(coverage, invalidatedEvidence);
+        adjustCoverage(coverage, removed, invalidatedEvidence);
         var categoryCounts = new TreeMap<String, Integer>();
         selected.forEach(slug -> value.categories().getOrDefault(slug, List.of()).forEach(cat -> categoryCounts.merge(cat, 1, Integer::sum)));
         int unclassified = (int) selected.stream().filter(s -> value.categories().getOrDefault(s, List.of()).isEmpty()).count();
@@ -245,21 +245,61 @@ public final class OverlapSelections {
         while (!queue.isEmpty()) for (String dep : byParent.getOrDefault(queue.removeFirst(), Set.of())) if (result.add(dep)) queue.addLast(dep);
         return result;
     }
-    private static void adjustCoverage(JsonNode node, Set<String> removed) {
-        if (node == null || node.isMissingNode()) return;
-        if (node.path("requirements").isArray()) for (var row : node.path("requirements")) adjustCoverage(row, removed);
-        if (node.path("criteria").isArray()) for (var row : node.path("criteria")) adjustCoverage(row, removed);
-        if (!(node instanceof ObjectNode row) || !row.path("mods").isArray()) return;
-        var kept = JSON.createArrayNode(); boolean changed = false;
-        for (var item : row.path("mods")) { if (removed.contains(item.path("slug").asText())) changed = true; else kept.add(item); }
-        if (row.path("modCount").asInt() > row.path("mods").size()) changed = true;
+    private static boolean adjustCoverage(JsonNode node, Set<String> removed, Set<String> invalidatedRelations) {
+        if (node == null || node.isMissingNode()) return false;
         boolean childChanged = false;
-        for (var child : row.path("criteria")) if (child.path("note").asText().contains("组合选择")) childChanged = true;
-        if (changed || childChanged) {
-            row.set("mods", kept); row.put("modCount", kept.size());
-            if (!row.path("status").asText().equals("CONTEXT")) row.put("status", kept.isEmpty() ? "UNVERIFIED" : "PARTIAL");
-            row.put("note", "组合选择后原用途证据失效或被历史展示截断；保留项目不足以重新证明完整满足，需要后续复核。");
+        if (node.path("requirements").isArray()) for (var row : node.path("requirements")) childChanged |= adjustCoverage(row, removed, invalidatedRelations);
+        if (node.path("criteria").isArray()) for (var row : node.path("criteria")) childChanged |= adjustCoverage(row, removed, invalidatedRelations);
+        if (!(node instanceof ObjectNode row) || !row.path("mods").isArray()) return childChanged;
+        var kept = JSON.createArrayNode(); var missing = new LinkedHashSet<String>();
+        row.path("missing").forEach(n -> missing.add(n.asText()));
+        int previousMissingCount = row.path("missingCount").asInt();
+        boolean missingTruncated = previousMissingCount > missing.size();
+        int addedMissing = 0;
+        boolean changed = false;
+        boolean relationChanged = false;
+        boolean truncated = row.path("modCount").asInt() > row.path("mods").size();
+        for (var item : row.path("mods")) {
+            String slug = item.path("slug").asText();
+            String type = item.path("evidenceType").asText();
+            boolean relationInvalid = invalidatedRelations.contains(slug) && (type.equals("VERSION_RELATION")
+                    || (type.isEmpty() && item.path("quote").asText().isBlank()));
+            if (!removed.contains(slug) && !relationInvalid) { kept.add(item); continue; }
+            changed = true;
+            relationChanged |= !removed.contains(slug) && relationInvalid;
+            if (removed.contains(slug) && type.equals("PROJECT_IDENTITY") && missing.add(slug)) addedMissing++;
         }
+        if (!changed && !childChanged && !(truncated && !invalidatedRelations.isEmpty())) return false;
+        row.set("mods", kept); row.put("modCount", kept.size());
+        row.set("missing", JSON.valueToTree(missing)); row.put("missingCount", Math.max(previousMissingCount + addedMissing, missing.size()));
+        boolean pendingChild = false;
+        for (var child : row.path("criteria"))
+            if (Set.of("PARTIAL", "UNVERIFIED", "NOT_RETAINED").contains(child.path("status").asText())) pendingChild = true;
+        boolean supporting = false;
+        for (var item : kept) if (!item.path("quote").asText().isBlank()
+                || item.path("evidenceType").asText().equals("VERSION_RELATION")) supporting = true;
+        String previous = row.path("status").asText();
+        var state = row.path("evidenceState").isObject() ? ((ObjectNode)row.path("evidenceState")).deepCopy() : JSON.createObjectNode();
+        if (!state.has("projects")) state.set("projects", JSON.createArrayNode());
+        boolean complete = !truncated && !missingTruncated
+                && state.path("countsComplete").asBoolean(true);
+        for (var child : row.path("criteria")) complete &= child.path("evidenceState").path("countsComplete").asBoolean(true);
+        state.put("countsComplete", complete);
+        if (row.path("missingCount").asInt() > 0) {
+            row.put("status", kept.isEmpty() ? "NOT_RETAINED" : "PARTIAL");
+            state.put("code", "PROJECT_MISSING").set("projects", JSON.valueToTree(missing));
+            row.put("note", "组合选择后有点名项目未保留");
+        } else if (previous.equals("SUPPORTING_EVIDENCE") && supporting && !pendingChild) {
+            state.put("code", "VERIFIED");
+            row.put("note", "组合选择后仍保留有效用途或关系依据");
+        } else if ((changed || pendingChild || (truncated && previous.equals("VERIFIED_PROJECTS")))
+                && !(state.path("code").asText().equals("REVIEW_GAP") && supporting && !pendingChild)) {
+            if (!previous.equals("CONTEXT")) row.put("status", kept.isEmpty() ? "UNVERIFIED" : "PARTIAL");
+            state.put("code", truncated ? "DISPLAY_TRUNCATED" : relationChanged ? "RELATION_PENDING" : "EVIDENCE_REMOVED");
+            row.put("note", relationChanged ? "组合选择后联动对象发生变化，关系仍待核实" : "组合选择后部分关联已移除，当前用途待核实");
+        }
+        row.set("evidenceState", state);
+        return true;
     }
     private static String replaceTag(String reply, String name, String content) {
         return reply.replaceFirst("(?s)<" + name + ">.*?</" + name + ">", Matcher.quoteReplacement("<" + name + ">" + content + "</" + name + ">"));

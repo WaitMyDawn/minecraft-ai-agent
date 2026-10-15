@@ -21,6 +21,12 @@ class BasicBuildInputsTest {
         for (String prompt : List.of("NeoForge1.21.1冒险包，20～30个模组", "Fabric 1.20.1 科技包，模组数量30", "Forge 1.20.1建筑包，三十个模组"))
             assertEquals("", BasicBuildInputs.confirmation(prompt, plan(BuildIntent.Mode.NEW)));
     }
+    @Test void explicitRootCountIsNotReplacedByDefaultFileCountSuggestion() {
+        for (String quantity : List.of("根模组严格两个", "只要2个根模组", "内容模组约二十个", "mods exactly 2", "模组数量总共20"))
+            assertEquals("", BasicBuildInputs.confirmation("Forge1.20.1包，" + quantity, plan(BuildIntent.Mode.NEW)), quantity);
+        for (String text : List.of("根模组严格筛选，不确定数量", "模组大概有很多", "只要合适的根模组"))
+            assertTrue(BasicBuildInputs.confirmation("Forge1.20.1包，" + text, plan(BuildIntent.Mode.NEW)).contains("80～120"), text);
+    }
     @Test void singleEditDoesNotBecomeLargeNewBuildAndExplicitCountIsPreserved() {
         assertEquals("", BasicBuildInputs.confirmation("只加JEI", plan(BuildIntent.Mode.EDIT)));
         String question = BasicBuildInputs.confirmation("冒险包，60个模组", plan(BuildIntent.Mode.NEW));
