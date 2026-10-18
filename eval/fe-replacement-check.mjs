@@ -71,6 +71,35 @@ pending = chooseReplacements(overlap, new AbortController().signal);
 cancelReplacement(); assert.equal(await pending, null);
 console.log('组合选择检查通过：默认组合、跨组同步、核心保护、多选及取消。');
 
+const generation = {...overlap, kind: 'GENERATION', ticket: 'generation-ticket'};
+pending = chooseReplacements(generation, new AbortController().signal);
+assert.deepEqual(replacementPrompt.value.groups[0].choice.slugs, ['a', 'core']);
+syncReplacementSelection('a', false);
+assert.deepEqual(replacementPrompt.value.groups[1].choice.slugs, ['c']);
+confirmReplacement();
+assert.deepEqual((await pending).worldgen.slugs, ['core']);
+pending = chooseReplacements(generation, new AbortController().signal);
+syncReplacementSelection('b', true);
+confirmReplacement();
+assert.deepEqual((await pending).worldgen.slugs, ['a', 'core', 'b']);
+const generationAbort = new AbortController();
+pending = chooseReplacements(generation, generationAbort.signal);
+generationAbort.abort(new Error('cancel generation'));
+await assert.rejects(pending, /cancel generation/);
+assert.equal(replacementPrompt.value, null);
+console.log('维度生成选择检查通过：默认建议、多个、全部、跨维度同步及取消，无计时自动提交。');
+
+const uncertain = {kind: 'GENERATION', ticket: 'uncertain-ticket', groups: [{original: 'generation:nether',
+    explanation: '介绍未明确维度范围，请核对后选择', candidates: [{slug: 'unknown-worldgen', recommended: true,
+        scope: '介绍未明确范围', scopeNote: '总群系数量不能证明下界的变化规模'}]}]};
+pending = chooseReplacements(uncertain, new AbortController().signal);
+await Promise.resolve();
+assert.equal(replacementPrompt.value.groups[0].candidates[0].scopeNote, '总群系数量不能证明下界的变化规模');
+assert.equal(replacementPrompt.value.ticket, 'uncertain-ticket');
+confirmReplacement();
+assert.deepEqual((await pending)['generation:nether'].slugs, ['unknown-worldgen']);
+console.log('范围待核实选择检查通过：保留原因与范围说明，单一候选仍需主动确认。');
+
 const context = '<clarification_context>{"schemaVersion":1,"ticket":"fixture-ticket"}</clarification_context>';
 assert.equal(readClarificationTicket(context), 'fixture-ticket');
 assert.equal(readClarificationTicket('<clarification_context>{bad</clarification_context>'), null);
@@ -170,3 +199,22 @@ for (const expired of [false, true]) {
     assert.equal(calls.at(-1).endsWith('/cancel'), !expired);
 }
 console.log('确认续建检查通过：等待不提交、429保留选择、重复点击、取消和过期均不误发布草案。');
+resetWorkspace();
+globalThis.authUser.value = {token:'fixture-old-account'};
+let completeOldChat, oldSaves = 0;
+globalThis.apiFetch = () => new Promise(resolve => { completeOldChat = resolve; });
+globalThis.saveMsg = () => { oldSaves++; };
+globalThis.recordCurrentVersion = () => { oldSaves++; };
+building = sendMessage();
+await waitFor(() => completeOldChat);
+globalThis.authUser.value = {token:'fixture-new-account'};
+globalThis.chatHistory.value = [];
+globalThis.packData = {modSlugs:['new-account-pack'],mcVersion:'1.21.1',loader:'neoforge'};
+completeOldChat(new Response('old-private-result<mods>old-private-core</mods>'));
+await building;
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(globalThis.packData.modSlugs, ['new-account-pack']);
+assert.equal(globalThis.chatHistory.value.length, 0);
+assert.equal(oldSaves, 0, '切换账号后旧对话不得更新工作区或写入新账号历史');
+assert.equal(globalThis.isLoading.value, false);
+console.log('旧对话恢复隔离检查通过：迟到响应不改新账号清单、不追加消息、不写入历史。');

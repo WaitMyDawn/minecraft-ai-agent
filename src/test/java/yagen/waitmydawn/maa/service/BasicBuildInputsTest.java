@@ -32,4 +32,18 @@ class BasicBuildInputsTest {
         String question = BasicBuildInputs.confirmation("冒险包，60个模组", plan(BuildIntent.Mode.NEW));
         assertTrue(question.contains("60 个")); assertFalse(question.contains("80～120"));
     }
+    @Test void explicitFiniteSelectionDoesNotInventALargeDefaultCount() {
+        var base = plan(BuildIntent.Mode.NEW);
+        var named = new BuildIntent(1, base.mode(), "", "", base.environment(), base.count(),
+                List.of("chosen-mod"), List.of("chosen-mod"), List.of(), List.of(), List.of(), BuildIntent.ReplacementPolicy.NONE,
+                List.of(), List.of(), 2100000000L);
+        for (String directive : List.of("不额外推荐", "不需要其它推荐", "不增加内容模组")) {
+            assertEquals("", BasicBuildInputs.confirmation("NeoForge1.21.1包，只添加chosen-mod和必要前置，" + directive, named));
+            String missingEnvironment = BasicBuildInputs.confirmation("新建包，只添加chosen-mod和必要前置，" + directive, named);
+            assertTrue(missingEnvironment.contains("1 个内容项目及必要前置"));
+            assertFalse(missingEnvironment.contains("80～120"));
+        }
+        assertTrue(BasicBuildInputs.confirmation("NeoForge1.21.1包，不额外推荐", base).contains("80～120"));
+        assertFalse(RecommendationPolicy.namedOnly("不要添加地形模组，仍然允许额外推荐"));
+    }
 }

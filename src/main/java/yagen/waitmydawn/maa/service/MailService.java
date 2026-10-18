@@ -74,12 +74,14 @@ public class MailService {
      *
      * <p>为什么需要它：Resend 的免费额度一天 100 封，想验证"发满之后用户看到什么"没法真烧掉额度。
      * 和项目里 {@code maa.eval.force-critic-degraded} 是同一个套路 —— 只为了能确定性地复现一条路径。
-     * <b>生产别打开。</b>
+     * 实际profile必须是非生产eval，避免部署时误留开关影响正常发信。
      *
      * <p>这个开关没走构造器：它是纯评测用的分支，塞进已经 9 个参数的构造器只会让签名更难维护。
      */
     @Value("${maa.mail.simulate-quota:false}")
     private boolean simulateQuota;
+    @Autowired
+    private org.springframework.core.env.Environment environment;
 
     @Autowired
     public MailService(ObjectProvider<JavaMailSender> senderProvider,
@@ -213,7 +215,7 @@ public class MailService {
      * @throws org.springframework.mail.MailException SMTP 发送失败（超时/认证失败/被拒等）
      */
     public void sendCode(String to, String purposeLabel, String code, int ttlMinutes) {
-        if (simulateQuota) {
+        if (simulateQuota && yagen.waitmydawn.maa.runtime.EvaluationAccess.allowed(environment)) {
             throw new QuotaExhaustedException("（模拟）今日邮件发送量已达上限");
         }
         // 先看额度（只对 Brevo 有效）。用完了就干脆不发 —— 让用户看到"额度用完"而不是"发送失败"，
@@ -281,7 +283,7 @@ public class MailService {
         quotaCheckedAt = 0L;
     }
 
-    /** 只给测试用：打开/关闭"模拟额度用完"（生产由配置项 maa.mail.simulate-quota 控制） */
+    /** 测试设置仍受实际profile约束，不能在生产环境启用故障注入。 */
     void setSimulateQuotaForTest(boolean value) {
         this.simulateQuota = value;
     }

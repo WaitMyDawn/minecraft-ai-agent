@@ -49,12 +49,17 @@ public class DelegationTasks {
     private final java.util.concurrent.ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor(
             Thread.ofPlatform().daemon().name("maa-task-deadlines").factory());
     private final java.util.concurrent.ConcurrentMap<Long, String> owners = new java.util.concurrent.ConcurrentHashMap<>();
+    private boolean closed;
 
     @jakarta.annotation.PreDestroy
-    public void close() {
-        tasks.asMap().values().forEach(Task::stop);
+    public synchronized void close() {
+        if (closed) return;
+        closed = true;
+        tasks.asMap().values().forEach(this::cancel);
         executor.shutdownNow();
         deadlines.shutdownNow();
+        tasks.invalidateAll();
+        owners.clear();
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -180,8 +185,10 @@ public class DelegationTasks {
         return submit(taskId, ownerId, userKey, scope, work, true);
     }
 
-    public Task submit(String taskId, Long ownerId, String userKey, RequestScope scope,
+    public synchronized Task submit(String taskId, Long ownerId, String userKey, RequestScope scope,
                        Callable<String> work, boolean exclusiveOwner) {
+        if (closed) throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, "服务正在停止，请稍后重新提交");
         Task task = new Task(taskId == null || taskId.isBlank()
                 ? UUID.randomUUID().toString() : taskId, userKey, ownerId);
         if (exclusiveOwner && ownerId != null && owners.putIfAbsent(ownerId, task.taskId) != null) {
@@ -207,7 +214,9 @@ public class DelegationTasks {
                         + " queueTimeout=" + task.context.queueTimeoutCount() + " browserTimeout=" + task.context.browserTimeoutCount()
                         + " handBack=" + task.context.handBackCount()
                         + " serverHttp=" + upstream.http() + " server429=" + upstream.rateLimited()
-                        + " serverRetries=" + upstream.retries() + " throttleMs=" + upstream.throttleWaitMs());
+                        + " serverRetries=" + upstream.retries() + " throttleMs=" + upstream.throttleWaitMs()
+                        + " clientVia=" + task.context.clientProviders() + " clientCacheHits=" + task.context.clientCacheHits()
+                        + " clientCoalesced=" + task.context.clientCoalesced() + " clientFailures=" + task.context.clientFailureCounts());
                 task.context.releaseFacts();
                 if (ownerId != null) owners.remove(ownerId, task.taskId);
             }

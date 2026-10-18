@@ -13,13 +13,17 @@ public final class BasicBuildInputs {
     public static String confirmation(String prompt, BuildIntent intent) {
         if (intent.mode() != BuildIntent.Mode.NEW) return "";
         boolean environmentMissing = !LOADER.matcher(prompt).find() || !VERSION.matcher(prompt).find();
-        boolean countMissing = !COUNT.matcher(prompt).find();
+        boolean explicitCount = COUNT.matcher(prompt).find();
+        var named = new java.util.HashSet<>(intent.mustHave()); named.addAll(intent.add());
+        boolean finiteSelection = RecommendationPolicy.namedOnly(prompt) && !named.isEmpty();
+        boolean countMissing = !explicitCount && !finiteSelection;
         if (!environmentMissing && !countMissing) return "";
         var e = intent.environment();
         var count = intent.count();
-        String quantity = countMissing ? "80～120 个模组文件（含自动补充的前置）"
+        String quantity = finiteSelection && !explicitCount ? "仅保留已点名的 " + named.size() + " 个内容项目及必要前置"
+                : countMissing ? "80～120 个模组文件（含自动补充的前置）"
                 : count.min() == count.max() ? count.value() + " 个" : count.min() + "～" + count.max() + " 个";
-        if (!countMissing) quantity += switch (count.scope()) {
+        if (explicitCount) quantity += switch (count.scope()) {
             case TOTAL_FILES -> "模组文件（含前置）";
             case ROOT_MODS -> "内容模组（不含自动前置）";
             case ADDED_ROOTS -> "本轮新增内容模组";

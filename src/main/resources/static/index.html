@@ -226,16 +226,16 @@
         <section role="dialog" aria-modal="true" aria-labelledby="replacement-title"
                  class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
             <div class="px-6 py-5 border-b bg-gradient-to-r from-indigo-50 to-sky-50">
-                <h2 id="replacement-title" class="text-xl font-bold text-slate-900">{{ replacementPrompt.kind === 'OVERLAP' ? '确认内容组合' : '选择兼容的替代模组' }}</h2>
+                <h2 id="replacement-title" class="text-xl font-bold text-slate-900">{{ replacementPrompt.kind === 'GENERATION' ? '选择维度核心世界生成' : ['OVERLAP', 'GENERATION'].includes(replacementPrompt.kind) ? '确认内容组合' : '选择兼容的替代模组' }}</h2>
                 <p class="text-sm text-slate-600 mt-2">目标环境 {{ replacementPrompt.loader }} / {{ replacementPrompt.mcVersion }}。
-                    <span v-if="replacementPrompt.kind === 'OVERLAP'">可保留一个、几个或全部。默认勾选是建议；未确认不会自动继续。</span>
+                    <span v-if="['OVERLAP', 'GENERATION'].includes(replacementPrompt.kind)">可保留一个、几个或全部。默认勾选是建议；未确认不会自动继续。</span>
                     <span v-else>可选择一个或多个候选，已默认勾选匹配度最高、同分下载量最多的项目。确认后继续原构建需求。</span></p>
             </div>
             <div class="p-6 overflow-y-auto space-y-7">
                 <div v-for="group in replacementPrompt.groups" :key="group.original">
-                    <h3 class="font-semibold text-slate-900 mb-3">{{ replacementPrompt.kind === 'OVERLAP' ? group.title : '替换 ' + group.original }}</h3>
+                    <h3 class="font-semibold text-slate-900 mb-3">{{ ['OVERLAP', 'GENERATION'].includes(replacementPrompt.kind) ? group.title : '替换 ' + group.original }}</h3>
                     <p v-if="group.explanation" class="text-sm text-slate-600 mb-3">{{ group.explanation }}</p>
-                    <button v-if="replacementPrompt.kind === 'OVERLAP'" @click="group.candidates.forEach(c => syncReplacementSelection(c.slug, true))"
+                    <button v-if="['OVERLAP', 'GENERATION'].includes(replacementPrompt.kind)" @click="group.candidates.forEach(c => syncReplacementSelection(c.slug, true))"
                             class="text-xs text-indigo-600 underline mb-3">保留本组全部</button>
                     <p v-if="!group.verified" class="text-sm text-amber-700 mb-3">取数未全部完成，不能断言没有兼容版本。可取消后重试，或补充准确 slug。</p>
                     <p v-if="!group.candidates.length && group.verified" class="text-sm text-slate-600 mb-3">未发现经过验证的兼容移植或平替。请补充准确 slug，或选择去除这项要求再继续。</p>
@@ -253,7 +253,7 @@
                                     <div class="text-xs text-slate-500 break-all mt-1">{{ candidate.slug }}</div>
                                     <div class="flex gap-2 flex-wrap mt-2 text-xs">
                                         <span class="rounded-full bg-sky-100 text-sky-800 px-2 py-1">{{ candidate.relation }}</span>
-                                        <span v-if="replacementPrompt.kind === 'OVERLAP' ? candidate.recommended : index === 0" class="rounded-full bg-indigo-100 text-indigo-800 px-2 py-1">默认推荐</span>
+                                        <span v-if="['OVERLAP', 'GENERATION'].includes(replacementPrompt.kind) ? candidate.recommended : index === 0" class="rounded-full bg-indigo-100 text-indigo-800 px-2 py-1">默认推荐</span>
                                         <span v-if="candidate.scope" class="rounded-full bg-slate-100 text-slate-700 px-2 py-1">{{ candidate.scope }}</span>
                                         <span v-if="candidate.protectedSelection" class="rounded-full bg-amber-100 text-amber-800 px-2 py-1">点名核心 / 必要前置 / 锁定版本</span>
                                         <span class="py-1 text-slate-600">{{ candidate.downloads.toLocaleString() }} 次下载</span>
@@ -263,11 +263,13 @@
                             <p class="text-sm text-slate-600 mt-3 line-clamp-3">{{ candidate.description }}</p>
                             <blockquote v-if="candidate.evidence" class="mt-3 border-l-2 border-indigo-200 pl-3 text-xs text-slate-600 break-words">介绍依据：{{ candidate.evidence }}</blockquote>
                             <p v-if="candidate.scopeEvidence && candidate.scopeEvidence !== candidate.evidence" class="mt-2 text-xs text-slate-500 break-words">范围依据：{{ candidate.scopeEvidence }}</p>
+                            <p v-if="candidate.scopeNote" class="mt-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-800 break-words">{{ candidate.scopeNote }}</p>
+                            <p v-if="candidate.compatibilityNote" class="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800 break-words">项目兼容说明：{{ candidate.compatibilityNote }}</p>
                             <a :href="replacementLink(candidate.slug)" target="_blank" rel="noopener noreferrer"
                                @click.stop class="inline-block text-xs text-indigo-600 mt-3 underline">查看项目详情 ↗</a>
                         </label>
                     </div>
-                    <div v-if="replacementPrompt.kind !== 'OVERLAP'" class="mt-3 flex flex-col sm:flex-row gap-3 sm:items-center">
+                    <div v-if="!['OVERLAP', 'GENERATION'].includes(replacementPrompt.kind)" class="mt-3 flex flex-col sm:flex-row gap-3 sm:items-center">
                         <label class="text-sm text-slate-600 flex items-center gap-2 shrink-0">
                             <input type="checkbox" v-model="group.choice.drop" class="accent-indigo-600">去除这项要求
                         </label>

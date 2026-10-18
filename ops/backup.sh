@@ -7,7 +7,7 @@
 # 页级一致、允许并发写，实测 500KB 的库不到 100ms）。
 #
 # 用法：
-#   ./backup.sh                # 在线备份（需要 /opt/maa/.env 里有 MAA_OPS_TOKEN）
+#   ./backup.sh                # 在线备份（从环境变量或 /opt/maa/.env 读取 MAA_OPS_TOKEN）
 #   ./backup.sh --cold         # 冷备份：停容器 → 复制文件 → 起容器（不依赖 token，代价是秒级停机）
 #   TAG=20260927-0400 ./backup.sh    # 指定备份目录名（默认取当前时间）
 #
@@ -49,12 +49,18 @@ if [ ! -d "$MAA_DIR/maa_db" ]; then
 fi
 
 DEST="$BACKUP_DIR/$TAG"
-mkdir -p "$DEST"
+if [[ ! "$TAG" =~ ^[0-9A-Za-z_-]{1,48}$ ]]; then
+    echo "❌ TAG 必须是 1～48 个字母、数字、下划线或连字符"; exit 1
+fi
+mkdir -p "$BACKUP_DIR"
+if [ -e "$DEST" ] || [ -L "$DEST" ]; then
+    echo "❌ 同名备份目录已存在，未覆盖：$DEST"; exit 1
+fi
 
 if [ "$MODE" = "online" ]; then
     # ---------- 在线备份：让应用自己出快照，不打断任何人的构筑 ----------
-    TOKEN=""
-    if [ -f "$MAA_DIR/.env" ]; then
+    TOKEN="${MAA_OPS_TOKEN:-}"
+    if [ -z "$TOKEN" ] && [ -f "$MAA_DIR/.env" ]; then
         # 重复行必须拒绝：脚本取第一行，而 Docker 解析 env_file 时重复键通常是"后者胜"，
         # 两边一旦取到不同的值就是 403，而且报错信息会指向"token 不对"，很难查。不猜，直接让人清干净。
         TOKEN_LINES="$(grep -c '^MAA_OPS_TOKEN=' "$MAA_DIR/.env" 2>/dev/null || true)"
@@ -98,6 +104,8 @@ if [ "$MODE" = "online" ]; then
         [ -f "$MAA_DIR/maa_db/$f" ] && cp -p "$MAA_DIR/maa_db/$f" "$DEST/$f" || true
     done
 else
+    # 在线目录由应用原子占用；冷备由脚本占用，均拒绝覆盖已有目录。
+    mkdir "$DEST"
     # ---------- 冷备份：不依赖 token，代价是停容器这几秒 ----------
     cd "$MAA_DIR"
     # 无论中途出什么错，都要把容器拉起来（否则一次备份失败 = 站点一直挂着）
@@ -128,9 +136,9 @@ fi
 # ---------- 保留策略 ----------
 find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -mtime "+$KEEP_DAYS" -exec rm -rf -- {} + 2>/dev/null || true
 if [ "$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l)" -gt "$KEEP_MAX" ]; then
-    find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
-        | sort -rn | tail -n "+$((KEEP_MAX + 1))" | cut -d' ' -f2- \
-        | xargs -r rm -rf --
+    find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\0' 2>/dev/null \
+        | sort -zrn | tail -z -n "+$((KEEP_MAX + 1))" | cut -z -d' ' -f2- \
+        | xargs -0 -r rm -rf --
 fi
 
 KEPT="$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d | wc -l)"

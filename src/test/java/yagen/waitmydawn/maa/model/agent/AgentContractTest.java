@@ -12,6 +12,16 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AgentContractTest {
+    @Test void newBuildNullCountHasIndexedRepairGuidanceAndSchemaMatchesSemanticRule() {
+        var root = buildJson(); root.put("mode", "NEW"); root.putNull("count");
+        var failure = assertThrows(AgentContractCodec.ValidationException.class, () -> codec.readBuildIntent(root.toString()));
+        assertEquals("/count", failure.failure().pointer());
+        assertTrue(failure.failure().guidance().contains("ROOT_MODS"));
+        assertTrue(failure.failure().guidance().contains("不要改动用户明确给出的数量"));
+        assertEquals("object", AgentSchemas.buildIntent().at("/allOf/0/then/properties/count/type").asText());
+        root.put("mode", "EDIT");
+        assertDoesNotThrow(() -> codec.readBuildIntent(root.toString()));
+    }
     @Test void repeatedSearchCategoriesHaveIndexedRepairGuidanceAtEveryPlanningLevel() {
         var search = new BuildIntent.SearchIntent("optimization", 100, List.of("memory"));
         var child = new RequirementCriterion("优化内存", BuildRequirement.Kind.CAPABILITY, List.of(), List.of(), List.of(search));

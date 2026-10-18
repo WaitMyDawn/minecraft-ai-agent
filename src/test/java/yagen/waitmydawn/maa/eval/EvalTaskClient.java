@@ -115,11 +115,15 @@ final class EvalTaskClient {
     /** JVM 取数用于协议评测，不代表浏览器 CORS、网络或下载行为已通过验收。 */
     static final class ModrinthFacts implements FactsProvider {
         private final ObjectMapper mapper = new ObjectMapper();
-        private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+        private final HttpClient http;
+        static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+        ModrinthFacts() { this(HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()); }
+        ModrinthFacts(HttpClient http) { this.http = http; }
         private long nextRequest;
         private int requests;
         private int rateLimited;
         private long batchDeadline;
+        private String lastFailure = "UNSPECIFIED";
 
         @Override public ObjectNode fulfil(JsonNode wanted) throws Exception {
             ObjectNode result = mapper.createObjectNode();
@@ -137,19 +141,23 @@ final class EvalTaskClient {
                     chunk.forEach(w -> ids.add(w.path("key").asText()));
                     JsonNode data = fetch("https://api.modrinth.com/v2/" + (kind.equals("project") ? "projects" : "versions")
                             + "?ids=" + encode(ids.toString()));
+                    boolean valid = data != null && validArray(data, kind.equals("project"));
                     for (JsonNode w : chunk) {
                         JsonNode hit = null;
-                        if (data != null && data.isArray()) for (JsonNode item : data) {
+                        if (valid) for (JsonNode item : data) {
                             if (w.path("key").asText().equals(item.path("id").asText())
                                     || w.path("key").asText().equals(item.path("slug").asText())) { hit = item; break; }
                         }
                         ObjectNode receipt = receipt(w);
                         if (hit != null) { receipt.set("data", hit); answered.add(receipt); }
-                        else if (data != null && data.isArray()) missing.add(receipt);
-                        else unavailable.add(receipt);
+                        else if (valid) missing.add(receipt);
+                        else unavailable.add(receipt.put("reason", data == null ? lastFailure : "INVALID_RESPONSE"));
                     }
                 }
             }
+            var envLoads = new java.util.HashMap<String, JsonNode>();
+            var envFailures = new java.util.HashMap<String, String>();
+            int coalesced = 0;
             for (JsonNode w : wanted) {
                 String kind = w.path("kind").asText();
                 if (kind.equals("project") || kind.equals("version")) continue;
@@ -161,9 +169,15 @@ final class EvalTaskClient {
                             + "/version?game_versions=" + encode(mapper.createArrayNode().add(w.path("mc").asText()).toString())
                             + "&loaders=" + encode(mapper.createArrayNode().add(w.path("loader").asText()).toString());
                 } else throw new IllegalStateException("不支持的委派事实类型: " + kind);
-                JsonNode data = fetch(url);
+                boolean environment = kind.equals("env_version") || kind.equals("env_versions");
+                JsonNode data;
+                if (environment && envLoads.containsKey(url)) { data = envLoads.get(url); lastFailure = envFailures.get(url); coalesced++; }
+                else {
+                    data = fetch(url);
+                    if (environment) { envLoads.put(url, data); envFailures.put(url, lastFailure); }
+                }
                 if (data == null || (kind.equals("search") && !data.path("hits").isArray())
-                        || ((kind.equals("env_version") || kind.equals("env_versions")) && !data.isArray())) unavailable.add(receipt);
+                        || (environment && !validArray(data, false))) unavailable.add(receipt.put("reason", data == null ? lastFailure : "INVALID_RESPONSE"));
                 else if ((kind.equals("env_version") || kind.equals("env_versions")) && data.isEmpty()) missing.add(receipt);
                 else {
                     if (kind.equals("env_versions")) {
@@ -178,6 +192,7 @@ final class EvalTaskClient {
             client.put("requests", requests - before);
             client.put("rateLimited", rateLimited - before429);
             client.put("via", "eval-jvm");
+            client.put("coalesced", coalesced);
             return result;
         }
 
@@ -188,30 +203,43 @@ final class EvalTaskClient {
             return receipt;
         }
 
+        private static boolean validArray(JsonNode data, boolean projects) {
+            if (!data.isArray()) return false;
+            for (var item : data) if (!item.isObject() || !item.path("id").isTextual() || item.path("id").asText().isBlank()
+                    || projects && !item.path("slug").isTextual()) return false;
+            return true;
+        }
+
         private JsonNode fetch(String url) throws Exception {
+            lastFailure = "UNSPECIFIED";
             URI uri = URI.create(url);
             if (!"https".equals(uri.getScheme()) || !"api.modrinth.com".equals(uri.getHost())
                     || uri.getUserInfo() != null || (uri.getPort() != -1 && uri.getPort() != 443)
                     || !uri.getPath().startsWith("/v2/")) throw new IllegalArgumentException("非法 Modrinth 取数地址");
             for (int attempt = 0; attempt < 3; attempt++) {
-                if (System.nanoTime() >= batchDeadline) return null;
+                if (System.nanoTime() >= batchDeadline) { lastFailure = "BUDGET_EXHAUSTED"; return null; }
                 // 跨事实批次保持 240 次/分钟上限，不将应用凭据发送给上游。
                 long wait = nextRequest - System.nanoTime();
                 if (wait > 0) java.util.concurrent.TimeUnit.NANOSECONDS.sleep(wait);
                 long remaining = batchDeadline - System.nanoTime();
-                if (remaining <= 0) return null;
+                if (remaining <= 0) { lastFailure = "BUDGET_EXHAUSTED"; return null; }
                 nextRequest = System.nanoTime() + Duration.ofMillis(250).toNanos();
                 requests++;
                 HttpResponse<String> response;
-                var pending = http.sendAsync(HttpRequest.newBuilder(uri).timeout(Duration.ofNanos(Math.min(remaining, Duration.ofSeconds(5).toNanos())))
+                var pending = http.sendAsync(HttpRequest.newBuilder(uri).timeout(Duration.ofNanos(Math.min(remaining, REQUEST_TIMEOUT.toNanos())))
                         .header("User-Agent", "MAA-Eval/1.0").GET().build(), HttpResponse.BodyHandlers.ofString());
                 try {
-                    response = pending.get(Math.min(remaining, Duration.ofSeconds(5).toNanos()), java.util.concurrent.TimeUnit.NANOSECONDS);
-                } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) { return null; }
+                    response = pending.get(Math.min(remaining, REQUEST_TIMEOUT.toNanos()), java.util.concurrent.TimeUnit.NANOSECONDS);
+                } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+                    Throwable cause = e.getCause() == null ? e : e.getCause();
+                    lastFailure = cause instanceof java.net.http.HttpTimeoutException || cause instanceof java.util.concurrent.TimeoutException
+                            ? "REQUEST_TIMEOUT" : "NETWORK_ERROR";
+                    return null;
+                }
                 finally { if (!pending.isDone()) pending.cancel(true); }
                 if (response.statusCode() == 429) {
                     rateLimited++;
-                    if (attempt == 2) return null;
+                    if (attempt == 2) { lastFailure = "RATE_LIMITED"; return null; }
                     long delay = response.headers().firstValue("x-ratelimit-reset").map(value -> {
                         try { return Math.min(60, Math.max(1, Long.parseLong(value))) * 1000; }
                         catch (NumberFormatException e) { return 1000L; }
@@ -221,9 +249,9 @@ final class EvalTaskClient {
                 }
                 // 环境版本列表的明确 404 与浏览器回执一致，其他端点错误仍视为取数失败。
                 if (response.statusCode() == 404 && uri.getPath().endsWith("/version")) return mapper.createArrayNode();
-                if (response.statusCode() < 200 || response.statusCode() >= 300) return null;
+                if (response.statusCode() < 200 || response.statusCode() >= 300) { lastFailure = "UPSTREAM_HTTP"; return null; }
                 try { return mapper.readTree(response.body()); }
-                catch (RuntimeException e) { return null; }
+                catch (RuntimeException e) { lastFailure = "INVALID_RESPONSE"; return null; }
             }
             return null;
         }

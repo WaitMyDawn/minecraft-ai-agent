@@ -7,6 +7,9 @@ services:
       - "127.0.0.1:8080:8080"
     env_file:
       - .env
+    # 显式生产模式覆盖 env_file 中误留的 eval 配置，关闭评测专用权限。
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
     volumes:
       - ./maa-app.jar:/app/app.jar
       - ./maa_db:/app/maa_db

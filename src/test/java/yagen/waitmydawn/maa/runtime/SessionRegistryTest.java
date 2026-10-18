@@ -18,6 +18,43 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class SessionRegistryTest {
 
+    @Test
+    void anOlderConcurrentTimestampCannotShortenRenewal() {
+        SessionRegistry registry = new SessionRegistry(1000);
+        String token = registry.issueAt(1L, 0);
+        assertEquals(1L, registry.touchAt(token, 900));
+        assertEquals(1L, registry.touchAt(token, 100));
+        assertEquals(1L, registry.touchAt(token, 1500));
+    }
+
+    @Test @org.junit.jupiter.api.Timeout(5)
+    @SuppressWarnings("unchecked")
+    void revocationWinningTheTokenLockPreventsStaleAuthentication() throws Exception {
+        SessionRegistry registry = new SessionRegistry(1000);
+        String token = registry.issueAt(1L, 0);
+        var entries = (java.util.Map<String, SessionRegistry.Entry>) org.springframework.test.util.ReflectionTestUtils.getField(registry, "sessions");
+        var identity = new java.util.concurrent.atomic.AtomicReference<Long>();
+        var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        Thread reader = Thread.ofPlatform().unstarted(() -> {
+            try { identity.set(registry.touchAt(token, 1)); }
+            catch (Throwable error) { failure.set(error); }
+        });
+        try {
+            entries.computeIfPresent(token, (key, entry) -> {
+                reader.start();
+                long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+                while (reader.getState() != Thread.State.BLOCKED && reader.isAlive() && System.nanoTime() < deadline) Thread.yield();
+                assertEquals(Thread.State.BLOCKED, reader.getState());
+                registry.revoke(token);
+                return null;
+            });
+        } finally { reader.join(2000); }
+        assertTrue(!reader.isAlive());
+        assertNull(failure.get());
+        assertNull(identity.get());
+        assertNull(registry.touchAt(token, 2));
+    }
+
     private static final long DAY = 24L * 60 * 60 * 1000;
 
     @Test

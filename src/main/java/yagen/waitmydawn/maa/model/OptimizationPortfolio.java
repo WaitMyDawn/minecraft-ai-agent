@@ -52,7 +52,9 @@ public final class OptimizationPortfolio {
     }
     private static Pattern p(String value) { return Pattern.compile(value, Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE); }
     private static final Pattern NEGATIVE = p("does not |doesn't |without |not an? |not provided|compatib(?:le|ility) with|integration with|addon (?:to|for)|不提供|不优化|不减少|不改善|不需要|不要");
-    private static final Pattern BENEFIT = p("optimi[sz]\\w*|improv\\w*|reduc\\w*|lower\\w*|faster|speed\\w* up|fix\\w*.{0,20}(?:memory leak|allocation)|优化|提高|提升|减少|降低|加快|修复.{0,6}内存泄漏");
+    private static final Pattern BENEFIT = p("\\b(?:optimi[sz]\\w*|improv\\w*|reduc\\w*|lower\\w*|faster|speed\\w* up|fix\\w*.{0,20}(?:memory leak|allocation))\\b|优化|提高|提升|减少|降低|加快|修复.{0,6}内存泄漏");
+    private static final Pattern MEMORY_BENEFIT = p("\\b(?:reduc|lower|sav|optimi[sz]|improv|fix)\\w*\\s+(?:(?:the|your|its|total|overall|game|client|server|java|jvm|runtime|unnecessary|object)\\s+){0,4}(?:memory|ram|allocations?)\\b|\\b(?:memory|ram|allocation)\\s+(?:(?:usage|use|consumption|footprint|overhead|leaks?|efficiency)\\s+){1,3}(?:is |are |was |were )?(?:reduc|lower|optimi[sz]|improv|fix|sav)\\w*|(?:减少|降低|优化|节省|修复)(?:客户端|服务端|服务器|对象|总体)?内存|内存(?:占用|分配|使用|泄漏)?(?:优化|减少|降低|修复)");
+    private static final Pattern CPU_BENEFIT = p("\\b(?:reduc|lower|optimi[sz]|improv|sav)\\w*\\s+(?:(?:the|your|its|total|overall|game|client|server)\\s+){0,4}(?:cpu|processor)\\b|\\b(?:cpu|processor)\\s+(?:(?:usage|load|overhead|performance|efficiency)\\s+){1,3}(?:is |are )?(?:reduc|lower|optimi[sz]|improv)\\w*|(?:优化|减少|降低)(?:计算开销|CPU负载|CPU使用|处理器开销)");
     private static final Set<Role> CLIENT_ROLES = Set.of(Role.RENDERER, Role.ENTITY_CULLING, Role.BLOCK_CULLING, Role.LEAF_CULLING, Role.RENDER_SUPPORT);
     private static final Pattern CLIENT_ONLY = p("client.only|only on (?:the )?client|仅.{0,6}客户端"), SERVER_ONLY = p("server.only|only on (?:the )?server|仅.{0,6}服务端");
     private static final Pattern CLIENT_SCOPE = p("\\bclient\\b|客户端"), SERVER_SCOPE = p("\\bserver\\b|服务端|服务器");
@@ -94,7 +96,7 @@ public final class OptimizationPortfolio {
             for (var rule : SUBJECTS.entrySet()) {
                 if (rule.getKey() == Role.CHUNKS && !CHUNK_IMPROVEMENT.matcher(sentence).find()) continue;
                 if (rule.getKey() == Role.TICK && GAMEPLAY_RATE.matcher(sentence).find() && !COMPUTATIONAL_TICK.matcher(sentence).find()) continue;
-                var match = rule.getValue().matcher(sentence);
+                var match = (rule.getKey() == Role.MEMORY ? MEMORY_BENEFIT : rule.getKey() == Role.CPU ? CPU_BENEFIT : rule.getValue()).matcher(sentence);
                 boolean culling = Set.of(Role.ENTITY_CULLING, Role.BLOCK_CULLING, Role.LEAF_CULLING).contains(rule.getKey());
                 String mechanismText = rule.getKey() == Role.ENTITY_CULLING ? sentence : sentence.replaceAll("(?i)entity\\s*culling", "");
                 boolean mechanism = culling && CULLING.matcher(mechanismText).find();

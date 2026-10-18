@@ -46,4 +46,19 @@ class BuildPresentationTest {
         assertEquals("", report.issues().getFirst().dependency());
         assertEquals("Az9kyOso", report.issues().getFirst().versionId());
     }
+    @Test void oneDependencyEdgeProducesOneCardWithoutLosingReasonsOrRequiredVersions() {
+        var graph = new DependencyGraph();
+        var resolution = new ResolutionResult(graph, ResolutionResult.Status.INCOMPLETE, Set.of("addon"),
+                List.of(new ResolutionResult.Unresolved("library", "addon", ResolutionResult.Reason.NO_VERSION_FOR_ENV, "没有当前环境选版")), List.of(), 500, false);
+        var closure = new DependencyClosure.Report(DependencyClosure.Status.INCOMPLETE, List.of(
+                new DependencyClosure.Issue("addon", "library", "MISSING_REQUIRED", DependencyClosure.Severity.BROKEN),
+                new DependencyClosure.Issue("addon", "library", "MULTILOADER_DEPENDENCY_UNVERIFIED", DependencyClosure.Severity.UNKNOWN),
+                new DependencyClosure.Issue("addon", "library", "VERSION_MISMATCH", DependencyClosure.Severity.BROKEN, "OldA"),
+                new DependencyClosure.Issue("addon", "library", "VERSION_MISMATCH", DependencyClosure.Severity.BROKEN, "OldB")));
+        var report = BuildPresentation.create(mock(ModrinthApiClient.class), graph, resolution, closure, Set.of("addon"), Map.of());
+        assertEquals(1, report.issues().size()); var issue = report.issues().getFirst();
+        assertEquals("NO_VERSION_FOR_ENV", issue.reason()); assertEquals(4, issue.codes().size());
+        assertEquals(List.of("OldA", "OldB"), issue.requiredVersions()); assertEquals("", issue.versionId());
+        assertEquals("没有当前环境选版", issue.detail()); assertFalse(issue.dropped());
+    }
 }

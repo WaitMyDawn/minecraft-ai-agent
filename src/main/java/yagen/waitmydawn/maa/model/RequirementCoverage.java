@@ -6,12 +6,15 @@ import java.util.*;
 /** 最终覆盖以选版和留存项目为准；元数据用途关联不证明丰富程度或游戏运行效果。 */
 public final class RequirementCoverage {
     private RequirementCoverage() {}
-    public record Item(String slug, String purpose, String quote, String evidenceType) {
+    public record Item(String slug, String purpose, String quote, String evidenceType, List<String> partners) {
+        public Item { partners = partners == null ? List.of() : List.copyOf(partners); }
+        public Item(String slug, String purpose, String quote, String evidenceType) { this(slug, purpose, quote, evidenceType, List.of()); }
         public Item(String slug, String purpose, String quote) { this(slug, purpose, quote, "REVIEW_QUOTE"); }
     }
-    public record EvidenceState(String code, List<String> projects, boolean countsComplete) {
+    public record EvidenceState(String code, List<String> projects, boolean countsComplete, List<DimensionGeneration.Coverage> generation) {
         public EvidenceState(String code, List<String> projects) { this(code, projects, true); }
-        public EvidenceState { projects = List.copyOf(projects.stream().distinct().limit(24).toList()); }
+        public EvidenceState(String code, List<String> projects, boolean countsComplete) { this(code, projects, countsComplete, List.of()); }
+        public EvidenceState { projects = List.copyOf(projects.stream().distinct().limit(24).toList()); generation = List.copyOf(generation); }
     }
     public record CriterionRow(String id, String source, String status, List<Item> mods, int modCount,
                                List<String> missing, int missingCount, String note, EvidenceState evidenceState) {}
@@ -20,7 +23,10 @@ public final class RequirementCoverage {
     public record Report(int schemaVersion, List<Row> requirements, String repairStatus, List<String> repaired) {}
     public record VerificationCounts(int provided, int accepted, int vetoed, int missingFacts, int quoteMismatch,
                                      int unknownRequirement, int unknownCriterion) {}
-    public record EvidenceCheck(int provided, int accepted, String reason) {}
+    public record EvidenceCheck(int provided, int accepted, String reason, List<DimensionGeneration.Proof> generation) {
+        public EvidenceCheck(int provided, int accepted, String reason) { this(provided, accepted, reason, List.of()); }
+        public EvidenceCheck { generation = List.copyOf(generation); }
+    }
     public record Verification(List<RequirementReview> reviews, VerificationCounts counts, Map<String, EvidenceCheck> checks) {}
 
     public static List<RequirementReview> verified(List<BuildRequirement> requirements, List<RequirementReview> reviews,
@@ -30,6 +36,11 @@ public final class RequirementCoverage {
 
     public static Verification verify(List<BuildRequirement> requirements, List<RequirementReview> reviews,
                                       Map<String, String> facts, Set<String> vetoes) {
+        return verify(requirements, reviews, facts, vetoes, DimensionGeneration.targets(requirements));
+    }
+    public static Verification verify(List<BuildRequirement> requirements, List<RequirementReview> reviews,
+                                      Map<String, String> facts, Set<String> vetoes,
+                                      Map<String, List<DimensionGeneration.Goal>> generationTargets) {
         var byId = new HashMap<String, BuildRequirement>(); requirements.forEach(r -> byId.put(r.id(), r));
         int[] count = new int[7];
         var checks = new LinkedHashMap<String, EvidenceCheck>();
@@ -46,20 +57,22 @@ public final class RequirementCoverage {
                 }
                 String key = byId.get(review.id()).criteria().stream().filter(c -> c.source().equals(child.source()))
                         .findFirst().orElseThrow().key(review.id());
-                criteria.add(new CriterionReview(child.source(), checked(key, child.evidence(), facts, vetoes, count, checks), child.gap()));
+                criteria.add(new CriterionReview(child.source(), checked(key, child.evidence(), facts, vetoes, count, checks, generationTargets), child.gap()));
             }
-            accepted.add(new RequirementReview(review.id(), checked(review.id(), review.evidence(), facts, vetoes, count, checks), review.gap(), criteria));
+            accepted.add(new RequirementReview(review.id(), checked(review.id(), review.evidence(), facts, vetoes, count, checks, generationTargets), review.gap(), criteria));
         }
         return new Verification(List.copyOf(accepted), new VerificationCounts(count[0], count[1], count[2], count[3], count[4], count[5], count[6]), Map.copyOf(checks));
     }
     private static List<RequirementReview.Contribution> checked(String key, List<RequirementReview.Contribution> evidence,
-            Map<String, String> facts, Set<String> vetoes, int[] total, Map<String, EvidenceCheck> checks) {
+            Map<String, String> facts, Set<String> vetoes, int[] total, Map<String, EvidenceCheck> checks,
+            Map<String, List<DimensionGeneration.Goal>> generationTargets) {
         int[] count = new int[7];
         var accepted = quoted(evidence, facts, vetoes, count);
         for (int i = 0; i < count.length; i++) total[i] += count[i];
         String reason = !accepted.isEmpty() ? "VERIFIED" : evidence.isEmpty() ? "NO_EVIDENCE"
                 : count[4] > 0 ? "QUOTE_MISMATCH" : count[3] > 0 ? "FACTS_UNAVAILABLE" : "VETOED";
-        checks.put(key, new EvidenceCheck(evidence.size(), accepted.size(), reason));
+        checks.put(key, new EvidenceCheck(evidence.size(), accepted.size(), reason,
+                DimensionGeneration.proofs(generationTargets.getOrDefault(key, List.of()), accepted)));
         return accepted;
     }
 
@@ -99,12 +112,21 @@ public final class RequirementCoverage {
                                 DependencyGraph graph, Set<String> selected, Map<String, String> identities,
                                 Map<String, PackAddonPolicy.Project> metadata, String repairStatus, List<String> repaired,
                                 Map<String, EvidenceCheck> checks) {
-        return assess(requirements, reviews, graph, selected, identities, metadata, repairStatus, repaired, checks, true);
+        return assess(requirements, reviews, graph, selected, identities, metadata, repairStatus, repaired, checks, Map.of());
+    }
+    /** projectFacts只接受本轮已取得的项目原文，并在调用前排除明确否决项；不从任意用途解释生成依据。 */
+    public static Report assess(List<BuildRequirement> requirements, List<RequirementReview> reviews,
+                                DependencyGraph graph, Set<String> selected, Map<String, String> identities,
+                                Map<String, PackAddonPolicy.Project> metadata, String repairStatus, List<String> repaired,
+                                Map<String, EvidenceCheck> checks, Map<String, String> projectFacts) {
+        return assess(requirements, reviews, graph, selected, identities, metadata, repairStatus, repaired, checks, true,
+                DimensionGeneration.targets(requirements), projectFacts);
     }
     private static Report assess(List<BuildRequirement> requirements, List<RequirementReview> reviews,
                                 DependencyGraph graph, Set<String> selected, Map<String, String> identities,
                                 Map<String, PackAddonPolicy.Project> metadata, String repairStatus, List<String> repaired,
-                                Map<String, EvidenceCheck> checks, boolean truncate) {
+                                Map<String, EvidenceCheck> checks, boolean truncate,
+                                Map<String, List<DimensionGeneration.Goal>> generationTargets, Map<String, String> projectFacts) {
         var byId = new HashMap<String, RequirementReview>();
         reviews.forEach(r -> byId.put(r.id(), r));
         var versionProjects = new HashMap<String, String>();
@@ -142,13 +164,16 @@ public final class RequirementCoverage {
                 boolean found = false;
                 for (String slug : selected) {
                     if (slug.equals(core)) continue;
-                    var evidence = PackAddonPolicy.assess(slug, graph.selectedVersions.get(slug), versionProjects, coreMap, retained);
+                    var evidence = PackAddonPolicy.assess(slug, graph.selectedVersions.get(slug), versionProjects, coreMap, retained, true);
                     boolean match = evidence.corePresent() && !evidence.conflict()
                             && (r.kind() != BuildRequirement.Kind.PACK_INTEGRATIONS || evidence.integration());
                     if (match) {
                         found = true;
-                        items.put(slug, new Item(slug, "已选版本声明与 " + core + " 的"
-                                + (r.kind() == BuildRequirement.Kind.PACK_INTEGRATIONS ? "包内内容联动" : "附属关系"), "", "VERSION_RELATION"));
+                        var relation = evidence.evidence().stream().filter(e -> e.core().equals(core)).findFirst().orElseThrow();
+                        boolean described = relation.relationSource().equals("DESCRIPTION_RELATION");
+                        items.put(slug, new Item(slug, (described ? "项目介绍声明与 " : "已选版本声明与 ") + core + " 的"
+                                + (r.kind() == BuildRequirement.Kind.PACK_INTEGRATIONS ? "包内内容联动" : "附属关系"), relation.quote(), relation.relationSource(),
+                                java.util.stream.Stream.concat(java.util.stream.Stream.of(core), relation.partners().stream()).distinct().toList()));
                     }
                 }
                 if (!found) missingCores.add(core);
@@ -158,6 +183,23 @@ public final class RequirementCoverage {
                     || (!addons && !r.searches().isEmpty()) || (r.kind() == BuildRequirement.Kind.GENERAL && review != null && !review.evidence().isEmpty()));
             boolean semanticEvidence = review != null && review.evidence().stream()
                     .anyMatch(e -> selected.contains(e.slug()) && graph.selectedVersions.containsKey(e.slug()));
+            var versioned = new HashSet<>(selected); versioned.retainAll(graph.selectedVersions.keySet());
+            var check = checks.get(r.id());
+            var proofs = new ArrayList<DimensionGeneration.Proof>(check == null ? List.of() : check.generation());
+            for (var goal : generationTargets.getOrDefault(r.id(), List.of())) {
+                for (String slug : new TreeSet<>(versioned)) {
+                    if (graph.selectedVersions.get(slug).path("id").asText("").isBlank()) continue;
+                    String quote = DimensionGeneration.evidence(goal, projectFacts.get(slug));
+                    if (quote.isBlank()) continue;
+                    proofs.add(new DimensionGeneration.Proof(goal.dimension(), slug, quote));
+                    if (!items.containsKey(slug)) items.put(slug, new Item(slug, "项目原文描述" + goal.label() + "的大规模生成内容",
+                            quote, "PROJECT_GENERATION"));
+                    semanticEvidence = true;
+                }
+            }
+            var generation = DimensionGeneration.coverage(generationTargets.getOrDefault(r.id(), List.of()),
+                    proofs, versioned);
+            var generationMissing = generation.stream().filter(g -> g.projects().isEmpty()).map(DimensionGeneration.Coverage::label).toList();
             String status;
             String note;
             EvidenceState evidenceState = new EvidenceState("VERIFIED", List.of());
@@ -173,9 +215,12 @@ public final class RequirementCoverage {
                 status = items.isEmpty() ? "UNVERIFIED" : "PARTIAL";
                 note = "附属或包内联动关系仍待核实";
                 evidenceState = new EvidenceState("RELATION_PENDING", missingCores);
+            } else if (!generationMissing.isEmpty()) {
+                status = items.isEmpty() ? "UNVERIFIED" : "PARTIAL";
+                note = String.join("、", generationMissing) + "核心世界生成仍待核实；局部结构、生物或跨维度群系介绍不能替代该依据";
+                evidenceState = new EvidenceState("CORE_GENERATION_PENDING", List.of());
             } else if (gameplay && !semanticEvidence) {
                 status = items.isEmpty() ? "UNVERIFIED" : "PARTIAL";
-                var check = checks.get(r.id());
                 String reason = review != null && !review.evidence().isEmpty() ? "NOT_SELECTED"
                         : check != null && !check.reason().equals("VERIFIED") ? check.reason()
                         : check != null ? "PURPOSE_PENDING" : review == null ? "NO_REVIEW" : "NO_EVIDENCE";
@@ -195,7 +240,7 @@ public final class RequirementCoverage {
                     note += "；本轮已补入关联候选，此审核意见尚未重新裁决";
             } else if (gameplay || addons) {
                 status = "SUPPORTING_EVIDENCE";
-                note = addons ? "已取得当前版本的附属或联动关系依据" : "已保留相关项目，并取得用途依据";
+                note = addons ? "已保留相关项目，并取得附属或联动关系依据" : "已保留相关项目，并取得用途依据";
             } else if (!r.projects().isEmpty()) {
                 status = "VERIFIED_PROJECTS";
                 note = "点名项目及兼容版本已保留";
@@ -212,7 +257,7 @@ public final class RequirementCoverage {
                     var evidence = scoped.get(c.source());
                     var childReviews = evidence == null ? List.<RequirementReview>of()
                             : List.of(new RequirementReview(target.id(), evidence.evidence(), evidence.gap()));
-                    var child = assess(List.of(target), childReviews, graph, selected, identities, metadata, repairStatus, repaired, checks, false).requirements();
+                    var child = assess(List.of(target), childReviews, graph, selected, identities, metadata, repairStatus, repaired, checks, false, generationTargets, projectFacts).requirements();
                     if (child.isEmpty()) continue;
                     var row = child.getFirst();
                     row.mods().forEach(m -> items.put(m.slug(), m));
@@ -238,6 +283,7 @@ public final class RequirementCoverage {
                     } else { status = "CONTEXT"; note = "有效子目标仅包含上下文或已解除项"; }
                 }
             }
+            evidenceState = new EvidenceState(evidenceState.code(), evidenceState.projects(), evidenceState.countsComplete(), generation);
             rows.add(new Row(r.id(), r.source(), status, items.values().stream().limit(truncate ? 24 : Long.MAX_VALUE).toList(), items.size(),
                     missing.stream().limit(truncate ? 24 : Long.MAX_VALUE).toList(), missing.size(), note, List.copyOf(criteria), evidenceState));
         }
@@ -246,19 +292,33 @@ public final class RequirementCoverage {
 
     public static List<String> repairs(Report report, List<RequirementReview> reviews, Set<String> eligible, Set<String> selected) {
         var gaps = report.requirements().stream().filter(r -> r.status().equals("UNVERIFIED") || r.status().equals("PARTIAL"))
-                .filter(r -> r.mods().stream().noneMatch(m -> !m.quote().isBlank())).map(Row::id)
+                .filter(r -> r.mods().stream().noneMatch(m -> !m.quote().isBlank())
+                        || r.evidenceState().generation().stream().anyMatch(g -> g.projects().isEmpty())).map(Row::id)
                 .collect(java.util.stream.Collectors.toSet());
         var result = new LinkedHashSet<String>();
-        var groups = new ArrayList<List<RequirementReview.Contribution>>();
+        record RepairGroup(List<RequirementReview.Contribution> evidence, List<DimensionGeneration.Coverage> generation) {}
+        var groups = new ArrayList<RepairGroup>();
+        var generationById = new HashMap<String, List<DimensionGeneration.Coverage>>();
+        report.requirements().forEach(r -> {
+            generationById.put(r.id(), r.evidenceState().generation());
+            r.criteria().forEach(c -> generationById.put(c.id(), c.evidenceState().generation()));
+        });
         var criterionGaps = new HashMap<String, Set<String>>();
         report.requirements().forEach(r -> criterionGaps.put(r.id(), r.criteria().stream().filter(c -> lacking(c.status()))
                 .map(CriterionRow::source).collect(java.util.stream.Collectors.toSet())));
         for (var r : reviews) {
-            if (gaps.contains(r.id())) groups.add(r.evidence());
+            if (gaps.contains(r.id())) groups.add(new RepairGroup(r.evidence(), generationById.getOrDefault(r.id(), List.of())));
             r.criteria().stream().filter(c -> criterionGaps.getOrDefault(r.id(), Set.of()).contains(c.source()))
-                    .forEach(c -> groups.add(c.evidence()));
+                    .forEach(c -> {
+                        var row = report.requirements().stream().filter(p -> p.id().equals(r.id())).flatMap(p -> p.criteria().stream())
+                                .filter(p -> p.source().equals(c.source())).findFirst().orElseThrow();
+                        groups.add(new RepairGroup(c.evidence(), row.evidenceState().generation()));
+                    });
         }
-        var permitted = groups.stream().map(g -> g.stream().filter(e -> eligible.contains(e.slug()) && !selected.contains(e.slug())).toList()).toList();
+        var permitted = groups.stream().map(g -> g.evidence().stream().filter(e -> eligible.contains(e.slug()) && !selected.contains(e.slug()))
+                .filter(e -> g.generation().stream().noneMatch(d -> d.projects().isEmpty()) || g.generation().stream()
+                        .filter(d -> d.projects().isEmpty()).anyMatch(d -> DimensionGeneration.supports(new DimensionGeneration.Goal(d.dimension(), d.label(), ""), e.quote())))
+                .toList()).toList();
         int rounds = permitted.stream().mapToInt(List::size).max().orElse(0);
         for (int i = 0; i < rounds && result.size() < 3; i++) for (var group : permitted)
             if (i < group.size() && result.size() < 3) result.add(group.get(i).slug());

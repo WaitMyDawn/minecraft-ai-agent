@@ -16,8 +16,8 @@ import java.util.List;
 public class AiAgentService {
     @org.springframework.beans.factory.annotation.Value("${maa.eval.capture-agent-io:false}")
     private boolean captureAgentIo;
-    @org.springframework.beans.factory.annotation.Value("${spring.profiles.active:}")
-    private String activeProfiles = "";
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.core.env.Environment environment;
     /** 原始模型响应与调用成本；进入业务流程前必须通过对应的契约校验。 */
     public record AgentCallResult(String text, long elapsedMs, int modelCalls,
                                   int inputTokens, int outputTokens, int truncatedCalls) {
@@ -81,6 +81,7 @@ public class AiAgentService {
             给某模组找附属时，只将真实核心 slug 放入 expandAddons，Java 负责召回，不能编造附属名。
             count：TOTAL_FILES 含前置，ROOT_MODS 不含自动前置，ADDED_ROOTS 只计算本轮新增。
             通常数量用 APPROXIMATE，用户明确“恰好/严格”才用 EXACT。EDIT 未指定数量时 count=null，不能默认扩到100。
+            NEW 即使用户未报数量也不能 count=null。用户仅要点名集合和必要前置且禁止额外推荐时，用去重后点名集合大小作为 ROOT_MODS 的单值 APPROXIMATE 目标，不预测前置数量，不默认80～120文件；普通扩展式新建的缺省数量仍等待Java确认。
             count 必须包含 min/max/value：单值 min=max=value；区间保留上下界，value 是区间内组装参考值。
             例如 100～200 个总文件：min=100,max=200,value=150，不能把区间压缩成单值目标。
             requirements 逐条复制 Java 原文需求片段的 id/source，仅映射本轮原文，不重复历史片段。
@@ -111,6 +112,11 @@ public class AiAgentService {
             用户明确“不额外推荐”或“只添加点名模组”时，不以数量目标扩大 mustHave/add，不自动规划额外核心或附属；只有原文明确要求的附属可以扩张。必需前置仍由 Java 补入。
             群系、结构和地形按原文分别规划；没有地形要求时不强制添加 TERRAIN，不用一个 worldgen 类别代替用途。
             仅下界/末地的结构或群系要求保留维度范围，不引入未请求的主世界内容。
+            对“丰富下界和末地生态”等维度综合扩展，分别保留各维度原文子目标，searches优先含对应维度核心地貌/整体世界生成检索，再考虑结构与生物。原文明确要求大幅改造或核心生成时同样处理。
+            维度综合扩展不能只检索地牢或生物；但仅增加结构/生物/局部群系、不改地形、保持原版生成等限制优先，不擅自扩大改动。核心生成候选依据介绍和兼容版本动态发现，不将固定模组名作为必选。
+            核心世界生成指大量群系、丰富地形或大规模结构带来的成体系维度变化，不要求三者齐全，单纯加高地形不等于丰富生成。
+            除非原文明确要求，不加入空岛、虚空、超平坦等极端生成预设，也不加入删除既有核心结构、生物等主要内容的附加包。
+            多维度项目可以考虑，但不能把跨维度群系总数当成每个维度分别具备丰富内容的证明。
             必须保留每个点名项目；包含列表不能遗漏 Alex 生物或海灵物语。未识别的名字保留原文并 CLARIFY，不猜 slug。
             附属扩展映射核心；明确包内联动采用 PACK_INTEGRATIONS。项目和能力列表是规划目标，不能冒充满足事实。
             新建时优先给真实核心，数量按用户规模选择，不强制写10个核心；剩余配额交给搜索。
@@ -202,6 +208,9 @@ public class AiAgentService {
     }
 
     private static final String COMPACT_REVIEW = "\n输出紧凑JSON。每个子目标优先选1～2条最有代表性的引用，不需要列出所有已批准项目。"
+            + "Java提供维度核心生成目标时，每个维度优先保留有该维度地貌或大规模生成依据的兼容候选；quote须同时包含对应维度和生成改动。"
+            + "大量群系、丰富地形或大规模结构均可提供核心生成依据，不要求三者齐全；普通单体结构、生物或单纯加高不构成证明。跨维度项目可以考虑，但群系总数不等于每个维度均丰富。"
+            + "未明确要求时排除空岛、虚空、超平坦等极端世界预设及削减既有核心主要内容的附加包；不得为补足数量加入它们。"
             + "quote用能证明用途的最短连续原文，建议不超过160字；purpose和否决explanation建议不超过40字，gap不超过60字。"
             + "不得截短或改写source，不得丢失规划子目标；有criteria的父项仍须evidence=[]、gap=空字符串。";
 
@@ -213,9 +222,7 @@ public class AiAgentService {
 
     private AgentCallResult call(String instructions, String input, String key, int outputLimit) {
         long started = System.nanoTime();
-        boolean capture = captureAgentIo && java.util.Arrays.asList(activeProfiles.split(",")).contains("eval")
-                && !java.util.Arrays.asList(activeProfiles.split(",")).contains("prod")
-                && !java.util.Arrays.asList(activeProfiles.split(",")).contains("production");
+        boolean capture = capturingAgentIo();
         if (capture) yagen.waitmydawn.maa.logging.MaaLog.user("[Agent input]\nSYSTEM:\n" + redact(instructions) + "\nUSER:\n" + redact(input));
         TokenUsageCollector usage = new TokenUsageCollector();
         var response = modelCalls.call(() -> createModel(key, usage, outputLimit).chat(
@@ -227,8 +234,10 @@ public class AiAgentService {
         return new AgentCallResult(response.aiMessage().text(), (System.nanoTime() - started) / 1_000_000,
                 usage.modelCalls(), usage.inputTokens(), usage.outputTokens(), truncated);
     }
+    private boolean capturingAgentIo() {
+        return captureAgentIo && yagen.waitmydawn.maa.runtime.EvaluationAccess.allowed(environment);
+    }
     static String redact(String text) {
-        return text.replaceAll("sk-[A-Za-z0-9_-]{8,}", "[REDACTED_KEY]")
-                .replaceAll("(?i)(Bearer\\s+)[A-Za-z0-9._~-]+", "$1[REDACTED_TOKEN]");
+        return yagen.waitmydawn.maa.logging.SecretRedactor.redact(text);
     }
 }

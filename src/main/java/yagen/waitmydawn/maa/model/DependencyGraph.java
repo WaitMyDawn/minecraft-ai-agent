@@ -19,6 +19,8 @@ public class DependencyGraph {
     public final Map<String, tools.jackson.databind.JsonNode> selectedVersions = new ConcurrentHashMap<>();
     public final Set<String> pinnedSlugs = ConcurrentHashMap.newKeySet();
     public final Set<String> versionConflicts = ConcurrentHashMap.newKeySet();
+    /** 项目取数成功但选版失败时仍保留身份，用于依赖诊断与引用去重。 */
+    public final Map<String, String> projectAliases = new ConcurrentHashMap<>();
 
     public DependencyGraph() {
         this.allSlugs = ConcurrentHashMap.newKeySet();

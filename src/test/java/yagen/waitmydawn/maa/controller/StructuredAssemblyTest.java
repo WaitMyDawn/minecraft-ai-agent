@@ -15,6 +15,59 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class StructuredAssemblyTest {
+    @Test void confirmedProjectFactsReachFinalCoverageEvenWhenNamedOnlyBuildSkipsCritic() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        var base = intent(BuildIntent.Mode.NEW, List.of("terrain-core"), List.of(),
+                new BuildIntent.CountTarget(1, BuildIntent.CountScope.ROOT_MODS, BuildIntent.Precision.EXACT));
+        var requirement = new BuildRequirement("r-0000000000000001", "丰富下界生态", BuildRequirement.Kind.CAPABILITY,
+                List.of(), List.of(), List.of(), List.of());
+        var plan = new BuildIntent(1, base.mode(), base.reply(), base.name(), base.environment(), base.count(), base.mustHave(), base.add(),
+                base.remove(), base.exclude(), base.expandAddons(), base.replacementPolicy(), base.searchIntents(), base.excludedCategories(),
+                base.maxDownloads(), base.constraintChanges(), List.of(requirement));
+        var version = json.createObjectNode().put("id", "VCore").put("project_id", "PCore"); version.putArray("dependencies");
+        when(api.getLatestCompatibleVersionBySlug(anyString(), anyString(), anyString())).thenReturn(version);
+        when(engine.resolveCachedResult(anySet(), anyString(), anyString(), any())).thenAnswer(call -> {
+            var graph = new DependencyGraph(); graph.allSlugs.add("terrain-core"); graph.selectedVersions.put("terrain-core", version);
+            return new ResolutionResult(graph, ResolutionResult.Status.COMPLETE, Set.of("terrain-core"), List.of(), List.of(), 500, false);
+        });
+        var state = new PackSessionState(); state.setGenerationFacts(Map.of("terrain-core", "Overhauls Nether terrain with many new biomes"));
+        String result = ReflectionTestUtils.invokeMethod(controller, "processAndAssembleBlueprint", new AgentContractCodec().write(plan), "",
+                "仅添加terrain-core，不额外推荐", "fixture-key", "fixture-session", state, Set.<String>of(), KnowledgeRule.SourceType.ADMIN,
+                new AiAgentService.AgentCallResult("", 1, 1, 10, 10), "1.21.1", "neoforge", null);
+        var match = java.util.regex.Pattern.compile("<requirement_report>(.*?)</requirement_report>", java.util.regex.Pattern.DOTALL).matcher(result);
+        assertTrue(match.find(), result);
+        var row = json.readTree(match.group(1)).path("requirements").get(0);
+        assertEquals("SUPPORTING_EVIDENCE", row.path("status").asText());
+        assertEquals("PROJECT_GENERATION", row.path("mods").get(0).path("evidenceType").asText());
+        verifyNoInteractions(agents);
+    }
+    @Test void dimensionCoreRemainsInTheCompatiblePoolAheadOfPopularLocalStructures() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        var hits = json.createObjectNode(); var values = hits.putArray("hits");
+        for (int i = 0; i < 20; i++) values.addObject().put("slug", "nether-structure-" + i).put("title", "Nether structures")
+                .put("description", "Adds Nether structures and fortresses").put("downloads", 10000000);
+        values.addObject().put("slug", "terrain-core").put("title", "Dimension Expansion")
+                .put("description", "Nether expansion with custom terrain and new biomes").put("downloads", 100);
+        when(api.searchPage(anyString(), anyInt(), anyInt(), nullable(String.class), anyString())).thenReturn(hits);
+        when(api.getLatestCompatibleVersionBySlug(anyString(), anyString(), anyString())).thenReturn(json.createObjectNode().put("id", "compatible-version"));
+        var requirement = new BuildRequirement("r-0000000000000001", "丰富下界生态", BuildRequirement.Kind.CAPABILITY,
+                List.of(), List.of(), List.of(), List.of(new BuildIntent.SearchIntent("adventure", 100, List.of("nether structures"))));
+        var base = intent(BuildIntent.Mode.NEW, List.of(), List.of(), new BuildIntent.CountTarget(20, BuildIntent.CountScope.TOTAL_FILES, BuildIntent.Precision.APPROXIMATE));
+        var plan = new BuildIntent(1, base.mode(), base.reply(), base.name(), base.environment(), base.count(), base.mustHave(), base.add(),
+                base.remove(), base.exclude(), base.expandAddons(), base.replacementPolicy(), base.searchIntents(), base.excludedCategories(),
+                base.maxDownloads(), base.constraintChanges(), List.of(requirement));
+        var hints = new LinkedHashMap<String, Set<String>>(); var budget = new RetrievalBudget();
+        List<?> pool = ReflectionTestUtils.invokeMethod(controller, "buildRequirementPool", List.of(requirement), Set.of(), "neoforge", "1.21.1",
+                base.maxDownloads(), new BuildExecutionPlan(plan, Set.of(), Set.of()), budget, "fixture-session", hints);
+        assertNotNull(pool);
+        assertTrue(hints.containsKey("terrain-core"), hints.toString());
+        assertTrue(hints.get("terrain-core").contains(requirement.id() + "::generation:nether"));
+        var searches = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(api, atLeastOnce()).searchPage(searches.capture(), anyInt(), anyInt(), nullable(String.class), anyString());
+        assertEquals("nether terrain overhaul", searches.getAllValues().getFirst());
+        assertTrue(budget.snapshot().get("searchQueries") <= RetrievalBudget.MAX_SEARCHES);
+        assertTrue(pool.size() <= 8);
+    }
     @Test void namedOnlyCountTargetCannotTriggerFillersButStillResolvesRequiredDependencies() {
         var base = intent(BuildIntent.Mode.NEW, List.of("core-mod"), List.of(),
                 new BuildIntent.CountTarget(14, BuildIntent.CountScope.TOTAL_FILES, BuildIntent.Precision.APPROXIMATE, 8, 20));
@@ -44,6 +97,12 @@ class StructuredAssemblyTest {
         engine = mock(DependencyEngine.class);
         agents = mock(AiAgentService.class);
         api = mock(ModrinthApiClient.class);
+        when(api.getProjectsBatch(anyCollection())).thenAnswer(call -> {
+            var facts = new LinkedHashMap<String, tools.jackson.databind.JsonNode>();
+            for (String slug : (Collection<String>) call.getArgument(0)) facts.put(slug,
+                    new tools.jackson.databind.ObjectMapper().createObjectNode().put("slug", slug).put("description", "Adds ordinary content"));
+            return facts;
+        });
         var expansion = mock(ExpansionTracker.class);
         when(expansion.factor(anyString(), anyString())).thenReturn(2.0);
         controller = new ChatController(agents, mock(ModrinthCacheService.class), null, engine, api,
@@ -69,11 +128,63 @@ class StructuredAssemblyTest {
                 new AiAgentService.AgentCallResult("", 1, 1, 10, 10), "1.21.1", "neoforge", null);
     }
 
+    @Test void inferredExtremeRootIsExcludedButExplicitSkyblockRequestCanKeepIt() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        when(api.getProjectsBatch(anyCollection())).thenReturn(Map.of("world-preset",
+                json.createObjectNode().put("slug", "world-preset").put("description", "Classic Skyblock with infinite void generation")));
+        var plan = intent(BuildIntent.Mode.NEW, List.of("world-preset"), List.of(),
+                new BuildIntent.CountTarget(1, BuildIntent.CountScope.ROOT_MODS, BuildIntent.Precision.EXACT));
+        String result = assemble(plan, "");
+        assertFalse(result.contains("<mods>world-preset</mods>"), result);
+        var state = new PackSessionState();
+        String explicit = ReflectionTestUtils.invokeMethod(controller, "processAndAssembleBlueprint", new AgentContractCodec().write(plan), "",
+                "构建一个空岛整合包", "fixture-key", "fixture-session", state, Set.<String>of(), KnowledgeRule.SourceType.ADMIN,
+                new AiAgentService.AgentCallResult("", 1, 1, 10, 10), "1.21.1", "neoforge", null);
+        assertTrue(explicit.contains("<mods>world-preset</mods>"), explicit);
+    }
+
+    @Test void dependencyIntroducedExtremePresetStopsPublicationWithoutRemovingItsRequiredEdge() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        when(api.getProjectsBatch(anyCollection())).thenAnswer(call -> {
+            var facts = new LinkedHashMap<String, tools.jackson.databind.JsonNode>();
+            for (String slug : (Collection<String>) call.getArgument(0)) facts.put(slug, json.createObjectNode().put("slug", slug)
+                    .put("description", slug.equals("hidden-preset") ? "Creates worlds with missing terrain" : "Adds an adventure system"));
+            return facts;
+        });
+        when(engine.resolveCachedResult(anySet(), anyString(), anyString(), any())).thenAnswer(call -> {
+            var graph = new DependencyGraph(); graph.allSlugs.addAll(Set.of("adventure-core", "hidden-preset"));
+            graph.addEdge("adventure-core", "hidden-preset");
+            return new ResolutionResult(graph, ResolutionResult.Status.COMPLETE, Set.of("adventure-core"), List.of(), List.of(), 500, false);
+        });
+        var plan = intent(BuildIntent.Mode.NEW, List.of("adventure-core"), List.of(),
+                new BuildIntent.CountTarget(2, BuildIntent.CountScope.TOTAL_FILES, BuildIntent.Precision.APPROXIMATE));
+        String result = assemble(plan, "");
+        assertFalse(result.contains("<mods>"), result);
+        assertTrue(result.contains("hidden-preset"), result);
+        assertTrue(result.contains("本轮未修改清单"), result);
+    }
+
+    @Test void bodyOnlySubtractiveAddonCannotReachCriticOrBackfill() {
+        prepareAddonPool(new AgentContractCodec().write(new ReviewDecision(1, List.of("create-good"), List.of(), true)));
+        var json = new tools.jackson.databind.ObjectMapper();
+        when(api.getProjectsBatch(anyCollection())).thenAnswer(call -> {
+            var facts = new LinkedHashMap<String, tools.jackson.databind.JsonNode>();
+            for (String slug : (Collection<String>) call.getArgument(0)) facts.put(slug, json.createObjectNode().put("slug", slug)
+                    .put("description", "Adds content").put("body", slug.equals("create-vetoed") ? "Removes structures, mobs and bosses from a core mod" : "Adds machines"));
+            return facts;
+        });
+        String result = assemble(addonIntent(), "create");
+        assertTrue(result.contains("<mods>create,create-good</mods>"), result);
+        verify(agents).criticPools(anyString(), anyString(), eq(Set.of("create-good")), anyInt());
+    }
+
     @Test void editAddsOnlyDeltaAndDoesNotGrowToDefaultHundred() {
         String result = assemble(intent(BuildIntent.Mode.EDIT, List.of("journeymap"), List.of(), null), "jei,create");
         assertTrue(result.contains("<mods>create,jei,journeymap</mods>"), result);
         assertTrue(result.contains("\"target\":3"), result);
-        verifyNoInteractions(agents, api);
+        verifyNoInteractions(agents);
+        verify(api, never()).search(anyString(), anyInt(), anyString());
+        verify(api).getProjectsBatch(List.of("journeymap"));
     }
 
     @Test void newBuildDoesNotCarryOldPackOrSilentlyCapNamedModsAtThirty() {
@@ -141,6 +252,32 @@ class StructuredAssemblyTest {
                 .thenReturn(new AiAgentService.AgentCallResult(decision, 1, 1, 10, 10));
     }
 
+    @Test void explicitlyNamedBridgeWithMissingPartnerPausesBeforeDependencyAssembly() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        var core = json.createObjectNode().put("id", "CORE").put("slug", "cooking-core").put("title", "Cooking Core");
+        core.putArray("categories").add("food");
+        var peer = json.createObjectNode().put("id", "PEER").put("slug", "magic-core").put("title", "Magic Core");
+        peer.putArray("categories").add("magic");
+        var bridge = json.createObjectNode().put("id", "BRIDGE").put("slug", "bridge")
+                .put("description", "Integration between cooking-core and magic-core");
+        bridge.putArray("categories").add("food");
+        when(api.getProjectsBatch(anyCollection())).thenAnswer(call -> {
+            var facts = new HashMap<String, tools.jackson.databind.JsonNode>();
+            var all = Map.of("cooking-core", core, "bridge", bridge, "PEER", peer, "CORE", core);
+            for (String key : (Collection<String>) call.getArgument(0)) if (all.containsKey(key)) facts.put(key, all.get(key));
+            return facts;
+        });
+        var version = json.createObjectNode().put("id", "bridge-v").put("project_id", "BRIDGE");
+        var deps = version.putArray("dependencies");
+        deps.addObject().put("project_id", "CORE").put("dependency_type", "required");
+        deps.addObject().put("project_id", "PEER").put("dependency_type", "optional");
+        when(api.getLatestCompatibleVersionBySlug(eq("bridge"), anyString(), anyString())).thenReturn(version);
+        String result = assemble(intent(BuildIntent.Mode.EDIT, List.of("bridge"), List.of(), null), "cooking-core");
+        assertTrue(result.contains("magic-core"), result);
+        assertTrue(result.contains("本轮未修改清单"), result);
+        assertFalse(result.contains("<mods>"), result);
+        verifyNoInteractions(engine);
+    }
     @Test void explicitVetoCannotBeReintroducedByBackfill() {
         prepareAddonPool(new AgentContractCodec().write(new ReviewDecision(1, List.of("create-good"),
                 List.of(new ReviewDecision.Rejection("create-vetoed", ReviewDecision.Reason.OFF_TOPIC, "主题不符")), true)));

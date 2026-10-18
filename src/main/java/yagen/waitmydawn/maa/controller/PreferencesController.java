@@ -355,9 +355,9 @@ public class PreferencesController {
             @RequestBody Map<String, Object> body) {
         Long uid = requireUser(token);
         var opt = modRepo.findById(id);
-        if (opt.isEmpty()) return ResponseEntity.ok(Map.of("error", "not found"));
+        if (opt.isEmpty() || !uid.equals(opt.get().getUserId()))
+            return ResponseEntity.status(404).body(Map.of("error", "偏好不存在"));
         ModPreference mp = opt.get();
-        if (!mp.getUserId().equals(uid)) return ResponseEntity.ok(Map.of("error", "not yours"));
 
         // 修改构建次数
         if (body.containsKey("buildCount")) {

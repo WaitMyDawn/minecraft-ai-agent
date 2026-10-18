@@ -9,7 +9,10 @@ public record DependencyClosure(Map<String, String> versions, List<Requirement> 
     public enum Status { COMPLETE, INCOMPLETE, UNVERIFIED }
     public enum Severity { BROKEN, UNKNOWN }
     public record Requirement(String dependent, String dependency, String versionId) {}
-    public record Issue(String dependent, String dependency, String code, Severity severity) {}
+    public record Issue(String dependent, String dependency, String code, Severity severity, String versionId) {
+        public Issue { versionId = Objects.requireNonNullElse(versionId, ""); }
+        public Issue(String dependent, String dependency, String code, Severity severity) { this(dependent, dependency, code, severity, ""); }
+    }
     public record Report(Status status, List<Issue> issues) {}
     public DependencyClosure {
         versions = Map.copyOf(versions);
@@ -20,6 +23,7 @@ public record DependencyClosure(Map<String, String> versions, List<Requirement> 
     public static DependencyClosure capture(DependencyGraph graph, List<ResolutionResult.Unresolved> failures,
                                              Map<String, String> projectAliases) {
         Map<String, String> aliases = new HashMap<>(projectAliases);
+        aliases.putAll(graph.projectAliases);
         Map<String, String> byVersion = new HashMap<>();
         Map<String, String> versions = new TreeMap<>();
         for (var entry : graph.selectedVersions.entrySet()) {
@@ -57,7 +61,13 @@ public record DependencyClosure(Map<String, String> versions, List<Requirement> 
             if (graph.allSlugs.contains(dependent)) {
                 Severity severity = failure.reason() == ResolutionResult.Reason.UPSTREAM_UNAVAILABLE
                         || failure.reason() == ResolutionResult.Reason.BUDGET_EXCEEDED ? Severity.UNKNOWN : Severity.BROKEN;
-                issues.add(new Issue(dependent, failure.slug(), failure.reason().name(), severity));
+                String dependency = aliases.getOrDefault(failure.slug(), byVersion.getOrDefault(failure.slug().replaceFirst("^vid:", ""), failure.slug()));
+                issues.add(new Issue(dependent, dependency, failure.reason().name(), severity));
+                JsonNode selected = graph.selectedVersions.get(dependent);
+                if (failure.reason() == ResolutionResult.Reason.NO_VERSION_FOR_ENV && selected != null) {
+                    var loaders = new HashSet<String>(); selected.path("loaders").forEach(l -> { if (l.isTextual() && !l.asText().isBlank()) loaders.add(l.asText().toLowerCase(Locale.ROOT)); });
+                    if (loaders.size() > 1) issues.add(new Issue(dependent, dependency, "MULTILOADER_DEPENDENCY_UNVERIFIED", Severity.UNKNOWN));
+                }
             } else if ("(版本约束)".equals(dependent) && graph.allSlugs.contains(failure.slug())) {
                 issues.add(new Issue(failure.slug(), failure.slug(), failure.reason().name(), Severity.BROKEN));
             }
@@ -76,17 +86,16 @@ public record DependencyClosure(Map<String, String> versions, List<Requirement> 
     public Report inspect(Set<String> selected) {
         var issues = new LinkedHashSet<Issue>();
         for (var issue : unresolved) if (selected.contains(issue.dependent())) issues.add(issue);
-        Set<String> unknownDependents = new HashSet<>();
-        for (var issue : issues) if (issue.severity() == Severity.UNKNOWN) unknownDependents.add(issue.dependent());
         for (var requirement : requirements) {
             if (!selected.contains(requirement.dependent())) continue;
             if (!selected.contains(requirement.dependency())) {
                 // 未完成上游查询不能被元数据引用的缺席升级为“确定不存在”。
-                boolean unknown = !versions.containsKey(requirement.dependency()) && unknownDependents.contains(requirement.dependent());
-                if (!unknown) issues.add(new Issue(requirement.dependent(), requirement.dependency(), "MISSING_REQUIRED", Severity.BROKEN));
+                boolean explained = issues.stream().anyMatch(i -> i.dependent().equals(requirement.dependent())
+                        && i.dependency().equals(requirement.dependency()));
+                if (!explained) issues.add(new Issue(requirement.dependent(), requirement.dependency(), "MISSING_REQUIRED", Severity.BROKEN, requirement.versionId()));
             } else if (!requirement.versionId().isBlank()
                     && !requirement.versionId().equals(versions.get(requirement.dependency()))) {
-                issues.add(new Issue(requirement.dependent(), requirement.dependency(), "VERSION_MISMATCH", Severity.BROKEN));
+                issues.add(new Issue(requirement.dependent(), requirement.dependency(), "VERSION_MISMATCH", Severity.BROKEN, requirement.versionId()));
             }
         }
         List<Issue> ordered = issues.stream().sorted(Comparator.comparing(Issue::dependent).thenComparing(Issue::dependency).thenComparing(Issue::code)).toList();

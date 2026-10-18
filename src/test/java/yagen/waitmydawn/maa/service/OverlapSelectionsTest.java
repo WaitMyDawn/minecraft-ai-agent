@@ -11,6 +11,51 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class OverlapSelectionsTest {
+    @Test void cancellingACoreAlsoRetractsItsProjectMetadataGenerationProof() {
+        var selections = new OverlapSelections();
+        String original = draft(false);
+        var match = java.util.regex.Pattern.compile("<requirement_report>(.*?)</requirement_report>", java.util.regex.Pattern.DOTALL).matcher(original);
+        assertTrue(match.find()); var report = json.readTree(match.group(1));
+        var row = (tools.jackson.databind.node.ObjectNode) report.path("requirements").get(0);
+        var mod = (tools.jackson.databind.node.ObjectNode) row.path("mods").get(0);
+        mod.put("evidenceType", "PROJECT_GENERATION").put("quote", "Overhauls Nether terrain with many new biomes");
+        var state = row.putObject("evidenceState").put("code", "VERIFIED").put("countsComplete", true);
+        state.putArray("projects"); state.putArray("generation").addObject().put("dimension", "nether").put("label", "下界").putArray("projects").add("animals-b");
+        String reply = original.replace(match.group(), "<requirement_report>" + MessageJson.write(report) + "</requirement_report>");
+        String ticket = prepare(selections, false, reply);
+        String result = selections.admit(ticket, 1L, 2L, choices("animals-a"), OverlapSelections.Confirmed::complete);
+        var finalMatch = java.util.regex.Pattern.compile("<requirement_report>(.*?)</requirement_report>", java.util.regex.Pattern.DOTALL).matcher(result);
+        assertTrue(finalMatch.find()); var finalRow = json.readTree(finalMatch.group(1)).path("requirements").get(0);
+        assertTrue(finalRow.path("mods").isEmpty());
+        assertEquals("CORE_GENERATION_PENDING", finalRow.path("evidenceState").path("code").asText());
+        assertTrue(finalRow.path("evidenceState").path("generation").get(0).path("projects").isEmpty());
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void removingTheCoreCannotLeaveDimensionCoverageVerifiedThroughAnUnrelatedQuote(boolean truncated) {
+        var selections = new OverlapSelections();
+        String original = draft(false);
+        var row = json.createObjectNode().put("id", "r-0000000000000001").put("source", "丰富下界生态")
+                .put("status", "SUPPORTING_EVIDENCE").put("modCount", 2).put("missingCount", 0);
+        row.putArray("mods").addObject().put("slug", "animals-b").put("quote", "Nether expansion with custom terrain");
+        ((tools.jackson.databind.node.ArrayNode)row.path("mods")).addObject().put("slug", "other").put("quote", "Adds Nether structures");
+        if (truncated) {
+            ((tools.jackson.databind.node.ArrayNode)row.path("mods")).remove(0);
+            row.put("modCount", 25);
+        }
+        row.putArray("missing"); row.putArray("criteria");
+        var state = row.putObject("evidenceState").put("code", "VERIFIED").put("countsComplete", true);
+        state.putArray("projects");
+        state.putArray("generation").addObject().put("dimension", "nether").put("label", "下界").putArray("projects").add("animals-b");
+        var report = json.createObjectNode(); report.putArray("requirements").add(row);
+        String replacement = original.replaceFirst("(?s)<requirement_report>.*?</requirement_report>",
+                java.util.regex.Matcher.quoteReplacement("<requirement_report>" + MessageJson.write(report) + "</requirement_report>"));
+        String ticket = prepare(selections, false, replacement);
+        String result = selections.admit(ticket, 1L, 2L, choices("animals-a"), OverlapSelections.Confirmed::complete);
+        assertTrue(result.contains("CORE_GENERATION_PENDING"), result);
+        assertTrue(result.contains("\"status\":\"PARTIAL\""), result);
+        assertTrue(result.contains("Adds Nether structures"), result);
+    }
     private final ObjectMapper json = new ObjectMapper();
     private final ModrinthApiClient api = mock(ModrinthApiClient.class);
     private final Map<String, String> payload = Map.of("uuid", "session-one", "prompt", "生态包", "currentMods", "", "assembly", "");
@@ -74,6 +119,24 @@ class OverlapSelectionsTest {
         assertFalse(repeated.contains("replacement_options"));
         assertTrue(repeated.contains("<mods>"));
     }
+    @Test void duplicateInventoryHudsUseTheSameProtectedAndExplicitConfirmationBoundary() {
+        var selections = new OverlapSelections();
+        when(api.getProjectsBatch(anyCollection())).thenReturn(Map.of(
+                "animals-a", json.readTree("{\"description\":\"Displays your inventory on screen\",\"categories\":[\"utility\"]}"),
+                "animals-b", json.readTree("{\"description\":\"Shows player inventory as an overlay\",\"categories\":[\"utility\"]}")));
+        String waiting = selections.prepare(1L, 2L, payload, draft(true), assembly(true), closure(), api);
+        assertFalse(waiting.contains("<mods>"));
+        String optionsText = waiting.substring(waiting.indexOf("<replacement_options>") + "<replacement_options>".length(), waiting.indexOf("</replacement_options>"));
+        var options = json.readTree(optionsText);
+        assertEquals("inventory-hud", options.path("groups").get(0).path("original").asText());
+        assertTrue(options.path("groups").get(0).path("explanation").asText().contains("重复显示"));
+        var choice = new HashMap<>(payload);
+        choice.put("replacementChoices", json.writeValueAsString(Map.of("inventory-hud",
+                Map.of("slugs", List.of("animals-a"), "drop", false, "manualSlug", ""))));
+        String result = selections.admit(options.path("ticket").asText(), 1L, 2L, choice, OverlapSelections.Confirmed::complete);
+        assertTrue(result.contains("<mods>animals-a,other</mods>"), result);
+        assertFalse(result.contains("iconUrl"));
+    }
     @Test void selectingOneOfTwoSupportingProjectsRetainsRemainingPurposeEvidence() {
         String reply = draft(false).replace("\"modCount\":1", "\"modCount\":2")
                 .replace("\"mods\":[{\"slug\":\"animals-b\"", "\"mods\":[{\"slug\":\"animals-a\",\"purpose\":\"生态\",\"quote\":\"Adds real-world animals\"},{\"slug\":\"animals-b\"");
@@ -97,7 +160,7 @@ class OverlapSelectionsTest {
         assertEquals(0, row.path("missingCount").asInt());
     }
     @Test void changedIntegrationPartnerDoesNotTurnRetainedIdentityOrPurposeIntoMissingProject() {
-        for (String type : List.of("PROJECT_IDENTITY", "REVIEW_QUOTE", "VERSION_RELATION")) {
+        for (String type : List.of("PROJECT_IDENTITY", "REVIEW_QUOTE", "VERSION_RELATION", "DESCRIPTION_RELATION")) {
             var report = json.readTree("""
                     {"mods":[{"slug":"retained-addon","purpose":"作用","quote":"Adds content","evidenceType":"%s"}],
                     "modCount":1,"missing":[],"missingCount":0,"status":"SUPPORTING_EVIDENCE","criteria":[],"note":""}
@@ -105,7 +168,7 @@ class OverlapSelectionsTest {
             org.springframework.test.util.ReflectionTestUtils.invokeMethod(OverlapSelections.class, "adjustCoverage", report,
                     Set.of("removed-partner"), Set.of("removed-partner", "retained-addon"));
             assertEquals(0, report.path("missingCount").asInt(), type);
-            if (type.equals("VERSION_RELATION")) {
+            if (Set.of("VERSION_RELATION", "DESCRIPTION_RELATION").contains(type)) {
                 assertEquals("RELATION_PENDING", report.path("evidenceState").path("code").asText());
                 assertEquals("UNVERIFIED", report.path("status").asText());
             } else {
@@ -113,6 +176,18 @@ class OverlapSelectionsTest {
                 assertEquals("SUPPORTING_EVIDENCE", report.path("status").asText(), type);
             }
         }
+    }
+    @Test void explicitPartnerRemovalWithdrawsRelationEvenWithoutLegacyTraceLinks() {
+        var report = json.readTree("""
+                {"mods":[{"slug":"retained-addon","purpose":"联动","quote":"Integration between cooking-core and factory",
+                "evidenceType":"DESCRIPTION_RELATION","partners":["cooking-core","factory"]}],
+                "modCount":1,"missing":[],"missingCount":0,"status":"SUPPORTING_EVIDENCE","criteria":[],"note":""}
+                """);
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(OverlapSelections.class, "adjustCoverage", report,
+                Set.of("factory"), Set.of());
+        assertEquals("RELATION_PENDING", report.path("evidenceState").path("code").asText());
+        assertEquals("UNVERIFIED", report.path("status").asText());
+        assertEquals(0, report.path("missingCount").asInt());
     }
     @Test void actualRemovalOfNamedProjectIsDistinctFromLossOfPurposeEvidence() {
         var report = json.readTree("""

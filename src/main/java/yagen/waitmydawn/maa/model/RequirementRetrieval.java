@@ -17,9 +17,21 @@ public final class RequirementRetrieval {
     }
     /** 先给每条要求一次召回机会，再进行次级关键词检索，避免长词表占尽共享预算。 */
     public static List<Query> queries(List<BuildRequirement> requirements, Set<String> excludedCategories) {
-        var rows = requirements.stream().map(r -> r.searches().stream()
+        return queries(requirements, excludedCategories, DimensionGeneration.targets(requirements));
+    }
+    public static List<Query> queries(List<BuildRequirement> requirements, Set<String> excludedCategories,
+                                      Map<String, List<DimensionGeneration.Goal>> generationTargets) {
+        var ordered = new ArrayList<>(requirements);
+        ordered.sort(Comparator.comparing(r -> !generationTargets.containsKey(r.id())));
+        var rows = ordered.stream().map(r -> {
+            var row = new ArrayList<Query>();
+            if (!excludedCategories.contains("worldgen")) for (var goal : generationTargets.getOrDefault(r.id(), List.of()))
+                row.add(new Query(r.id(), "worldgen", goal.query()));
+            r.searches().stream()
                 .filter(s -> !excludedCategories.contains(s.category()))
-                .flatMap(s -> s.keywords().stream().map(k -> new Query(r.id(), s.category(), k))).toList()).toList();
+                .flatMap(s -> s.keywords().stream().map(k -> new Query(r.id(), s.category(), k))).forEach(row::add);
+            return row.stream().distinct().toList();
+        }).toList();
         var result = new ArrayList<Query>();
         int max = rows.stream().mapToInt(List::size).max().orElse(0);
         for (int i = 0; i < max; i++) for (var row : rows) if (i < row.size()) result.add(row.get(i));

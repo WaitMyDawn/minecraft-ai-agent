@@ -95,3 +95,4 @@ if (failed > 0) {
     process.exit(1);
 }
 console.log('\nALL CHECKS PASSED');
+await import('./fe-recovery-check.mjs');

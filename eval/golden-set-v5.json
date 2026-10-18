@@ -1,0 +1,39 @@
+{
+  "version": "5.0",
+  "frozenAt": "2026-10-16",
+  "notes": "维度生成目标与确认增量集。4场景6次业务请求；显式SELECT_RECOMMENDED是测试作者的选择操作，不是超时默认接受。候选不足由固定事实回归验证，不将上游存在性写成永久事实。",
+  "cases": [
+    {
+      "id": "D01", "layer": "agent", "difficulty": "tricky", "title": "仅末地核心生成与候选确认",
+      "capabilities": ["dimension-generation", "confirmation", "single-dimension"],
+      "manualReview": ["是否只选择末地生成核心；候选身份及组合风格仍需人工判断"],
+      "turns": [
+        {"prompt": "新建NeoForge1.21.1整合包，约12个模组，大幅改造末地地形与世界生成，增加末地探索内容；不需要主世界或下界内容。", "assert": {"facts": {"/replacement_options/kind": {"equals": "GENERATION"}, "/trace/awaitingInput": {"equals": true}}}},
+        {"confirmation": {"kind": "GENERATION", "strategy": "SELECT_RECOMMENDED"}, "assert": {"minMods": 2, "envMc": "1.21.1", "envLoader": "neoforge", "generation": {"required": ["end"], "forbidden": ["nether", "overworld"]}, "facts": {"/trace/awaitingInput": {"equals": false}, "/trace/retrieval/searchQueries": {"max": 42}}, "resolutionReported": true, "replyNotContains": ["未通过结构化校验", "组装过程中出错", "可直接运行"]}}
+      ]
+    },
+    {
+      "id": "D02", "layer": "agent", "difficulty": "adversarial", "title": "下界末地独立目标与确认续建",
+      "capabilities": ["dimension-generation", "confirmation", "multi-dimension"],
+      "manualReview": ["两个维度是否各有实际生成核心；局部结构不能替代其中一个维度的核心改造"],
+      "turns": [
+        {"prompt": "新建NeoForge1.21.1整合包，约20个模组，分别大幅改造下界和末地地形与世界生成，并补充探索结构；主世界保持原样。", "assert": {"facts": {"/replacement_options/kind": {"equals": "GENERATION"}, "/trace/awaitingInput": {"equals": true}}}},
+        {"confirmation": {"kind": "GENERATION", "strategy": "SELECT_RECOMMENDED"}, "assert": {"minMods": 2, "generation": {"required": ["nether", "end"], "forbidden": ["overworld"]}, "facts": {"/trace/awaitingInput": {"equals": false}, "/trace/retrieval/searchQueries": {"max": 42}}, "resolutionReported": true, "replyNotContains": ["未通过结构化校验", "组装过程中出错", "可直接运行"]}}
+      ]
+    },
+    {
+      "id": "D03", "layer": "agent", "difficulty": "tricky", "title": "局部末地结构不升级为维度生成改造",
+      "capabilities": ["dimension-generation", "scope-boundary"],
+      "prompt": "新建NeoForge1.21.1整合包，约8个模组，只增加末地遗迹、地牢等探索结构，不改末地地形或群系生成，不需要主世界和下界内容。",
+      "manualReview": ["结构项目是否符合局部要求；报告无核心目标不能证明所有项目都没有额外生成行为"],
+      "assert": {"minMods": 1, "generation": {"forbidden": ["end", "nether", "overworld"]}, "facts": {"/trace/awaitingInput": {"equals": false}}, "resolutionReported": true, "replyNotContains": ["未通过结构化校验", "组装过程中出错", "可直接运行"]}
+    },
+    {
+      "id": "D04", "layer": "agent", "difficulty": "adversarial", "title": "丰富生态服从禁止改地形的限制",
+      "capabilities": ["dimension-generation", "negative-scope"],
+      "prompt": "新建NeoForge1.21.1整合包，约10个模组，丰富下界生物和探索生态，但保持原版地形，不改世界生成，不添加大型群系或地形改造模组。",
+      "manualReview": ["明确的禁止生成改动是否保留；实际新增内容是否与原版地形兼容需要核对项目说明"],
+      "assert": {"minMods": 1, "generation": {"forbidden": ["nether", "end", "overworld"]}, "facts": {"/trace/awaitingInput": {"equals": false}}, "resolutionReported": true, "replyNotContains": ["未通过结构化校验", "组装过程中出错", "可直接运行"]}
+    }
+  ]
+}

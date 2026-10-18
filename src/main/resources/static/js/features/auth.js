@@ -209,15 +209,19 @@ export const acceptRegConsent = async () => {
 // ========== 对话历史 ==========
 export const loadConversations = async () => {
     if (!authUser.value) return;
+    const ownerToken = authUser.value.token;
     try {
         const r = await apiFetch('/api/prefs/conversations', {headers: authHeader()});
-        conversationList.value = await r.json();
+        const conversations = await r.json();
+        if (authUser.value?.token === ownerToken) conversationList.value = conversations;
     } catch(e) {}
 };
 export const newConversation = async () => {
     if (!authUser.value) return;
+    const ownerToken = authUser.value.token;
     try {
-        await createConversation(null);
+        const id = await createConversation(null);
+        if (!id || authUser.value?.token !== ownerToken || currentConvId.value !== id) return;
         // 新对话 = 新包：清空清单与删除排除名单
         chatHistory.value = []; packData.modSlugs = []; packData.excludedSlugs = []; packData.constraints = null; packData.importedPack = null; packData.assembly = null;
         // 版本游标也要归零：否则新对话里的第一次预览会以为"状态没变"，不记版本流水
@@ -234,16 +238,19 @@ export const newConversation = async () => {
  * 会清空工作区；而"落库前发现没有会话"属于自愈路径，必须保留用户正在编辑的内容。
  */
 const createConversation = async (title) => {
+    const ownerToken = authUser.value?.token;
+    const previousConversation = currentConvId.value;
+    if (!ownerToken) return null;
     const r = await apiFetch('/api/prefs/conversations', {
         method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
         body: JSON.stringify({title: title || '新对话 ' + new Date().toLocaleDateString()})
     });
     const d = await r.json().catch(() => ({}));
-    if (!d || !d.id) return null;
+    if (!d || !d.id || authUser.value?.token !== ownerToken || currentConvId.value !== previousConversation) return null;
     currentConvId.value = d.id;
     localStorage.setItem('maa-conv', String(d.id));   // 刷新后要能回到这个对话
     await loadConversations();
-    return d.id;
+    return authUser.value?.token === ownerToken && currentConvId.value === d.id ? d.id : null;
 };
 
 /**
@@ -337,13 +344,19 @@ export const deleteConversation = async (id) => {
  */
 export const saveMsg = async (role, content, hasData, thinkTime, slugs, packState) => {
     if (!authUser.value) return null;
+    const ownerToken = authUser.value.token;
+    const sameOwner = () => authUser.value?.token === ownerToken;
     // 最多两轮：会话失效（被删/换账号）时丢掉旧指针、建个新会话再存一次。
     // 这条自愈路径是"消息不丢"的兜底 —— 以前是 catch(e){} 静默吞掉，用户只能靠刷新后发现少东西。
     for (let attempt = 0; attempt < 2; attempt++) {
+        if (!sameOwner()) return null;
         if (!currentConvId.value) {
-            const id = await createConversation();
+            let id;
+            try { id = await createConversation(); } catch { return null; }
             if (!id) return null;          // 建会话失败（未登录/网络）就别再打接口了
         }
+        if (!sameOwner()) return null;
+        const conversation = currentConvId.value;
         try {
             const body = {role, content, hasData, thinkTime: thinkTime||'', modSlugs: (slugs||[]).join(',')};
             const title = chatHistory.value.length <= 2 && role === 'user' ? content.substring(0, 30) : null;
@@ -359,17 +372,23 @@ export const saveMsg = async (role, content, hasData, thinkTime, slugs, packStat
                 body.importedPack = packState.importedPack || null;
                 body.assembly = packState.assembly || null;
             }
-            const r = await apiFetch('/api/prefs/conversations/' + currentConvId.value + '/messages', {
+            const r = await apiFetch('/api/prefs/conversations/' + conversation + '/messages', {
                 method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'},
                 body: JSON.stringify(body)
             });
             const d = await r.json().catch(() => ({}));
+            if (!sameOwner() || currentConvId.value !== conversation) return null;
             if (r.ok && !d.error) return d.snapshotId ? d.snapshotId : null;
             const gone = r.status === 404 || String(d.error || '').includes('对话不存在');
             if (!gone) return null;        // 其它错误（401/500）重试也没用
             currentConvId.value = null;
             localStorage.removeItem('maa-conv');
         } catch(e) {
+            if (e.status === 404 && sameOwner() && currentConvId.value === conversation) {
+                currentConvId.value = null;
+                localStorage.removeItem('maa-conv');
+                continue;
+            }
             return null;
         }
     }

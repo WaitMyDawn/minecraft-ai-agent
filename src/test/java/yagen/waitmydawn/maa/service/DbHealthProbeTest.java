@@ -6,11 +6,16 @@ import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
 import java.sql.Statement;
+import java.sql.SQLException;
+import javax.sql.DataSource;
+import yagen.waitmydawn.maa.controller.HealthController;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * 数据库健康探针测试。
@@ -19,6 +24,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 用 {@code SELECT 1} 是照不出来的）；探测结果在 TTL 内被缓存，不能每次健康检查都去敲库。
  */
 class DbHealthProbeTest {
+
+    @Test
+    void publicHealthDoesNotExposeDatabaseExceptionAndKeepsReadinessSemantics() throws Exception {
+        DataSource ds = mock(DataSource.class);
+        when(ds.getConnection()).thenThrow(new SQLException(
+                "jdbc:h2:file:/private/database;PASSWORD=fixture-private-value"));
+        DbHealthProbe probe = new DbHealthProbe(ds, 60_000);
+        HealthController controller = new HealthController(probe, mock(DelegationTasks.class));
+
+        var live = controller.health(false);
+        assertEquals(200, live.getStatusCode().value());
+        assertEquals("down", live.getBody().get("db"));
+        assertEquals("DATABASE_PROBE_FAILED", live.getBody().get("dbError"));
+        assertEquals(503, controller.health(true).getStatusCode().value());
+        assertEquals("DATABASE_PROBE_FAILED", probe.lastError());
+    }
 
     private static JdbcDataSource dataSource(String url) {
         JdbcDataSource ds = new JdbcDataSource();

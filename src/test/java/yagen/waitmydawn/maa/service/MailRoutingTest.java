@@ -233,10 +233,23 @@ class MailRoutingTest {
         ResendMailClient resend = resendMock(true);
         MailService svc = resendService(resend);
         svc.setSimulateQuotaForTest(true);
+        var environment = new org.springframework.mock.env.MockEnvironment(); environment.setActiveProfiles("eval");
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "environment", environment);
 
         MailService.QuotaExhaustedException e = assertThrows(MailService.QuotaExhaustedException.class,
                 () -> svc.sendCode("user@example.com", "注册账号", "123456", 5));
         assertTrue(e.getMessage().contains("模拟"), e.getMessage());
         verify(resend, never()).send(anyString(), anyString(), anyString());
     }
+
+    @Test void productionCannotEnableTheQuotaFailureSimulation() {
+        ResendMailClient resend = resendMock(true);
+        MailService svc = resendService(resend); svc.setSimulateQuotaForTest(true);
+        var environment = new org.springframework.mock.env.MockEnvironment(); environment.setActiveProfiles("eval", "prod");
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "environment", environment);
+        svc.sendCode("user@example.com", "注册账号", "123456", 5);
+        verify(resend).send(anyString(), anyString(), anyString());
+    }
+
+
 }

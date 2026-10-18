@@ -70,6 +70,37 @@ export const makeTokenBucket = (perMinute) => {
 // 同一页面的所有回合共用额度，不能在每轮回执时重新获得突发信用。
 const browserBucket = makeTokenBucket(DELEGATION.PER_MINUTE);
 
+const envCache = new Map();
+let envCacheBytes = 0;
+const ENV_CACHE_TTL = 15_000, ENV_CACHE_ENTRIES = 64, ENV_CACHE_BYTES = 4 * 1024 * 1024;
+const pruneEnvCache = () => {
+    for (const [key, entry] of envCache) if (entry.expires <= Date.now()) {
+        envCache.delete(key); envCacheBytes -= entry.bytes;
+    }
+};
+const rememberEnv = (key, data) => {
+    // 仅在当前页面短暂保留成功的完整版本事实；缺失、故障及搜索结果不进入缓存。
+    if (!data.length || !data.every(v => typeof v.project_id === 'string' && Array.isArray(v.game_versions) && Array.isArray(v.loaders))) return;
+    const bytes = JSON.stringify(data).length * 2;
+    if (bytes > ENV_CACHE_BYTES) return;
+    pruneEnvCache();
+    if (envCache.has(key)) { envCacheBytes -= envCache.get(key).bytes; envCache.delete(key); }
+    while (envCache.size >= ENV_CACHE_ENTRIES || envCacheBytes + bytes > ENV_CACHE_BYTES) {
+        const oldest = envCache.keys().next().value;
+        envCacheBytes -= envCache.get(oldest).bytes; envCache.delete(oldest);
+    }
+    envCache.set(key, {data: structuredClone(data), bytes, expires: Date.now() + ENV_CACHE_TTL}); envCacheBytes += bytes;
+};
+const invalidResponse = () => Object.assign(new Error('Modrinth 响应结构不可用'), {name: 'InvalidResponse'});
+const failureReason = (error, signal) => {
+    if (signal?.aborted) return signal.reason?.name === 'TimeoutError' ? 'BUDGET_EXHAUSTED' : 'CLIENT_ABORTED';
+    if (error?.name === 'TimeoutError') return 'REQUEST_TIMEOUT';
+    if (error?.status === 429) return 'RATE_LIMITED';
+    if (error?.status >= 400) return 'UPSTREAM_HTTP';
+    if (error?.name === 'InvalidResponse' || error?.name === 'SyntaxError') return 'INVALID_RESPONSE';
+    return 'NETWORK_OR_CORS';
+};
+
 /** 单次取数：与后端同一套 429 语义（优先用官方重置头，其次指数退避） */
 export const fetchModrinth = async (url, bucket, stats, attempt, signal) => {
     const target = new URL(url);
@@ -98,8 +129,8 @@ export const fetchModrinth = async (url, bucket, stats, attempt, signal) => {
             error: error.name, message: error.message}));
         throw error;
     } finally { releaseSlot(); }
+    if (res.status === 429) stats.rateLimited++;
     if (res.status === 429 && tries < 3) {
-        stats.rateLimited++;
         const reset = parseInt(res.headers.get('X-Ratelimit-Reset')
             || res.headers.get('Retry-After') || '0', 10);
         const waitMs = reset > 0 ? Math.min(60, reset) * 1000 + 500 : 1000 * Math.pow(2, tries);
@@ -146,7 +177,7 @@ export const runPool = async (items, worker, limit) => {
 export const fulfilWanted = async (wanted, signal, budgetMs = 110_000) => {
     const budget = AbortSignal.timeout(Math.max(1, Math.min(110_000, budgetMs)));
     signal = signal ? AbortSignal.any([signal, budget]) : budget;
-    const stats = {requests: 0, rateLimited: 0};
+    const stats = {requests: 0, rateLimited: 0, cacheHits: 0, coalesced: 0};
     const started = Date.now();
     const answered = [];
     const missing = [];
@@ -161,14 +192,17 @@ export const fulfilWanted = async (wanted, signal, budgetMs = 110_000) => {
             const chunk = wants.slice(i, i + DELEGATION.CHUNK);
             const ids = encodeURIComponent(JSON.stringify(chunk.map(w => w.key)));
             let arr = [];
-            let ok = true;
+            let ok = true, reason = 'UNSPECIFIED';
             try {
                 const got = await fetchModrinth(
                     `https://api.modrinth.com/v2/${spec.endpoint}?ids=${ids}`, bucket, stats, 0, signal);
-                arr = Array.isArray(got) ? got : (got ? [got] : []);
+                if (!Array.isArray(got) || got.some(v => !v || typeof v.id !== 'string' || !v.id
+                    || (spec.kind === 'project' && typeof v.slug !== 'string'))) throw invalidResponse();
+                arr = got;
             } catch (e) {
                 // 整批失败是"没抓到"，不是"上游没有"——交给服务器兜底
                 ok = false;
+                reason = failureReason(e, signal);
                 console.warn('批量取数失败，整批退回服务器：', spec.kind, e);
             }
             const byKey = new Map();
@@ -180,7 +214,7 @@ export const fulfilWanted = async (wanted, signal, budgetMs = 110_000) => {
                 const hit = byKey.get(w.key);
                 if (hit) answered.push({kind: spec.kind, key: w.key, data: hit});
                 else if (ok) missing.push({kind: spec.kind, key: w.key});
-                else unavailable.push({kind: spec.kind, key: w.key});
+                else unavailable.push({kind: spec.kind, key: w.key, reason});
             }
         }
     }
@@ -193,11 +227,11 @@ export const fulfilWanted = async (wanted, signal, budgetMs = 110_000) => {
                 const got = await fetchModrinth(w.key, bucket, stats, 0, signal);
                 return (got && Array.isArray(got.hits))
                     ? {found: {kind: 'search', key: w.key, data: got}}
-                    : {failed: {kind: 'search', key: w.key}};
+                    : {failed: {kind: 'search', key: w.key, reason: 'INVALID_RESPONSE'}};
             } catch (e) {
                 // 抓不到 ≠ 没有结果：搜索"零命中"是合法响应（hits 为空数组），
                 // 而请求失败必须让服务器自己重试，混在一起会让服务器误判成"查不到"。
-                return {failed: {kind: 'search', key: w.key}};
+                return {failed: {kind: 'search', key: w.key, reason: failureReason(e, signal)}};
             }
         }, DELEGATION.CONCURRENCY);
         for (const r of results) {
@@ -208,6 +242,7 @@ export const fulfilWanted = async (wanted, signal, budgetMs = 110_000) => {
 
     // 3) 环境版本：无批量端点，并发逐个查
     const envWants = list.filter(w => w.kind === 'env_version' || w.kind === 'env_versions');
+    const envLoads = new Map();
     if (envWants.length > 0) {
         const results = await runPool(envWants, async (w) => {
             const gv = encodeURIComponent(JSON.stringify([w.mc]));
@@ -215,15 +250,30 @@ export const fulfilWanted = async (wanted, signal, budgetMs = 110_000) => {
             const url = `https://api.modrinth.com/v2/project/${encodeURIComponent(w.project)}`
                 + `/version?game_versions=${gv}&loaders=${ld}`;
             try {
-                const got = await fetchModrinth(url, bucket, stats, 0, signal);
-                const arr = Array.isArray(got) ? got : (got ? [got] : []);
+                signal.throwIfAborted();
+                let load = envLoads.get(url);
+                if (load) stats.coalesced++;
+                else {
+                    load = (async () => {
+                        pruneEnvCache();
+                        const cached = envCache.get(url);
+                        if (cached) { stats.cacheHits++; return structuredClone(cached.data); }
+                        const got = await fetchModrinth(url, bucket, stats, 0, signal);
+                        if (!Array.isArray(got) || got.some(v => !v || typeof v !== 'object' || typeof v.id !== 'string' || !v.id)) throw invalidResponse();
+                        const data = got.slice(0, 4);
+                        if (!signal.aborted) rememberEnv(url, data);
+                        return data;
+                    })();
+                    envLoads.set(url, load);
+                }
+                const arr = await load;
                 // 拿到了但列表为空 = 上游确实没有这个环境的版本（不是没抓到）
                 return arr.length > 0
                     ? {found: {kind: w.kind, key: w.key, data: w.kind === 'env_versions' ? arr.slice(0, 4) : arr[0]}}
                     : {absent: {kind: w.kind, key: w.key}};
             } catch (e) {
                 if (e.status === 404) return {absent: {kind: w.kind, key: w.key}};
-                return {failed: {kind: w.kind, key: w.key}};
+                return {failed: {kind: w.kind, key: w.key, reason: failureReason(e, signal)}};
             }
         }, DELEGATION.CONCURRENCY);
         envWants.forEach((w, i) => {
@@ -237,7 +287,7 @@ export const fulfilWanted = async (wanted, signal, budgetMs = 110_000) => {
     return {
         answered, missing, unavailable,
         client: {
-            requests: stats.requests, rateLimited: stats.rateLimited,
+            requests: stats.requests, rateLimited: stats.rateLimited, cacheHits: stats.cacheHits, coalesced: stats.coalesced,
             elapsedMs: Date.now() - started, via: 'browser'
         }
     };

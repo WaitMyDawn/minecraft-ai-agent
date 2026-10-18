@@ -58,6 +58,9 @@ public class KnowledgeRule {
     // JPA 必须的无参构造函数
     public KnowledgeRule() {}
 
+    /** 持久化的 Modrinth 项目关系没有选版范围，不能覆盖当前版本的依赖或互斥元数据。 */
+    public boolean appliesWithoutVersionScope() { return sourceType != SourceType.MODRINTH; }
+
     public KnowledgeRule(String environment, String modA, String modB, String relationType, SourceType sourceType, int confirmCount) {
         this(environment, modA, modB, relationType, sourceType, confirmCount, null);
     }

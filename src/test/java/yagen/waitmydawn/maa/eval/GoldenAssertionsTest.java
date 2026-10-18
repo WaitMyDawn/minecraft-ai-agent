@@ -12,8 +12,85 @@ import static org.junit.jupiter.api.Assertions.*;
 class GoldenAssertionsTest {
     private final ObjectMapper mapper = new ObjectMapper();
     @Test void bothFrozenDatasetsUseSupportedAssertions() throws Exception {
-        for (String file : List.of("eval/golden-set.json", "eval/golden-set-v2.json", "eval/golden-set-v3.json", "eval/golden-set-v4.json"))
+        for (String file : List.of("eval/golden-set.json", "eval/golden-set-v2.json", "eval/golden-set-v3.json", "eval/golden-set-v4.json", "eval/golden-set-v5.json", "eval/golden-set-v6.json"))
             assertDoesNotThrow(() -> GoldenSetEval.validateSet(mapper.readTree(Files.readAllBytes(Path.of(file)))));
+    }
+    @Test void compositionRejectsMissingAuditFieldsAndInvalidOptions() {
+        var rule = mapper.readTree("{\"retainedRelations\":true,\"noKnownAddonGaps\":true}");
+        assertFalse(GoldenAssertions.checkComposition(mapper.createObjectNode(), Set.of(), rule).isEmpty());
+        assertThrows(IllegalArgumentException.class, () -> GoldenAssertions.validateComposition(mapper.readTree("{\"retainedRelations\":1}")));
+        assertThrows(IllegalArgumentException.class, () -> GoldenAssertions.validateComposition(mapper.readTree("{\"allGood\":true}")));
+        assertThrows(IllegalArgumentException.class, () -> GoldenAssertions.validateComposition(mapper.readTree("{}")));
+    }
+    @Test void compositionRequiresActualPartnerVersionsAndKeepsUnknownDistinctFromConfirmedGaps() {
+        var facts = mapper.readTree("""
+                {"trace":{"assembly":{"versions":{"bridge":"C1","cooking-core":"A1","factory":"B1"}},
+                "addonEvidence":[],"addonApplicability":{"bridge":{"status":"PARTNERS_RETAINED","missingPartners":[],"introducedContent":[]}}},
+                "requirement_report":{"requirements":[{"criteria":[{"mods":[{"slug":"bridge","evidenceType":"DESCRIPTION_RELATION",
+                "quote":"Integration between cooking-core and factory","partners":["cooking-core","factory"]}]}]}]}}
+                """);
+        var rule = mapper.readTree("{\"retainedRelations\":true,\"noKnownAddonGaps\":true}");
+        var selected = Set.of("bridge", "cooking-core", "factory");
+        assertTrue(GoldenAssertions.checkComposition(facts, selected, rule).isEmpty());
+        var relation = (tools.jackson.databind.node.ObjectNode) facts.at("/requirement_report/requirements/0/criteria/0/mods/0");
+        relation.putArray("partners");
+        assertFalse(GoldenAssertions.checkComposition(facts, selected, rule).isEmpty());
+        relation.putArray("partners").add("cooking-core").add("factory");
+        assertFalse(GoldenAssertions.checkComposition(facts, Set.of("bridge", "cooking-core"), rule).isEmpty());
+        var versions = (tools.jackson.databind.node.ObjectNode) facts.at("/trace/assembly/versions");
+        versions.put("factory", "");
+        assertFalse(GoldenAssertions.checkComposition(facts, selected, rule).isEmpty());
+        versions.put("factory", "B1");
+        var check = (tools.jackson.databind.node.ObjectNode) facts.at("/trace/addonApplicability/bridge");
+        check.putArray("missingPartners").add("factory");
+        assertFalse(GoldenAssertions.checkComposition(facts, selected, rule).isEmpty());
+        check.putArray("missingPartners"); check.putArray("introducedContent").add("extra-core");
+        assertFalse(GoldenAssertions.checkComposition(facts, selected, rule).isEmpty());
+        check.putArray("introducedContent"); check.put("status", "RELATION_UNVERIFIED");
+        assertTrue(GoldenAssertions.checkComposition(facts, selected, rule).isEmpty());
+        check.put("status", "PARTNERS_UNVERIFIED");
+        assertFalse(GoldenAssertions.checkComposition(facts, selected, rule).isEmpty());
+    }
+    @Test void staleTraceEvidenceCannotPassEvenWhenRequirementRowsAreEmpty() {
+        var facts = mapper.readTree("""
+                {"trace":{"assembly":{"versions":{"core":"A1"}},"addonEvidence":[{"slug":"removed-addon",
+                "finalEvidence":[{"core":"core","partners":[]}]}]},"requirement_report":{"requirements":[]}}
+                """);
+        var rule = mapper.readTree("{\"retainedRelations\":true}");
+        assertFalse(GoldenAssertions.checkComposition(facts, Set.of("core"), rule).isEmpty());
+    }
+    @Test void generationAssertionsRequireFinalVersionsAndRejectInventedTargets() {
+        var facts = mapper.readTree("""
+                {"requirement_report":{"schemaVersion":1,"requirements":[{"criteria":[{"evidenceState":{"generation":[{"dimension":"end","projects":["terrain"]}]}}]}]},
+                 "trace":{"assembly":{"versions":{"terrain":"V1"}}}}
+                """);
+        var rule = mapper.readTree("{\"required\":[\"end\"],\"forbidden\":[\"nether\"]}");
+        assertTrue(GoldenAssertions.checkGeneration(facts, Set.of("terrain"), rule).isEmpty());
+        assertFalse(GoldenAssertions.checkGeneration(facts, Set.of(), rule).isEmpty());
+        assertFalse(GoldenAssertions.checkGeneration(facts, Set.of("terrain"), mapper.readTree("{\"forbidden\":[\"end\"]}")).isEmpty());
+        ((tools.jackson.databind.node.ObjectNode) facts.at("/trace/assembly/versions")).remove("terrain");
+        assertFalse(GoldenAssertions.checkGeneration(facts, Set.of("terrain"), rule).isEmpty());
+        assertFalse(GoldenAssertions.checkGeneration(mapper.createObjectNode(), Set.of(), rule).isEmpty());
+        assertThrows(IllegalArgumentException.class, () -> GoldenAssertions.validateGeneration(mapper.readTree("{\"required\":[\"end\"],\"forbidden\":[\"end\"]}")));
+        assertThrows(IllegalArgumentException.class, () -> GoldenAssertions.validateGeneration(mapper.readTree("{\"required\":[]}")));
+    }
+    @Test void generationConfirmationIsExplicitAndSynchronizesSharedRecommendedProjects() {
+        var original = mapper.createObjectNode().put("prompt", "双维度生成").put("uuid", "workspace");
+        String reply = """
+                <replacement_options>{"kind":"GENERATION","ticket":"t","groups":[
+                {"original":"generation:nether","candidates":[{"slug":"shared","recommended":true},{"slug":"nether-only"}]},
+                {"original":"generation:end","candidates":[{"slug":"shared"},{"slug":"end-only","recommended":true}]}]}</replacement_options>
+                """;
+        var rule = mapper.readTree("{\"kind\":\"GENERATION\",\"strategy\":\"SELECT_RECOMMENDED\"}");
+        var result = GoldenSetEval.confirmationInput(original, reply, rule);
+        assertEquals("GENERATION", result.path("selectionKind").asText());
+        assertEquals("workspace", result.path("uuid").asText());
+        var choices = mapper.readTree(result.path("replacementChoices").asText());
+        assertEquals(List.of("shared"), mapper.convertValue(choices.path("generation:nether").path("slugs"), List.class));
+        assertEquals(List.of("shared", "end-only"), mapper.convertValue(choices.path("generation:end").path("slugs"), List.class));
+        assertThrows(IllegalArgumentException.class, () -> GoldenSetEval.validateConfirmation(mapper.readTree("{\"kind\":\"GENERATION\"}")));
+        assertThrows(IllegalArgumentException.class, () -> GoldenSetEval.confirmationInput(original, reply.replace("GENERATION", "OVERLAP"), rule));
+        assertThrows(IllegalArgumentException.class, () -> GoldenSetEval.confirmationInput(original, reply.replace("\"recommended\":true", "\"recommended\":false"), rule));
     }
     @Test void hiddenReportsCannotPassVisibleReplyAssertions() {
         assertEquals("结果", GoldenSetEval.visibleReply("结果<requirement_report>{\"note\":\"隐藏目标\"}</requirement_report><build_report>{}</build_report><replacement_choices>{}</replacement_choices>"));

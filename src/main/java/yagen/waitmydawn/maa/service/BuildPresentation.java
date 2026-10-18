@@ -6,14 +6,24 @@ import java.util.*;
 /** 对话展示数据只保存项目引用和数值；图标在浏览器渲染时加载，不进入历史消息。 */
 public final class BuildPresentation {
     private BuildPresentation() {}
-    public record Issue(String mod, String dependency, String versionId, String reason, boolean dropped) {}
+    public record Issue(String mod, String dependency, String versionId, String reason, boolean dropped,
+                        String detail, List<String> codes, List<String> requiredVersions) {
+        public Issue {
+            detail = Objects.requireNonNullElse(detail, "");
+            codes = codes == null ? List.of(reason) : List.copyOf(codes);
+            requiredVersions = requiredVersions == null ? (versionId.isBlank() ? List.of() : List.of(versionId)) : List.copyOf(requiredVersions);
+        }
+        public Issue(String mod, String dependency, String versionId, String reason, boolean dropped) {
+            this(mod, dependency, versionId, reason, dropped, "", List.of(reason), versionId.isBlank() ? List.of() : List.of(versionId));
+        }
+    }
     public record Report(int schemaVersion, int total, Map<String, Integer> categories, List<Issue> issues, OptimizationPortfolio.Report optimization) {
         public Report(int schemaVersion, int total, Map<String, Integer> categories, List<Issue> issues) { this(schemaVersion, total, categories, issues, null); }
     }
 
     public static Report create(ModrinthApiClient api, DependencyGraph graph, ResolutionResult resolution,
                                 DependencyClosure.Report closure, Set<String> selected, Map<String, Integer> categories) {
-        Map<String, String> references = new HashMap<>();
+        Map<String, String> references = new HashMap<>(graph.projectAliases);
         graph.selectedVersions.forEach((slug, version) -> {
             references.put(version.path("project_id").asText(), slug);
             references.put("vid:" + version.path("id").asText(), slug);
@@ -21,18 +31,34 @@ public final class BuildPresentation {
         Set<Issue> issues = new LinkedHashSet<>();
         int[] lookupBudget = {32};
         resolution.dropped().stream().filter(d -> !selected.contains(d.slug()))
-                .forEach(d -> issues.add(new Issue(d.slug(), "", "", d.reason().name(), true)));
+                .forEach(d -> issues.add(new Issue(d.slug(), "", "", d.reason().name(), true, d.detail(), List.of(d.reason().name()), List.of())));
         for (var u : resolution.unresolved()) {
             String dependency = resolve(api, u.slug(), references, lookupBudget);
+            String version = u.slug().startsWith("vid:") ? u.slug().substring(4) : "";
             issues.add(new Issue(u.requiredBy().startsWith("(") ? "" : u.requiredBy(), dependency,
-                    u.slug().startsWith("vid:") ? u.slug().substring(4) : "", u.reason().name(), !selected.contains(u.requiredBy())));
+                    version, u.reason().name(), !selected.contains(u.requiredBy()), u.detail(), List.of(u.reason().name()),
+                    version.isBlank() ? List.of() : List.of(version)));
         }
         for (var issue : closure.issues()) {
             String dependency = resolve(api, issue.dependency(), references, lookupBudget);
             issues.add(new Issue(issue.dependent(), dependency,
-                    issue.dependency().startsWith("vid:") ? issue.dependency().substring(4) : "", issue.code(), false));
+                    !issue.versionId().isBlank() ? issue.versionId() : issue.dependency().startsWith("vid:") ? issue.dependency().substring(4) : "", issue.code(), false));
         }
-        return new Report(1, selected.size(), Map.copyOf(categories), List.copyOf(issues));
+        var grouped = new LinkedHashMap<String, List<Issue>>();
+        for (var issue : issues) grouped.computeIfAbsent(issue.mod() + "\0" + issue.dependency() + "\0" + issue.dropped(), ignored -> new ArrayList<>()).add(issue);
+        var merged = new ArrayList<Issue>();
+        for (var rows : grouped.values()) {
+            var first = rows.stream().min(Comparator.comparingInt(i -> switch (i.reason()) {
+                case "MISSING_REQUIRED", "VERSION_MISMATCH" -> 1;
+                case "MULTILOADER_DEPENDENCY_UNVERIFIED" -> 2;
+                default -> 0;
+            })).orElseThrow();
+            var versions = rows.stream().flatMap(i -> i.requiredVersions().stream()).distinct().sorted().toList();
+            String detail = String.join("；", rows.stream().map(Issue::detail).filter(s -> !s.isBlank()).distinct().toList());
+            merged.add(new Issue(first.mod(), first.dependency(), versions.size() == 1 ? versions.getFirst() : "", first.reason(), first.dropped(),
+                    detail.substring(0, Math.min(1000, detail.length())), rows.stream().flatMap(i -> i.codes().stream()).distinct().sorted().toList(), versions));
+        }
+        return new Report(1, selected.size(), Map.copyOf(categories), List.copyOf(merged));
     }
     private static String resolve(ModrinthApiClient api, String reference, Map<String, String> references, int[] budget) {
         if (reference == null || reference.isBlank()) return "";

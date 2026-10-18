@@ -7,6 +7,95 @@ import java.util.*;
 final class GoldenAssertions {
     private static final Set<String> OPS = Set.of("equals", "contains", "absent", "min", "max");
     private GoldenAssertions() {}
+    static void validateComposition(JsonNode rule) {
+        if (!rule.isObject() || rule.isEmpty()) throw new IllegalArgumentException("composition 必须是非空对象");
+        rule.properties().forEach(e -> {
+            if (!Set.of("retainedRelations", "noKnownAddonGaps").contains(e.getKey()) || !e.getValue().isBoolean())
+                throw new IllegalArgumentException("composition 只支持布尔值 retainedRelations/noKnownAddonGaps");
+        });
+    }
+    static List<String> checkComposition(JsonNode facts, Set<String> selected, JsonNode rule) {
+        validateComposition(rule); var failures = new ArrayList<String>();
+        if (rule.path("noKnownAddonGaps").asBoolean()) {
+            var checks = facts.at("/trace/addonApplicability");
+            if (!checks.isObject()) failures.add("缺少附属适用范围审计");
+            else checks.properties().forEach(e -> {
+                if (!selected.contains(e.getKey())) return;
+                var check = e.getValue();
+                if (!check.path("missingPartners").isArray() || !check.path("introducedContent").isArray())
+                    failures.add("附属适用范围字段不完整: " + e.getKey());
+                else if (check.path("status").asText().equals("PARTNERS_UNVERIFIED") || !check.path("missingPartners").isEmpty() || !check.path("introducedContent").isEmpty())
+                    failures.add("最终仍保留已知适用对象缺口或额外内容: " + e.getKey());
+            });
+        }
+        if (rule.path("retainedRelations").asBoolean()) {
+            var rows = facts.at("/requirement_report/requirements");
+            var trace = facts.at("/trace/addonEvidence");
+            if (!rows.isArray() || !trace.isArray()) failures.add("缺少最终联动关系报告");
+            var pending = new ArrayDeque<JsonNode>(); rows.forEach(pending::add);
+            while (!pending.isEmpty()) {
+                var row = pending.removeFirst(); row.path("criteria").forEach(pending::add);
+                for (var item : row.path("mods")) if (Set.of("VERSION_RELATION", "DESCRIPTION_RELATION").contains(item.path("evidenceType").asText())) {
+                    checkRelationProject(item.path("slug").asText(), selected, facts, failures);
+                    checkRelationPartners(item, selected, facts, failures);
+                    if (item.path("partners").isArray() && item.path("partners").isEmpty()) failures.add("需求关系缺少实际对象");
+                    if (item.path("evidenceType").asText().equals("DESCRIPTION_RELATION") && item.path("quote").asText().isBlank()) failures.add("介绍关系缺少原文");
+                }
+            }
+            for (var addon : trace) for (var relation : addon.path("finalEvidence")) {
+                checkRelationProject(addon.path("slug").asText(), selected, facts, failures);
+                checkRelationProject(relation.path("core").asText(), selected, facts, failures);
+                checkRelationPartners(relation, selected, facts, failures);
+                if (relation.path("relationSource").asText().equals("DESCRIPTION_RELATION") && relation.path("quote").asText().isBlank()) failures.add("最终介绍关系缺少原文");
+            }
+        }
+        return failures;
+    }
+    private static void checkRelationPartners(JsonNode item, Set<String> selected, JsonNode facts, List<String> failures) {
+        if (!item.path("partners").isArray()) { failures.add("关系缺少明确的对象列表"); return; }
+        for (var partner : item.path("partners")) checkRelationProject(partner.asText(), selected, facts, failures);
+    }
+    private static void checkRelationProject(String slug, Set<String> selected, JsonNode facts, List<String> failures) {
+        if (slug.isBlank() || !selected.contains(slug) || facts.at("/trace/assembly/versions").path(slug).asText().isBlank())
+            failures.add("关系对象未在最终选版留存: " + slug);
+    }
+    static void validateGeneration(JsonNode rule) {
+        if (!rule.isObject() || rule.isEmpty()) throw new IllegalArgumentException("generation 必须是非空对象");
+        rule.properties().forEach(e -> {
+            if (!Set.of("required", "forbidden").contains(e.getKey()) || !e.getValue().isArray() || e.getValue().isEmpty())
+                throw new IllegalArgumentException("generation 需要 required/forbidden 非空维度数组");
+            var seen = new HashSet<String>();
+            for (var dimension : e.getValue()) if (!dimension.isTextual() || dimension.asText().isBlank() || !seen.add(dimension.asText()))
+                throw new IllegalArgumentException("generation 维度必须是唯一非空文本");
+        });
+        for (var dimension : rule.path("required")) for (var forbidden : rule.path("forbidden"))
+            if (dimension.equals(forbidden)) throw new IllegalArgumentException("同一维度不能同时要求和禁止");
+    }
+    static List<String> checkGeneration(JsonNode facts, Set<String> selected, JsonNode rule) {
+        validateGeneration(rule);
+        var report = facts.path("requirement_report");
+        if (report.path("schemaVersion").asInt() != 1 || !report.path("requirements").isArray() || report.path("requirements").isEmpty()) return List.of("缺少维度生成需求报告");
+        var pending = new ArrayDeque<JsonNode>(); report.path("requirements").forEach(pending::add);
+        var targets = new HashSet<String>(); var covered = new HashSet<String>(); var failures = new ArrayList<String>();
+        while (!pending.isEmpty()) {
+            var row = pending.removeFirst(); row.path("criteria").forEach(pending::add);
+            for (var generation : row.path("evidenceState").path("generation")) {
+                String dimension = generation.path("dimension").asText(); targets.add(dimension);
+                if (!generation.path("projects").isArray() || generation.path("projects").isEmpty()) continue;
+                boolean retained = true;
+                for (var project : generation.path("projects")) {
+                    String slug = project.asText();
+                    if (!project.isTextual() || !selected.contains(slug) || facts.at("/trace/assembly/versions").path(slug).asText("").isBlank()) {
+                        failures.add("核心生成依据未留存在最终选版: " + slug); retained = false;
+                    }
+                }
+                if (retained) covered.add(dimension);
+            }
+        }
+        for (var dimension : rule.path("required")) if (!covered.contains(dimension.asText())) failures.add("缺少已留存核心生成依据: " + dimension.asText());
+        for (var dimension : rule.path("forbidden")) if (targets.contains(dimension.asText())) failures.add("意外新增核心生成目标: " + dimension.asText());
+        return failures;
+    }
     static void validateCoverage(JsonNode rule) {
         if (!rule.isObject() || rule.isEmpty()) throw new IllegalArgumentException("coverage 必须是非空对象");
         rule.properties().forEach(e -> {

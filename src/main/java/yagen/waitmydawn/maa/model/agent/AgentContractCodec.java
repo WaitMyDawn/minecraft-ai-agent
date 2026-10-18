@@ -125,7 +125,12 @@ public final class AgentContractCodec {
                 for (var entry : tree.path("requirements")) if (entry instanceof tools.jackson.databind.node.ObjectNode requirement
                         && !requirement.has("criteria")) requirement.putArray("criteria");
             if (type == ReviewDecision.class || type == ReviewResponse.class) checkReviewEvidence(tree, type);
-            if (type == BuildIntent.class) checkBuildSearches(tree, type);
+            if (type == BuildIntent.class) {
+                checkBuildSearches(tree, type);
+                if (java.util.Set.of("NEW", "EMPTY").contains(tree.path("mode").asText()) && !tree.path("count").isObject())
+                    throw new ValidationException(new Failure(type.getSimpleName(), FailureKind.SEMANTIC, "count", "/count",
+                            "NEW/EMPTY 的 count 必须是对象；仅 EDIT/CLARIFY/REJECT 可为 null。仅点名集合的新建可用其去重大小作为 ROOT_MODS 单值目标，必要前置另计；不要改动用户明确给出的数量。"));
+            }
             T result = mapper.treeToValue(tree, type);
             return ContractRules.required(result, "root");
         } catch (ValidationException invalid) { throw invalid; }

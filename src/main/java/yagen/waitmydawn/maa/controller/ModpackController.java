@@ -158,7 +158,7 @@ public class ModpackController {
         KnowledgeRule.SourceType exclude = userController.excludesUserFeedbackRules(token)
                 ? KnowledgeRule.SourceType.USER_FEEDBACK : null;
         List<KnowledgeRule> activeRules = knowledgeDb.getActiveRules(
-                loader + "-" + mcVersion, exclude);
+                loader + "-" + mcVersion, exclude).stream().filter(KnowledgeRule::appliesWithoutVersionScope).toList();
 
         // 🔥 核心修复：就算是从手动添加来的孤儿模组，这里也要走一次深度依赖穿透，把它们的前置全部挖出来！
         // ⚠️ 必须和上面 activeRules 用同一份规则集：引擎决定"谁进图"（节点），
@@ -330,6 +330,7 @@ public class ModpackController {
         var auditGraph = new yagen.waitmydawn.maa.model.DependencyGraph();
         auditGraph.allSlugs.addAll(resolution.graph().allSlugs);
         auditGraph.selectedVersions.putAll(previewVersions);
+        auditGraph.projectAliases.putAll(resolution.graph().projectAliases);
         resolution.graph().depsOf.forEach((dependent, dependencies) -> dependencies.forEach(dependency -> auditGraph.addEdge(dependent, dependency)));
         Map<String, String> slugById = new HashMap<>();
         nodeIdBySlug.forEach((slug, id) -> slugById.put(id, slug));

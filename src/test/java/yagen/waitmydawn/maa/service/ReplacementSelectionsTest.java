@@ -2,10 +2,67 @@ package yagen.waitmydawn.maa.service;
 
 import org.junit.jupiter.api.Test;
 import yagen.waitmydawn.maa.model.agent.*;
+import yagen.waitmydawn.maa.model.RetrievalBudget;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ReplacementSelectionsTest {
+    @Test @org.junit.jupiter.api.Timeout(5)
+    void pendingGenerationTicketsDoNotHoldTheOnlyBuildWorker() throws Exception {
+        var tasks = new DelegationTasks(true, 5000, 1, 8);
+        try {
+            for (long owner = 1; owner <= 12; owner++) {
+                long account = owner;
+                var template = generationPending(new RetrievalBudget());
+                var task = tasks.submit(null, account, "fixture", null, () -> selections.put(new ReplacementSelections.Pending(account,
+                        template.snapshot(), template.intent(), template.constraints(), null, List.of(), template.groups(), template.generation())));
+                assertNotNull(task.result().get(1, java.util.concurrent.TimeUnit.SECONDS));
+            }
+            assertEquals("other account finished", tasks.submit(null, 99L, "other", null, () -> "other account finished")
+                    .result().get(1, java.util.concurrent.TimeUnit.SECONDS));
+        } finally { tasks.close(); }
+    }
+    @Test void expiredGenerationTicketCannotApplyTheDefaultSelection() {
+        var elapsed = new java.util.concurrent.atomic.AtomicLong();
+        var pending = new ReplacementSelections(elapsed::get);
+        String ticket = pending.put(generationPending(new RetrievalBudget()));
+        elapsed.set(java.util.concurrent.TimeUnit.MINUTES.toNanos(16));
+        assertThrows(IllegalArgumentException.class, () -> pending.resume(ticket, 1L, generationPayload("nether-a")));
+    }
+    private ReplacementSelections.Pending generationPending(RetrievalBudget budget) {
+        var cards = List.of(new yagen.waitmydawn.maa.model.ContentOverlap.Candidate("nether-a", "A", "", "", 100, "核心生成", "Nether custom terrain", "下界", "", false, true),
+                new yagen.waitmydawn.maa.model.ContentOverlap.Candidate("nether-b", "B", "", "", 50, "核心生成", "Nether terrain overhaul", "下界", "", false, false));
+        var rich = new yagen.waitmydawn.maa.model.ContentOverlap.Group("generation:nether", "下界核心世界生成", "组合风险", cards, true);
+        var basic = new RequiredModAlternatives.Group(rich.original(), cards.stream().map(c -> new RequiredModAlternatives.Candidate(c.slug(), c.title(), c.description(), "", c.downloads(), 100, c.relation())).toList(), true);
+        return new ReplacementSelections.Pending(1L, ReplacementSelections.snapshot(base), intent, BuildConstraints.empty().apply(intent, Set.of()).constraints(),
+                null, List.of(), List.of(basic), new ReplacementSelections.GenerationContext(List.of(rich), budget, Map.of("old", List.of("port")), Map.of()));
+    }
+    private Map<String, String> generationPayload(String slug) {
+        var result = new HashMap<>(base);
+        result.put("replacementChoices", "{\"generation:nether\":{\"slugs\":[\"" + slug + "\"],\"drop\":false,\"manualSlug\":\"\"}}");
+        return result;
+    }
+    @Test void generationConfirmationPreservesPlanBudgetAndPriorPortChoices() {
+        var budget = new yagen.waitmydawn.maa.model.RetrievalBudget(); budget.search("already-used");
+        String ticket = selections.put(generationPending(budget));
+        var resumed = selections.resume(ticket, 1L, generationPayload("nether-b"));
+        assertTrue(resumed.intent().mustHave().containsAll(List.of("alexs-mobs", "nether-b")));
+        assertTrue(resumed.intent().exclude().contains("nether-a"));
+        assertEquals(intent.requirements(), resumed.intent().requirements());
+        assertEquals(Map.of("old", List.of("port")), resumed.replacements());
+        assertSame(budget, resumed.pending().generation().budget());
+        assertEquals(1, budget.snapshot().get("searchQueries"));
+        assertThrows(IllegalArgumentException.class, () -> selections.resume(ticket, 1L, generationPayload("nether-b")));
+    }
+    @Test void rejectedAdmissionRestoresOriginalGenerationOptionsSoTheChoiceCanChange() {
+        String ticket = selections.put(generationPending(new yagen.waitmydawn.maa.model.RetrievalBudget()));
+        assertThrows(java.util.concurrent.RejectedExecutionException.class,
+                () -> selections.admit(ticket, 1L, generationPayload("nether-a"), ignored -> { throw new java.util.concurrent.RejectedExecutionException(); }));
+        assertTrue(selections.resume(ticket, 1L, generationPayload("nether-b")).intent().mustHave().contains("nether-b"));
+        String staleTicket = selections.put(generationPending(new yagen.waitmydawn.maa.model.RetrievalBudget()));
+        var changed = new HashMap<>(generationPayload("nether-a")); changed.put("assembly", "changed-snapshot");
+        assertThrows(IllegalArgumentException.class, () -> selections.resume(staleTicket, 1L, changed));
+    }
     private final ReplacementSelections selections = new ReplacementSelections();
     private final Map<String, String> base = Map.of("prompt", "fixture", "currentMods", "", "loader", "neoforge", "mcVersion", "1.21.1");
     private final BuildIntent intent = new BuildIntent(1, BuildIntent.Mode.NEW, "", "",

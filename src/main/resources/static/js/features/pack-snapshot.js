@@ -88,12 +88,17 @@ export const handlePreviewResult = async ({state, nodes, unresolved, dropped, bu
 
 /** 把"这一版"落库，并把版本号挂回消息（按钮靠它区分版本） */
 const recordState = async (msg, state) => {
+    const ownerToken = authUser.value?.token;
     const id = await saveMsg(msg.role, msg.content, !!msg.hasData, msg.thinkTime || '', state.modSlugs, state);
+    if (authUser.value?.token !== ownerToken) return null;
     if (id) {
         // 版本号与状态必须成对挂到消息上（原因见 attachVersion 的注释）
         attachVersion(msg, id, state);
         latestSnapshotId.value = id;
         latestPackState.value = state;
+    } else if (ownerToken && authUser.value?.token === ownerToken) {
+        const warning = '\n⚠️ 此版本尚未确认保存到历史。当前清单仍在本页，请在刷新或关闭前导出。';
+        if (!msg.content.includes(warning)) msg.content += warning;
     }
     return id;
 };

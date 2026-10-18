@@ -18,6 +18,15 @@ import java.util.Set;
  * 模型漏说一次，用户就会以为什么都没发生。
  */
 public class PackSessionState {
+    private yagen.waitmydawn.maa.model.RetrievalBudget retrievalBudget;
+    private Map<String, java.util.List<String>> confirmedGeneration = Map.of();
+    private Map<String, String> generationFacts = Map.of();
+    public yagen.waitmydawn.maa.model.RetrievalBudget getRetrievalBudget() { return retrievalBudget; }
+    public void setRetrievalBudget(yagen.waitmydawn.maa.model.RetrievalBudget value) { retrievalBudget = value; }
+    public Map<String, java.util.List<String>> getConfirmedGeneration() { return confirmedGeneration; }
+    public void setConfirmedGeneration(Map<String, java.util.List<String>> value) { confirmedGeneration = Map.copyOf(value); }
+    public Map<String, String> getGenerationFacts() { return generationFacts; }
+    public void setGenerationFacts(Map<String, String> value) { generationFacts = Map.copyOf(value); }
     private yagen.waitmydawn.maa.model.AssemblySnapshot finishedAssembly;
     private yagen.waitmydawn.maa.model.DependencyClosure finishedClosure;
     public yagen.waitmydawn.maa.model.AssemblySnapshot getFinishedAssembly() { return finishedAssembly; }

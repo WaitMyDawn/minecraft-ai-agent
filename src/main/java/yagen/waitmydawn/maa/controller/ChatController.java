@@ -69,12 +69,11 @@ public class ChatController {
     /** 测试 Key 覆盖开关；仅与 eval profile 同时启用时生效。 */
     @Value("${maa.eval.allow-key-override:false}")
     private boolean allowKeyOverride;
-    @Value("${spring.profiles.active:}")
-    private String activeProfiles = "";
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.core.env.Environment environment;
 
     private boolean evaluationKeysAllowed() {
-        var profiles = Arrays.stream(activeProfiles.split(",")).map(String::trim).toList();
-        return allowKeyOverride && profiles.contains("eval") && !profiles.contains("prod") && !profiles.contains("production");
+        return allowKeyOverride && yagen.waitmydawn.maa.runtime.EvaluationAccess.allowed(environment);
     }
 
     private String effectiveKey(String authToken, String override) {
@@ -93,6 +92,10 @@ public class ChatController {
      */
     @Value("${maa.eval.force-critic-degraded:false}")
     private boolean forceCriticDegraded;
+
+    private boolean criticDegradationForced() {
+        return forceCriticDegraded && yagen.waitmydawn.maa.runtime.EvaluationAccess.allowed(environment);
+    }
 
     // 使用 volatile 标记替代 Thread.interrupt() 实现即时终止
     private final Map<String, Boolean> abortedSessions = new ConcurrentHashMap<>();
@@ -606,6 +609,46 @@ public class ChatController {
                             + "</replacement_options>\n<trace>" + buildTrace(blocked) + "</trace>";
                 }
             }
+            var generation = resumed == null ? null : resumed.pending().generation();
+            var retrievalBudget = generation == null ? new RetrievalBudget(intent.count() == null ? 0 : intent.count().value()) : generation.budget();
+            if (intent.requirements().stream().anyMatch(r -> !r.criteria().isEmpty())) retrievalBudget.reserveForRepair();
+            state.setRetrievalBudget(retrievalBudget);
+            if (generation != null) {
+                state.setConfirmedGeneration(generation.selected());
+                var retainedFacts = new LinkedHashMap<String, String>();
+                generation.groups().forEach(g -> g.candidates().stream().filter(c -> generation.selected().getOrDefault(g.original(), List.of()).contains(c.slug()))
+                        .forEach(c -> retainedFacts.merge(c.slug(), c.description() + "\n" + c.evidence(), (a, b) -> a + "\n" + b)));
+                state.setGenerationFacts(retainedFacts);
+            }
+            else if (!RecommendationPolicy.namedOnly(prompt) && (intent.mode() == BuildIntent.Mode.NEW || intent.mode() == BuildIntent.Mode.EDIT)) {
+                var protectedProjects = new LinkedHashSet<>(intent.mustHave()); protectedProjects.addAll(intent.add());
+                if (assembly != null) assembly.origins().forEach((slug, roles) -> {
+                    if (!Collections.disjoint(roles, Set.of("CORE", "EXPLICIT_ADD", "IMPORTED"))) protectedProjects.add(slug);
+                });
+                var freshIds = RequirementPlanning.anchors(prompt).keySet();
+                boolean generationEdit = intent.mode() == BuildIntent.Mode.EDIT;
+                var discoveryIntent = new BuildIntent(intent.schemaVersion(), intent.mode(), intent.reply(), intent.name(), intent.environment(), intent.count(),
+                        intent.mustHave(), intent.add(), intent.remove(), intent.exclude(), intent.expandAddons(), intent.replacementPolicy(),
+                        intent.searchIntents(), intent.excludedCategories(), intent.maxDownloads(), intent.constraintChanges(), intent.requirements().stream()
+                            .filter(r -> !generationEdit || freshIds.contains(r.id())).toList());
+                var generationGroups = List.<ContentOverlap.Group>of();
+                if (!DimensionGeneration.targets(discoveryIntent.requirements()).isEmpty()) {
+                    yagen.waitmydawn.maa.runtime.BuildProgress.stage("核实维度核心生成候选");
+                    generationGroups = GenerationChoices.discover(apiClient, discoveryIntent, protectedProjects, retrievalBudget, () -> isAborted(uuid));
+                }
+                if (!generationGroups.isEmpty()) {
+                    var validationGroups = generationGroups.stream().map(g -> new RequiredModAlternatives.Group(g.original(), g.candidates().stream()
+                            .map(c -> new RequiredModAlternatives.Candidate(c.slug(), c.title(), c.description(), c.iconUrl(), c.downloads(), 100, c.relation())).toList(), true)).toList();
+                    var context = new ReplacementSelections.GenerationContext(generationGroups, retrievalBudget,
+                            resumed == null ? Map.of() : resumed.replacements(), Map.of());
+                    String ticket = replacementSelections.put(new ReplacementSelections.Pending(userId, ReplacementSelections.snapshot(payload), intent,
+                            appliedConstraints.constraints(), architectCall, List.copyOf(plannerFailures), validationGroups, context));
+                    return "请选择各维度的核心世界生成项目；当前清单尚未修改，等待不占用构建名额。\n<replacement_options>"
+                            + MessageJson.write(Map.of("kind", "GENERATION", "ticket", ticket, "groups", generationGroups, "loader", plannedLoader, "mcVersion", plannedMc))
+                            + "</replacement_options><trace>" + MessageJson.write(Map.of("branch", "AWAITING_INPUT", "awaitingInput", true,
+                                    "retrieval", retrievalBudget.snapshot())) + "</trace>";
+                }
+            }
             if (intent.environment().changeRequested()) {
                 state.setEnvChange(currentEnvironment.mcVersion() + " + "
                         + currentEnvironment.loader().name().toLowerCase(Locale.ROOT)
@@ -625,7 +668,7 @@ public class ChatController {
                     excludedSlugs, excludeRuleSource, architectCall,
                     payload.get("mcVersion"), payload.get("loader"), null);
             // 仅有实际清单输出才提交新约束；失败或取消不能改写工作区状态。
-            if (assembled.contains("<mods>") && resumed != null) {
+            if (assembled.contains("<mods>") && resumed != null && !resumed.replacements().isEmpty()) {
                 assembled = "<replacement_choices>" + new tools.jackson.databind.ObjectMapper().writeValueAsString(
                         Map.of("schemaVersion", 1, "choices", resumed.replacements())) + "</replacement_choices>\n" + assembled;
             }
@@ -633,16 +676,16 @@ public class ChatController {
             assembled += "\n<constraints>" + AGENT_CODEC.write(appliedConstraints.constraints()) + "</constraints>";
             yagen.waitmydawn.maa.runtime.BuildProgress.stage("核查最终组合及生成报告");
             return overlapSelections.prepare(userId, convId, payload, assembled, state.getFinishedAssembly(),
-                    state.getFinishedClosure(), apiClient, () -> isAborted(uuid));
+                    state.getFinishedClosure(), apiClient, () -> isAborted(uuid), state.getConfirmedGeneration());
         } catch (Exception e) {
             String msg = e.getMessage() != null ? e.getMessage() : "";
-            System.err.println("AI 调用异常: " + msg);
-            MaaLog.error("AI 调用异常: " + msg, e);
+            System.err.println("AI 调用异常: " + e.getClass().getSimpleName());
+            MaaLog.error("AI 调用异常", e);
 
             // 先用**状态码**判定（准），判不出来再退回下面的文本匹配（旧逻辑，保留兜底）
             String llmNote = llmErrorNote(e);
             if (llmNote != null) {
-                MaaLog.user("LLM 错误按状态码归类: " + e.getClass().getSimpleName() + " / " + msg);
+                MaaLog.user("LLM 错误按状态码归类: " + e.getClass().getSimpleName());
                 return retainFailedPlanning(llmNote, payload, userId, convId, clarificationQuestion, basicParametersOffered);
             }
             // 区分不同错误类型给出友好提示
@@ -661,7 +704,7 @@ public class ChatController {
             if (msg.contains("insufficient") || msg.contains("quota") || msg.contains("balance")) {
                 return "API 额度不足，请检查 DeepSeek 账户余额。";
             }
-            return "AI 调用异常: " + msg.substring(0, Math.min(200, msg.length())) + "\n请稍后重试。";
+            return "AI 调用未能完成，请稍后重试。";
         } finally {
             MaaLog.clearUserKey();
             abortedSessions.remove(uuid);
@@ -887,16 +930,12 @@ public class ChatController {
             return ResponseEntity.status(404).contentType(MediaType.APPLICATION_JSON)
                     .body(Map.of("error", "任务不存在或已过期", "taskId", taskId));
         }
-        // 归属校验：有主的任务只认主人。taskId 是不可猜的随机串，但它是**唯一凭据**——
-        // 不做这一步，别有用心的登录用户拿到 taskId 就能往别人的轮次里塞伪造事实，
-        // 还能从这个接口的响应里读到别人的最终结果（下面 continueOrReturn 会把回复返回）。
-        // 认不出归属时一律回 404 而不是 403：不告诉对方"这个任务确实存在，只是不属于他"。
-        if (task.ownerId() != null) {
-            Long uid = userIdFor(authToken);
-            if (uid == null || !uid.equals(task.ownerId())) {
-                return ResponseEntity.status(404).contentType(MediaType.APPLICATION_JSON)
-                        .body(Map.of("error", "任务不存在或已过期", "taskId", taskId));
-            }
+        // 随机 taskId 不能替代账号归属。无主内部任务也不经公开接口交付；
+        // 他人任务与不存在的任务统一返回 404，且必须在已完成结果读取之前校验。
+        Long uid = userIdFor(authToken);
+        if (uid == null || !uid.equals(task.ownerId())) {
+            return ResponseEntity.status(404).contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("error", "任务不存在或已过期", "taskId", taskId));
         }
         if (task.isDone()) {
             return continueOrReturn(task);
@@ -979,9 +1018,8 @@ public class ChatController {
         } catch (Exception e) {
             delegationTasks.cancel(task);
             Throwable cause = e.getCause() != null ? e.getCause() : e;
-            String msg = cause.getMessage() == null ? cause.toString() : cause.getMessage();
-            MaaLog.error("委派任务异常: " + msg, cause);
-            return textResponse("AI 调用异常: " + msg.substring(0, Math.min(200, msg.length())) + "\n请稍后重试。");
+            MaaLog.error("委派任务异常", cause);
+            return textResponse("AI 调用未能完成，请稍后重试。");
         }
     }
 
@@ -1062,7 +1100,7 @@ public class ChatController {
      * @return 采纳的条数（用于观测：这个数越大，说明搬走的服务器请求越多）
      */
     private FactsTally applyFacts(DelegationContext ctx, JsonNode body) {
-        ctx.recordBrowserHttp(body.path("client").path("requests").asInt(0));
+        ctx.recordClientMetrics(body.path("client"));
         FactsTally tally = new FactsTally();
         acceptFactList(ctx, body.path("answered"), Outcome.GOT, tally);
         acceptFactList(ctx, body.path("missing"), Outcome.ABSENT, tally);
@@ -1143,7 +1181,7 @@ public class ChatController {
                 if (!structured || !selfConsistent(kind, key, data)) {
                     tally.shapeRejected(key);
                     // 同一响应重取不会修复结构错误；终止此键的委派，交由服务端核验。
-                    ctx.handBack(kind, key);
+                    ctx.handBack(kind, key, "RECEIPT_REJECTED");
                     continue;
                 }
                 ctx.deliver(kind, key, data);
@@ -1151,7 +1189,7 @@ public class ChatController {
                 ctx.deliver(kind, key, null);
             } else {
                 // 立刻放行等待线程让它自己抓，而不是干等到预算耗尽
-                ctx.handBack(kind, key);
+                ctx.handBack(kind, key, fact.path("reason").asText("UNSPECIFIED"));
             }
             tally.accepted++;
         }
@@ -2277,6 +2315,8 @@ public class ChatController {
         if (plan == null) return candidates;
         List<CandidateMod> allowed = new ArrayList<>();
         for (CandidateMod candidate : candidates) {
+            String request = String.join("\n", plan.intent().requirements().stream().map(yagen.waitmydawn.maa.model.agent.BuildRequirement::source).toList());
+            if (!WorldGenerationPolicy.blocked(request, candidate.slug, candidate.desc).isEmpty()) continue;
             if (plan.blocked().contains(candidate.slug) || candidate.downloads > plan.intent().maxDownloads()) continue;
             if (!plan.intent().excludedCategories().isEmpty()) {
                 ModEntry cached = modrinthCacheService.find(candidate.slug);
@@ -2306,7 +2346,7 @@ public class ChatController {
                     ? AGENT_CODEC.readBuildIntent(aiBlueprint) : null;
             final BuildIntent structured = parsedIntent == null ? null
                     : BuildEnvironment.resolve(parsedIntent, defaultMc, defaultLoader);
-            RetrievalBudget retrieval = structured == null ? new RetrievalBudget() : new RetrievalBudget(
+            RetrievalBudget retrieval = state.getRetrievalBudget() != null ? state.getRetrievalBudget() : structured == null ? new RetrievalBudget() : new RetrievalBudget(
                     structured.count() == null ? 0 : structured.count().value());
             if (structured != null && structured.requirements().stream().anyMatch(r -> !r.criteria().isEmpty())) retrieval.reserveForRepair();
             var originalFiles = new LinkedHashSet<>(cleanSlugs(currentMods == null ? "" : currentMods));
@@ -2427,6 +2467,14 @@ public class ChatController {
             }
 
             yagen.waitmydawn.maa.runtime.BuildProgress.stage("召回内容与核实兼容版本");
+            String generationRequest = prompt + "\n" + (structured == null ? "" : String.join("\n",
+                    structured.requirements().stream().map(yagen.waitmydawn.maa.model.agent.BuildRequirement::source).toList()));
+            Map<String, String> admissionFacts = new LinkedHashMap<>();
+            Set<String> preservedGeneration = structured != null && structured.mode() == BuildIntent.Mode.EDIT
+                    ? Set.copyOf(originalFiles) : Set.of();
+            var initialBlocked = generationAdmission(initialMods.stream().filter(s -> !preservedGeneration.contains(s)).toList(),
+                    generationRequest, admissionFacts);
+            initialMods.removeAll(initialBlocked.keySet());
             int needed = targetCount - initialMods.size();
             if (structured != null && structured.mode() == BuildIntent.Mode.EDIT && structured.count() != null
                     && structured.count().scope() == BuildIntent.CountScope.TOTAL_FILES && state.getAssembly() != null)
@@ -2774,6 +2822,7 @@ public class ChatController {
                             var entry = modrinthCacheService.find(slug);
                             if (entry != null) coverageFacts.put(slug, entry.title() + " " + entry.description());
                         }
+                        for (var fact : state.getGenerationFacts().entrySet()) if (initialMods.contains(fact.getKey())) coverageFacts.put(fact.getKey(), fact.getValue());
                         if (!optimizationGoals.isEmpty()) {
                             var possible = rankedPool.stream().filter(c -> !OptimizationPortfolio.classify(c.desc).isEmpty()).map(c -> c.slug).limit(48).toList();
                             try {
@@ -2784,19 +2833,35 @@ public class ChatController {
                                 optimizationFacts.put(candidate.slug, new OptimizationPortfolio.Fact(candidate.slug, OptimizationPortfolio.Side.UNKNOWN,
                                         OptimizationPortfolio.classify(candidate.desc), PackAddonPolicy.infrastructure(candidate.slug, candidate.title, Set.of())));
                         }
-                        rankedPool.forEach(c -> coverageFacts.put(c.slug, c.title + " " + c.desc));
+                        rankedPool.forEach(c -> coverageFacts.merge(c.slug, c.title + " " + c.desc,
+                                (prior, fresh) -> prior.contains(fresh) ? prior : prior + "\n" + fresh));
+                        var generationTargets = DimensionGeneration.targets(structured.requirements());
+                        var generationSources = rankedPool.stream().filter(c -> requirementHints.getOrDefault(c.slug, Set.of()).stream()
+                                .anyMatch(generationTargets::containsKey)).map(c -> c.slug).limit(24).toList();
+                        if (!generationSources.isEmpty()) {
+                            try {
+                                apiClient.getProjectsBatch(generationSources).forEach((slug, info) -> {
+                                    String body = info.path("body").asText();
+                                    if (!body.isBlank() && coverageFacts.containsKey(slug)) coverageFacts.put(slug,
+                                            coverageFacts.get(slug) + "\n" + body.substring(0, Math.min(3200, body.length())));
+                                });
+                            } catch (RuntimeException unavailable) { retrieval.unknown(); }
+                        }
                         optimizationFacts.forEach((slug, fact) -> {
                             if (coverageFacts.containsKey(slug)) coverageFacts.put(slug, coverageFacts.get(slug) + "\n"
                                     + String.join("\n", new LinkedHashSet<>(fact.roles().values())));
                         });
                         coverageFacts.replaceAll((slug, text) -> {
-                            int limit = optimizationFacts.containsKey(slug) ? 2400 : 800;
+                            int limit = generationSources.contains(slug) || state.getGenerationFacts().containsKey(slug) ? 4000 : optimizationFacts.containsKey(slug) ? 2400 : 800;
                             return text.length() > limit ? text.substring(0, limit) : text;
                         });
                         criticContext.append("\n【完整有效需求账本】\n")
                                 .append(new tools.jackson.databind.ObjectMapper().writeValueAsString(structured.requirements()))
                                 .append("\n【项目用途事实】quote 只能逐字摘录下列值，不能摘录召回标签或相关性分数：\n")
                                 .append(new tools.jackson.databind.ObjectMapper().writeValueAsString(coverageFacts));
+                        if (!generationTargets.isEmpty()) criticContext.append("\n【维度核心生成目标】每个目标应优先选择一个有明确对应维度地貌/大规模生成依据的兼容候选。"
+                                + "结构、生物、跨维度泛称群系不能替代核心生成；quote须包含对应维度及大规模生成改动的原文。无依据时保留真实缺口，不猜测。\n")
+                                .append(MessageJson.write(generationTargets));
                         if (!optimizationGoals.isEmpty()) criticContext.append("\n【优化用途与侧别事实】UNKNOWN不能证明支持仅客户端或仅服务端要求；用途引用来自同一项目介绍，不以模组名或optimization标签判定。\n")
                                 .append(MessageJson.write(optimizationFacts));
                     }
@@ -2807,6 +2872,23 @@ public class ChatController {
 
                     if (isAborted(uuid)) return "⛔ 思考已手动终止。";
 
+                    {
+                        var admissionBlocked = generationAdmission(rankedPool.stream().map(c -> c.slug).toList(), generationRequest, admissionFacts);
+                        var declinedGeneration = rankedPool.stream().filter(c -> admissionBlocked.containsKey(c.slug)
+                                || !WorldGenerationPolicy.blocked(generationRequest, c.slug, c.desc).isEmpty()
+                                || !GenerationChoices.allows(state.getConfirmedGeneration(), c.slug,
+                                coverageFacts.getOrDefault(c.slug, c.desc))).map(c -> c.slug).collect(Collectors.toSet());
+                        rankedPool.removeIf(c -> declinedGeneration.contains(c.slug));
+                        poolIndex.keySet().removeAll(declinedGeneration);
+                        coverageEligible.removeAll(declinedGeneration);
+                        for (String slug : declinedGeneration) if (!initialMods.contains(slug)) coverageFacts.remove(slug);
+                        criticContext.append("\n【已确认的维度生成选择】后续推荐不得追加同维度其它核心生成项目；局部结构、生物等互补内容仍可审核。\n")
+                                .append(MessageJson.write(state.getConfirmedGeneration()))
+                                .append("\n【世界生成准入排除及项目原文】以下内容未获原始需求授权，不得用于数量补位或用途证据：\n")
+                                .append(MessageJson.write(admissionBlocked))
+                                .append("\n下列项目已移出本次候选，不得写入approved/rejected或用途引用：").append(MessageJson.write(declinedGeneration));
+                        if (goalMode) candidatePoolSize = poolIndex.size();
+                    }
                     final Set<String> submittedCandidates = Collections.unmodifiableSet(new LinkedHashSet<>(poolIndex.keySet()));
                     final int approvalLimit = Math.min(roundBudget, submittedCandidates.size());
                     var evidenceSources = new LinkedHashSet<>(submittedCandidates); evidenceSources.addAll(initialMods);
@@ -2819,9 +2901,9 @@ public class ChatController {
                             () -> aiAgentService.criticPools(criticContext.toString(), effectiveApiKey,
                                     submittedCandidates, approvalLimit));
                     String criticReply = criticCall.text();
-                    if (forceCriticDegraded && structured != null) {
+                    if (criticDegradationForced() && structured != null) {
                         criticReply = "{\"schemaVersion\":1,\"approved\":[";
-                    } else if (forceCriticDegraded) {
+                    } else if (criticDegradationForced()) {
                         // 🧪 评测故障注入：模拟"输出打满 token 上限被截断"，把闭合标签切掉
                         int close = criticReply.indexOf("</approved_mods>");
                         if (close > 0) criticReply = criticReply.substring(0, close);
@@ -2859,7 +2941,7 @@ public class ChatController {
                                 criticExcessApproved = selected.excessApproved();
                             } catch (IllegalArgumentException invalid) {
                                 MaaLog.app("Critic 契约校验失败: " + invalid.getMessage());
-                                if (forceCriticDegraded) throw invalid;
+                                if (criticDegradationForced()) throw invalid;
                                 if (isAborted(uuid)) return "⛔ 思考已手动终止。";
                                 final String invalidDecision = criticReply;
                                 final String correctionReason = invalid.getMessage() + (criticCall.truncatedCalls() > 0
@@ -2914,7 +2996,7 @@ public class ChatController {
                             // 修正失败不能扩大权限；累计否决和补位禁令优先于任何已批准项。
                             decisionRejected.addAll(validatedVetoes);
                             allowBackfill = !validatedBackfillOptOut;
-                            if (validatedSelection != null && !forceCriticDegraded) {
+                            if (validatedSelection != null && !criticDegradationForced()) {
                                 decisionApproved = validatedSelection.decision().approved().stream()
                                         .filter(slug -> !decisionRejected.contains(slug)).toList();
                                 criticOverlapRemoved = validatedSelection.overlapRemoved();
@@ -3102,7 +3184,7 @@ public class ChatController {
                 for (var c : addonCandidates.values()) {
                     var project = addonMetadata.get(c.slug);
                     boolean infrastructure = PackAddonPolicy.infrastructure(c.slug, c.title, project == null ? Set.of() : project.categories());
-                    var assessment = PackAddonPolicy.assess(c.slug, c.addonVersion, c.addonVersionProjects, c.addonCores, addonProjects.values());
+                    var assessment = PackAddonPolicy.assess(c.slug, c.addonVersion, c.addonVersionProjects, c.addonCores, addonProjects.values(), false, true);
                     assessments.put(c.slug, assessment);
                     boolean mandatory = !infrastructure && structured != null && structured.requirements().stream()
                             .filter(r -> r.kind() == yagen.waitmydawn.maa.model.agent.BuildRequirement.Kind.PACK_INTEGRATIONS)
@@ -3120,7 +3202,7 @@ public class ChatController {
                             "status", infrastructure ? "INFRASTRUCTURE_CANDIDATE" : assessment.conflict() ? "CONFLICT" : !assessment.corePresent() ? "CORE_OR_METADATA_NOT_RETAINED"
                                     : addonVetoes.contains(c.slug) ? "VETOED" : assessment.integration() ? "CONFIRMED_RELATION" : "NO_CONTENT_PARTNER"));
                     if (mandatory) {
-                        if (addonVetoes.contains(c.slug))
+                        if (addonVetoes.contains(c.slug) || assessment.conflict())
                             return integrationPause("联动附属 " + c.slug + " 已核实关联，但" + (assessment.conflict() ? "存在冲突声明或未核实的冲突引用" : "被审核明确否决")
                                     + "。请指定接受的替代，或明确放弃该联动要求。", addonTrace);
                         requiredIntegrations.add(c.slug);
@@ -3142,7 +3224,7 @@ public class ChatController {
                 }
                 var selectedAddons = addonCandidates.values().stream()
                         .filter(c -> requiredIntegrations.contains(c.slug) || addonEligible.contains(c.slug))
-                        .filter(c -> !addonVetoes.contains(c.slug) && assessments.get(c.slug).corePresent())
+                        .filter(c -> !addonVetoes.contains(c.slug) && assessments.get(c.slug).corePresent() && !assessments.get(c.slug).conflict())
                         .sorted(Comparator.comparing((CandidateMod c) -> !requiredIntegrations.contains(c.slug))
                                 .thenComparing(SCORE_THEN_DOWNLOADS).thenComparing(c -> c.slug)).limit(slots).toList();
                 for (var c : selectedAddons) if (initialMods.add(c.slug)) {
@@ -3159,6 +3241,22 @@ public class ChatController {
             System.out.println("🛠️ [阶段 4] 启动图谱引擎与深度依赖穿透...");
             System.out.println("🕸️ 开始将所有拼合模组 (" + initialMods.size() + "个) 送入深度依赖穿透引擎...");
             // 取带 DAG 结构的结果（与 preview 共享同一份缓存），用于删除后的断链诊断
+            var addonApplicability = auditAddonApplicability(initialMods, initialMods, addonCandidates, Map.of(), addonMetadata, retrieval, loader, mcVersion);
+            for (var row : addonApplicability.entrySet()) if (row.getValue().blocks() && !preservedGeneration.contains(row.getKey())) {
+                if (requiredIntegrations.contains(row.getKey()) || structured != null && (structured.mustHave().contains(row.getKey()) || structured.add().contains(row.getKey())))
+                    return integrationPause("附属 " + row.getKey() + " 的适用对象尚未完整核实、未在包内，或会额外引入内容项目。"
+                            + (row.getValue().missingPartners().isEmpty() ? "" : "缺少对象：" + row.getValue().missingPartners() + "。")
+                            + (row.getValue().introducedContent().isEmpty() ? "" : "新增内容：" + row.getValue().introducedContent() + "。")
+                            + "请补充联动双方的准确项目，或换一个附属再继续。", addonTrace);
+                initialMods.remove(row.getKey()); coverageEligible.remove(row.getKey());
+                logModOut(row.getKey(), "附属适用范围核查：" + MessageJson.write(row.getValue()));
+            }
+            var rootAdmission = generationAdmission(initialMods.stream().filter(s -> !preservedGeneration.contains(s)).toList(),
+                    generationRequest, admissionFacts);
+            if (!Collections.disjoint(rootAdmission.keySet(), requiredIntegrations))
+                return generationAdmissionPause(rootAdmission);
+            initialMods.removeAll(rootAdmission.keySet());
+            coverageEligible.removeAll(rootAdmission.keySet());
             long depT0 = System.currentTimeMillis();
             // P6：取带完整状态与诊断的解析结果（未解析项 / 被剔除项 / 是否触顶）
             Set<String> resolutionSeeds = state.getImportedPack() != null && (structured == null || structured.mode() == BuildIntent.Mode.EDIT)
@@ -3209,9 +3307,14 @@ public class ChatController {
                     || !optimizationCandidateInScope(slug, optimizationFacts, optimizationGoals, requirementHints, goalRoles));
             String coverageRepairStatus = "NOT_REQUESTED";
             List<String> coverageRepaired = List.of();
+            var coverageProofFacts = new LinkedHashMap<>(coverageFacts);
+            // 确认票据的原文独立于送审截断视图保留；无须调用审核员的轮次也可复用已核实事实。
+            state.getGenerationFacts().forEach((slug, text) -> coverageProofFacts.merge(slug, text,
+                    (prior, confirmed) -> prior.contains(confirmed) ? prior : confirmed + "\n" + prior));
+            coverageProofFacts.keySet().removeAll(addonVetoes);
             if (!namedOnly && structured != null && !structured.requirements().isEmpty()) {
                 var beforeCoverage = RequirementCoverage.assess(structured.requirements(), coverageReviews,
-                        resolution.graph(), resolution.graph().allSlugs, canonicalIdentities, addonMetadata, "PENDING", List.of(), coverageChecks);
+                        resolution.graph(), resolution.graph().allSlugs, canonicalIdentities, addonMetadata, "PENDING", List.of(), coverageChecks, coverageProofFacts);
                 var freshIds = RequirementPlanning.anchors(prompt).keySet();
                 var repairRequirements = structured.requirements().stream()
                         .filter(r -> structured.mode() != BuildIntent.Mode.EDIT || freshIds.contains(r.id())).toList();
@@ -3237,6 +3340,10 @@ public class ChatController {
                 var preferredVersions = new HashMap<String, String>();
                 baselineGraph.selectedVersions.forEach((s, v) -> preferredVersions.put(s, v.path("id").asText()));
                 var blockedRepair = new HashSet<>(excludedSlugs);
+                var repairAdmission = generationAdmission(proposed, generationRequest, admissionFacts);
+                blockedRepair.addAll(repairAdmission.keySet());
+                proposed = proposed.stream().filter(s -> !repairAdmission.containsKey(s)
+                        && GenerationChoices.allows(state.getConfirmedGeneration(), s, admissionFacts.getOrDefault(s, ""))).toList();
                 if (execution != null) blockedRepair.addAll(execution.blocked());
                 var previousRoots = execution == null ? Set.<String>of() : execution.original().stream()
                         .map(s -> canonicalIdentities.getOrDefault(s, s)).collect(Collectors.toSet());
@@ -3256,6 +3363,15 @@ public class ChatController {
                 MaaLog.user("最终需求补缺: " + coverageRepairStatus + "，新增 " + coverageRepaired);
             }
             DependencyGraph resolvedGraph = resolution.graph();
+            var finalApplicability = auditAddonApplicability(initialMods, resolvedGraph.allSlugs, addonCandidates, resolvedGraph.selectedVersions, addonMetadata,
+                    retrieval, loader, mcVersion);
+            addonApplicability.putAll(finalApplicability);
+            var blockedAddons = finalApplicability.entrySet().stream().filter(e -> e.getValue().blocks() && !preservedGeneration.contains(e.getKey())).toList();
+            if (!blockedAddons.isEmpty()) return integrationPause("最终附属适用范围仍有待确认项：" + MessageJson.write(blockedAddons.stream()
+                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue))) + "。本轮未修改清单，请确认联动对象或更换附属。", addonTrace);
+            var finalAdmission = generationAdmission(resolvedGraph.allSlugs.stream().filter(s -> !preservedGeneration.contains(s)).toList(),
+                    generationRequest, admissionFacts);
+            if (!finalAdmission.isEmpty()) return generationAdmissionPause(finalAdmission);
             if (state.getImportedPack() != null && structured != null && structured.mode() == BuildIntent.Mode.EDIT
                     && state.getImportedPack().loader().equals(loader) && state.getImportedPack().mcVersion().equals(mcVersion)) {
                 for (var file : state.getImportedPack().files()) {
@@ -3308,7 +3424,7 @@ public class ChatController {
                 var c = addonCandidates.get(slug);
                 var references = new HashMap<>(c.addonVersionProjects); references.putAll(finalVersionProjects);
                 var finalEvidence = PackAddonPolicy.assess(slug, resolvedGraph.selectedVersions.get(slug), references,
-                        c.addonCores, retainedAddonProjects);
+                        c.addonCores, retainedAddonProjects, true);
                 if (!finalPerfectMods.contains(slug) || !finalEvidence.integration() || finalEvidence.conflict())
                     return integrationPause("已要求的联动附属 " + slug + " 在依赖解析后未能保留完整关系。请更换可用版本或替代，或明确放弃该联动要求。", addonTrace);
             }
@@ -3354,6 +3470,7 @@ public class ChatController {
             }
 
             // 诚实上报：点名模组被平替/剔除/去重必须让用户知道——它们改变了用户的包
+            modDeltas.removeIf(d -> "DROPPED".equals(d.action()) && finalPerfectMods.contains(canonicalIdentities.getOrDefault(d.slug(), d.slug())));
             String modDeltaNote = buildModDeltaNote(modDeltas);
             if (!modDeltaNote.isEmpty()) {
                 cleanReply = cleanReply + modDeltaNote;
@@ -3379,7 +3496,7 @@ public class ChatController {
             cleanReply += "\n<build_report>" + MessageJson.write(presentation) + "</build_report>";
             coverageReviews = OptimizationPortfolio.filterReviews(structured == null ? List.of() : structured.requirements(), rawOptimizationReviews, optimizationFacts);
             var requirementCoverage = structured == null ? null : RequirementCoverage.assess(structured.requirements(),
-                    coverageReviews, resolvedGraph, finalPerfectMods, canonicalIdentities, addonMetadata, coverageRepairStatus, coverageRepaired, coverageChecks);
+                    coverageReviews, resolvedGraph, finalPerfectMods, canonicalIdentities, addonMetadata, coverageRepairStatus, coverageRepaired, coverageChecks, coverageProofFacts);
             if (requirementCoverage != null && !requirementCoverage.requirements().isEmpty()) {
                 cleanReply += "\n<requirement_report>" + MessageJson.write(requirementCoverage) + "</requirement_report>";
                 for (var row : requirementCoverage.requirements()) MaaLog.user("最终要求 " + row.id() + ": " + row.status()
@@ -3459,7 +3576,9 @@ public class ChatController {
             trace.trimSuggestions = trimSuggestions.size();
             trace.resolutionStatus = resolution.status().name();
             trace.unresolvedCount = resolution.unresolved().size();
-            trace.droppedCount = resolution.dropped().size();
+            trace.droppedCount = (int) resolution.dropped().stream().filter(d -> !finalPerfectMods.contains(d.slug())).count();
+            trace.dependencyDecisions = List.copyOf(resolution.dropped());
+            trace.addonApplicability = Map.copyOf(addonApplicability);
             trace.coordination = resolution.coordination();
             trace.requirementCoverage = requirementCoverage;
             var selectedIds = new TreeMap<String, String>();
@@ -3498,9 +3617,14 @@ public class ChatController {
                         ? "EXPLICIT_INTEGRATION" : addonApproved.contains(slug) ? "CRITIC_APPROVED" : "ALLOWED_BACKFILL");
                 var c = addonCandidates.get(slug);
                 var references = new HashMap<>(c.addonVersionProjects); references.putAll(finalVersionProjects);
-                var finalEvidence = PackAddonPolicy.assess(slug, resolvedGraph.selectedVersions.get(slug), references, c.addonCores, retainedAddonProjects);
-                item.put("finalEvidence", finalEvidence.evidence());
-                item.put("finalVersionVerified", resolvedGraph.selectedVersions.containsKey(slug));
+                var finalEvidence = PackAddonPolicy.assess(slug, resolvedGraph.selectedVersions.get(slug), references, c.addonCores, retainedAddonProjects, true);
+                item.put("finalEvidence", finalPerfectMods.contains(slug) ? finalEvidence.evidence() : List.of());
+                boolean finalVersionVerified = finalPerfectMods.contains(slug) && resolvedGraph.selectedVersions.containsKey(slug)
+                        && !resolvedGraph.selectedVersions.get(slug).path("id").asText().isBlank();
+                item.put("finalVersionVerified", finalVersionVerified);
+                item.put("finalEvidenceStatus", !finalPerfectMods.contains(slug) ? "NOT_RETAINED"
+                        : finalEvidence.conflict() ? "CONFLICT_DECLARATION" : finalEvidence.evidence().isEmpty() ? "RELATION_UNVERIFIED"
+                        : finalEvidence.integration() ? "IN_PACK_INTEGRATION" : "ADDON_RELATION");
                 item.put("preferences", c.preferences);
                 item.put("projectFacts", c.metadataFacts());
                 trace.addonEvidence.add(item);
@@ -3545,7 +3669,7 @@ public class ChatController {
             return finalReply;
 
         } catch (Exception e) {
-            System.err.println("组装蓝图失败: " + e.getMessage());
+            System.err.println("组装蓝图失败: " + e.getClass().getSimpleName());
             // 🐛 旧实现直接 `return aiBlueprint`：评论员那一步的 LLM 失败会被静默吞掉，
             // 用户拿到的是**带 XML 标签的规划师原文**（`<core_mods>` 都在里面），既没有图谱也不知道出了什么事。
             // 能识别的 LLM 失败就如实说；其余保留"尽力返回原文"的旧行为，但要留下日志线索。
@@ -3623,6 +3747,7 @@ public class ChatController {
     private static class TraceData {
         final List<Map<String, Object>> goalEvidence = new ArrayList<>();
         final List<Map<String, Object>> addonEvidence = new ArrayList<>();
+        Map<String, AddonApplicability.Check> addonApplicability = Map.of();
         AssemblySnapshot assembly;
         ResolutionResult.Coordination coordination;
         Map<String, Object> quantity = Map.of();
@@ -3653,6 +3778,7 @@ public class ChatController {
         boolean criticBackfillAllowed;
         String resolutionStatus = "COMPLETE";
         int unresolvedCount, droppedCount;
+        List<ResolutionResult.Dropped> dependencyDecisions = List.of();
         /** 本轮有多少个类别权重是 Tool adjustCategoryTargets 施加的（P3-7） */
         int categoryWeightApplied;
         BuildIntent intent;
@@ -3685,6 +3811,7 @@ public class ChatController {
         sb.append(",\"retrieval\":").append(new tools.jackson.databind.ObjectMapper().writeValueAsString(d.retrieval));
         sb.append(",\"goalEvidence\":").append(new tools.jackson.databind.ObjectMapper().writeValueAsString(d.goalEvidence));
         sb.append(",\"addonEvidence\":").append(new tools.jackson.databind.ObjectMapper().writeValueAsString(d.addonEvidence));
+        sb.append(",\"addonApplicability\":").append(MessageJson.write(d.addonApplicability));
         sb.append(",\"assembly\":").append(new tools.jackson.databind.ObjectMapper().writeValueAsString(d.assembly));
         sb.append(",\"coordination\":").append(new tools.jackson.databind.ObjectMapper().writeValueAsString(d.coordination));
         sb.append(",\"quantity\":").append(new tools.jackson.databind.ObjectMapper().writeValueAsString(d.quantity));
@@ -3746,7 +3873,8 @@ public class ChatController {
         // 点名模组的调整流水（平替/剔除/去重）：与诊断计数分开，评测可以断言"有没有如实告知"
         sb.append(",\"modOps\":{\"replaced\":[");
         appendJsonStrings(sb, d.replacedMods);
-        sb.append("],\"dropped\":[");
+        sb.append("],\"dependencyDecisions\":").append(MessageJson.write(d.dependencyDecisions));
+        sb.append(",\"dropped\":[");
         appendJsonStrings(sb, d.droppedMods);
         sb.append("],\"deduped\":[");
         appendJsonStrings(sb, d.dedupedMods);
@@ -3903,6 +4031,101 @@ public class ChatController {
         return scoreAddonPool(verified).stream().sorted(SCORE_THEN_DOWNLOADS).toList();
     }
 
+    /** 复用选版事实核对适用对象；新增身份补全有界，不能从项目名猜测缺席的联动核心。 */
+    private Map<String, AddonApplicability.Check> auditAddonApplicability(Set<String> roots, Set<String> retained,
+            Map<String, CandidateMod> addons, Map<String, JsonNode> selectedVersions, Map<String, PackAddonPolicy.Project> projectFacts,
+            RetrievalBudget resources, String loader, String mc) {
+        var result = new LinkedHashMap<String, AddonApplicability.Check>();
+        var identities = new LinkedHashSet<>(retained); identities.addAll(roots);
+        if (identities.isEmpty()) return result;
+        var metadata = new LinkedHashMap<String, PackAddonPolicy.Project>(projectFacts);
+        var versions = new LinkedHashMap<String, JsonNode>();
+        var versionProjects = new HashMap<String, String>();
+        addons.values().forEach(c -> versionProjects.putAll(c.addonVersionProjects));
+        selectedVersions.values().forEach(v -> versionProjects.put(v.path("id").asText(), v.path("project_id").asText()));
+        try {
+            var missingIdentities = identities.stream().filter(ref -> !metadata.containsKey(ref)).toList();
+            if (!missingIdentities.isEmpty()) apiClient.getProjectsBatch(missingIdentities).forEach((ref, info) -> metadata.put(ref, PackAddonPolicy.Project.from(info)));
+            for (String slug : roots) {
+                if (!retained.contains(slug)) continue;
+                var project = metadata.get(slug);
+                if (project == null) {
+                    resources.unknown();
+                    if (addons.containsKey(slug)) result.put(slug, new AddonApplicability.Check("PROJECT_UNVERIFIED", List.of(), List.of(), ""));
+                    continue;
+                }
+                if (!addons.containsKey(slug) && !AddonApplicability.addon(project.description())) continue;
+                var version = selectedVersions.get(slug);
+                if (version == null && addons.containsKey(slug)) version = addons.get(slug).addonVersion;
+                if (version == null && resources.version(slug)) version = apiClient.getLatestCompatibleVersionBySlug(slug, mc, loader);
+                if (version == null) { resources.unknown(); result.put(slug, new AddonApplicability.Check("VERSION_UNVERIFIED", List.of(), List.of(), project.description())); }
+                else versions.put(slug, version);
+            }
+            var refs = new TreeSet<String>(); var exact = new TreeSet<String>();
+            for (var version : versions.values()) for (var dependency : version.path("dependencies")) {
+                if (!Set.of("required", "optional").contains(dependency.path("dependency_type").asText())) continue;
+                String project = dependency.path("project_id").asText(""); String id = dependency.path("version_id").asText("");
+                if (!project.isBlank()) refs.add(project);
+                else if (!id.isBlank() && !versionProjects.containsKey(id)) exact.add(id);
+            }
+            var toLoad = exact.stream().limit(24).filter(id -> resources.version("vid:" + id)).toList();
+            if (!toLoad.isEmpty()) apiClient.prefetchVersions(toLoad);
+            for (String id : toLoad) {
+                var version = apiClient.getVersionById(id);
+                if (version != null && !version.path("project_id").asText().isBlank()) versionProjects.put(id, version.path("project_id").asText());
+            }
+            refs.addAll(versionProjects.values());
+            var knownIds = metadata.values().stream().map(PackAddonPolicy.Project::id).collect(Collectors.toSet());
+            var extra = refs.stream().filter(id -> !id.isBlank() && !knownIds.contains(id)).limit(64).toList();
+            if (!extra.isEmpty()) apiClient.getProjectsBatch(extra).forEach((ref, info) -> metadata.put(ref, PackAddonPolicy.Project.from(info)));
+            var kept = new HashSet<>(retained); var permitted = new HashSet<>(roots);
+            metadata.forEach((ref, project) -> {
+                if (retained.contains(ref) || retained.contains(project.slug())) { kept.add(project.id()); kept.add(project.slug()); }
+                if (roots.contains(ref) || roots.contains(project.slug())) { permitted.add(project.id()); permitted.add(project.slug()); }
+            });
+            for (var entry : versions.entrySet()) result.put(entry.getKey(), AddonApplicability.assess(metadata.get(entry.getKey()), entry.getValue(),
+                    versionProjects, metadata.values(), kept, permitted, addons.containsKey(entry.getKey())));
+            if (extra.size() < refs.stream().filter(id -> !id.isBlank() && !knownIds.contains(id)).count() || toLoad.size() < exact.size()) resources.unknown();
+        } catch (java.util.concurrent.CancellationException canceled) { throw canceled; }
+        catch (RuntimeException unavailable) { resources.unknown(); MaaLog.user("附属适用范围：部分版本或对象资料未取得，保留未核实状态"); }
+        projectFacts.putAll(metadata);
+        result.forEach((slug, check) -> MaaLog.user("附属适用范围 " + slug + "：" + MessageJson.write(check)));
+        return result;
+    }
+
+    /** 同一轮复用项目原文；取数走委派门面，不额外建立服务器 HTTP 通道。 */
+    private Map<String, List<WorldGenerationPolicy.Finding>> generationAdmission(Collection<String> slugs, String request,
+            Map<String, String> facts) {
+        var missing = slugs.stream().filter(s -> !facts.containsKey(s)).distinct().toList();
+        if (!missing.isEmpty()) try {
+            apiClient.getProjectsBatch(missing).forEach((ref, info) -> {
+                String text = info.path("description").asText() + "\n" + info.path("body").asText();
+                text = text.substring(0, Math.min(text.length(), 16000));
+                if (!text.isBlank()) {
+                    facts.put(ref, text);
+                    facts.put(info.path("slug").asText(ref), text);
+                    if (!info.path("id").asText().isBlank()) facts.put(info.path("id").asText(), text);
+                }
+            });
+        } catch (java.util.concurrent.CancellationException canceled) { throw canceled; }
+        catch (RuntimeException unavailable) { MaaLog.user("生成准入：部分项目介绍未取得，不能据此认定无极端生成行为"); }
+        long unknown = slugs.stream().filter(s -> !facts.containsKey(s)).count();
+        if (unknown > 0) MaaLog.user("生成准入：" + unknown + " 项未取得可核对介绍，未授予无极端改造的验证结论");
+        var blocked = new LinkedHashMap<String, List<WorldGenerationPolicy.Finding>>();
+        for (String slug : slugs) {
+            var reasons = WorldGenerationPolicy.blocked(request, slug, facts.get(slug));
+            if (!reasons.isEmpty()) {
+                blocked.put(slug, reasons);
+                MaaLog.user("生成准入排除 " + slug + "：" + WorldGenerationPolicy.reason(reasons) + "，原文 " + reasons);
+            }
+        }
+        return blocked;
+    }
+    private static String generationAdmissionPause(Map<String, List<WorldGenerationPolicy.Finding>> blocked) {
+        return "⚠️ 依赖或必选联动带入了未经要求的世界改造，本轮未修改清单。请确认是否接受这些改造，或更换引入它们的模组：\n"
+                + String.join("\n", blocked.entrySet().stream().map(e -> "· " + e.getKey() + "：" + WorldGenerationPolicy.reason(e.getValue())).toList());
+    }
+
     private Map<String, PackAddonPolicy.Project> loadAddonProjects(Set<String> identities, RetrievalBudget resources) {
         var facts = new LinkedHashMap<String, PackAddonPolicy.Project>();
         try { apiClient.prefetchProjects(identities); }
@@ -3975,7 +4198,10 @@ public class ChatController {
         for (var parent : scoped) for (var criterion : parent.criteria()) reviews.stream().filter(r -> r.id().equals(parent.id()))
                 .flatMap(r -> r.criteria().stream()).filter(c -> c.source().equals(criterion.source()))
                 .forEach(c -> existingEvidence.put(criterion.key(parent.id()), c.evidence()));
-        var searchable = targets.stream().filter(target -> existingEvidence.getOrDefault(target.id(), List.of()).stream()
+        var generationGaps = report.requirements().stream().flatMap(r -> r.criteria().stream())
+                .filter(c -> c.evidenceState().generation().stream().anyMatch(g -> g.projects().isEmpty()))
+                .map(RequirementCoverage.CriterionRow::id).collect(Collectors.toSet());
+        var searchable = targets.stream().filter(target -> generationGaps.contains(target.id()) || existingEvidence.getOrDefault(target.id(), List.of()).stream()
                 .noneMatch(e -> priorEligible.contains(e.slug()) && !selected.contains(e.slug()))).toList();
         resources.beginRepair();
         var fresh = buildRequirementPool(searchable, selected, loader, mc, maxDownloads, execution, resources, uuid, new HashMap<>(), false);
@@ -3985,6 +4211,10 @@ public class ChatController {
             facts.put(c.slug, text.length() > 800 ? text.substring(0, 800) : text);
         });
         candidates.removeAll(vetoes); candidates.removeAll(selected);
+        String admissionRequest = String.join("\n", execution.intent().requirements().stream()
+                .map(yagen.waitmydawn.maa.model.agent.BuildRequirement::source).toList());
+        var admissionBlocked = generationAdmission(candidates, admissionRequest, new LinkedHashMap<>());
+        candidates.removeAll(admissionBlocked.keySet());
         var neededFacts = new LinkedHashMap<String, String>();
         facts.forEach((slug, text) -> { if (selected.contains(slug) || candidates.contains(slug)) neededFacts.put(slug, text); });
         if (candidates.isEmpty() && neededFacts.isEmpty())
@@ -3999,15 +4229,20 @@ public class ChatController {
                         yagen.waitmydawn.maa.model.agent.ReviewInputScope.Mode.REVIEW_MISSING_CONTENT,
                         loader, mc, candidates, selected))
                 + "\n【项目用途事实】\n" + mapper.writeValueAsString(neededFacts);
+        var generationTargets = DimensionGeneration.targets(execution.intent().requirements());
+        context += "\n【维度核心生成目标】大量群系、丰富地形或大规模结构可提供依据；普通局部结构和生物不能消除核心生成缺口。\n" + mapper.writeValueAsString(
+                generationTargets.entrySet().stream().filter(e -> targetIds.contains(e.getKey()))
+                        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
+        final String reviewContext = context;
         AiAgentService.AgentCallResult call = null;
         try {
             if (isAborted(uuid)) throw new java.util.concurrent.CancellationException();
-            call = callAgentWithRetry("审核员定向补缺", uuid, () -> aiAgentService.criticPools(context, key, candidates, Math.min(3, candidates.size())));
+            call = callAgentWithRetry("审核员定向补缺", uuid, () -> aiAgentService.criticPools(reviewContext, key, candidates, Math.min(3, candidates.size())));
             var evidenceSources = new LinkedHashSet<>(selected); evidenceSources.addAll(candidates);
             var decision = AGENT_CODEC.readReviewResponse(call.text()).select(candidates, 3, evidenceSources).decision();
             RequirementCoverage.validateReviews(scoped, decision.requirements());
             var blocked = new HashSet<>(vetoes); decision.rejected().forEach(r -> blocked.add(r.slug()));
-            var verification = RequirementCoverage.verify(scoped, decision.requirements(), neededFacts, blocked);
+            var verification = RequirementCoverage.verify(scoped, decision.requirements(), neededFacts, blocked, generationTargets);
             var verified = verification.reviews();
             var eligible = new HashSet<>(priorEligible); eligible.removeAll(blocked);
             var hints = new HashMap<String, Set<String>>();
@@ -4120,7 +4355,8 @@ public class ChatController {
         var perRequirement = new HashMap<String, Integer>();
         var existingFacts = new ArrayList<CandidateMod>();
         if (requirements.isEmpty()) return List.of();
-        var queries = RequirementRetrieval.queries(requirements, Set.copyOf(execution.intent().excludedCategories()));
+        var generationTargets = DimensionGeneration.targets(execution.intent().requirements());
+        var queries = RequirementRetrieval.queries(requirements, Set.copyOf(execution.intent().excludedCategories()), generationTargets);
         var queryCounts = queries.stream().collect(Collectors.groupingBy(RequirementRetrieval.Query::requirementId, Collectors.counting()));
         try {
             if (readExistingFacts) apiClient.prefetchProjects(existing);
@@ -4172,11 +4408,17 @@ public class ChatController {
                     }
                 } catch (Exception unavailable) { resources.unknown(); }
                 raw.values().forEach(c -> c.preferences = preferences);
+                var generationGoals = generationTargets.getOrDefault(query.requirementId(), List.of());
+                boolean generationQuery = generationGoals.stream().anyMatch(g -> g.query().equals(query.keyword()));
+                var generationMatches = generationQuery ? raw.values().stream()
+                        .filter(c -> generationGoals.stream().anyMatch(g -> DimensionGeneration.supports(g, c.desc)))
+                        .map(c -> c.slug).collect(Collectors.toSet()) : Set.<String>of();
+                var ranked = Comparator.<CandidateMod, Boolean>comparing(c -> generationMatches.contains(c.slug)).reversed()
+                        .thenComparing(SCORE_THEN_DOWNLOADS).thenComparing(c -> c.slug);
                 var ordered = scoreAddonPool(new ArrayList<>(raw.values())).stream().filter(c -> c.downloads <= maxDownloads)
-                        .filter(c -> !existingIds.contains(c.slug)).sorted(SCORE_THEN_DOWNLOADS).toList();
+                        .filter(c -> !existingIds.contains(c.slug)).sorted(ranked).toList();
                 ordered = filterPlanCandidates(ordered, execution).stream().limit(16).toList();
-                rows.put(key, verifyPoolCompatibility(ordered, loader, mc, resources).stream()
-                        .sorted(SCORE_THEN_DOWNLOADS.thenComparing(c -> c.slug)).limit(8).toList());
+                rows.put(key, verifyPoolCompatibility(ordered, loader, mc, resources).stream().sorted(ranked).limit(8).toList());
             }
             int retained = perRequirement.getOrDefault(query.requirementId(), 0);
             int queryAllowance = queryCounts.getOrDefault(query.requirementId(), 1L) == 1 ? 8
@@ -4186,6 +4428,8 @@ public class ChatController {
                 if (retained >= 8 || offered >= queryAllowance || result.size() >= POOL_CAP) break;
                 var ids = hints.computeIfAbsent(c.slug, ignored -> new LinkedHashSet<>());
                 if (ids.add(query.requirementId())) { retained++; offered++; }
+                for (var goal : generationTargets.getOrDefault(query.requirementId(), List.of()))
+                    if (DimensionGeneration.supports(goal, c.desc)) ids.add(query.requirementId() + "::generation:" + goal.dimension());
                 result.putIfAbsent(c.slug, c);
             }
             perRequirement.put(query.requirementId(), retained);

@@ -33,6 +33,7 @@ public final class PackQuantityPolicy {
         }
         if (removed.isEmpty()) return new Result(resolution, selected, removed, files.size(), files.size() > upper ? "PROTECTED_OVERAGE" : "WITHIN_POLICY");
         var graph = new DependencyGraph();
+        graph.projectAliases.putAll(resolution.graph().projectAliases);
         graph.allSlugs.addAll(files);
         for (String slug : files) {
             if (resolution.graph().selectedVersions.containsKey(slug)) graph.selectedVersions.put(slug, resolution.graph().selectedVersions.get(slug));

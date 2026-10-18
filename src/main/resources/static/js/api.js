@@ -12,9 +12,11 @@ export const authHeader = () => authUser.value ? {'X-Auth-Token': authUser.value
 // 🔥 全局 fetch 包装: 捕获未登录错误并提示重新登录
 const authenticatedFetch = async (url, opts = {}) => {
     const {acceptErrorStatuses = [], ...requestOpts} = opts;
+    const ownerToken = authUser.value?.token;
     const res = await fetch(url, { ...requestOpts, headers: { ...opts.headers, ...authHeader() } });
     // 401: 服务端明确返回未授权
     if (res.status === 401) {
+        if (authUser.value?.token !== ownerToken) throw new DOMException('账号已切换', 'AbortError');
         authUser.value = null; localStorage.removeItem('maa-auth');
         authError.value = '登录已过期，请重新登录';
         showAuthModal.value = true;
@@ -35,9 +37,16 @@ const authenticatedFetch = async (url, opts = {}) => {
 
 // 轮询只读取已有任务；不重复提交业务请求，以免偏好计数或上传解析执行两次。
 export const apiFetch = async (url, opts = {}) => {
+    const ownerToken = authUser.value?.token;
+    const ownedFetch = async (target, options) => {
+        if (authUser.value?.token !== ownerToken) throw new DOMException('账号已切换', 'AbortError');
+        const result = await authenticatedFetch(target, options);
+        if (authUser.value?.token !== ownerToken) throw new DOMException('账号已切换', 'AbortError');
+        return result;
+    };
     const controller = new AbortController();
     opts = {...opts, signal: opts.signal ? AbortSignal.any([opts.signal, controller.signal]) : controller.signal};
-    let res = await authenticatedFetch(url, opts);
+    let res = await ownedFetch(url, opts);
     let taskId, operation;
     let rounds = 0;
     const deadline = Date.now() + 20 * 60 * 1000;
@@ -73,20 +82,22 @@ export const apiFetch = async (url, opts = {}) => {
                     ? Math.max(1, envelope.perCallBudgetMs - 1000) : 110_000;
                 const facts = await fulfilWanted(envelope.wanted || [], opts.signal, budget);
                 opts.signal?.throwIfAborted();
-                res = await authenticatedFetch(`${base}/facts`, {method: 'POST', signal: opts.signal,
+                res = await ownedFetch(`${base}/facts`, {method: 'POST', signal: opts.signal,
                     headers: {'Content-Type': 'application/json'}, body: JSON.stringify(facts)});
             } else {
                 await new Promise(resolve => setTimeout(resolve, 1000));
                 opts.signal?.throwIfAborted();
-                res = await authenticatedFetch(operation ? base : `${base}/facts`, operation
+                res = await ownedFetch(operation ? base : `${base}/facts`, operation
                     ? {signal: opts.signal}
                     : {method: 'POST', signal: opts.signal, headers: {'Content-Type': 'application/json'}, body: '{}'});
             }
         }
     } catch (error) {
-        if (taskId) {
+        if (taskId && error.status === 404)
+            error.message = '任务已中断或过期，请重新提交。已保存的清单仍可从历史打开。';
+        if (taskId && error.status !== 404 && authUser.value?.token === ownerToken) {
             const cancelUrl = operation ? `/api/operations/${taskId}/cancel` : '/api/chat/abort';
-            authenticatedFetch(cancelUrl, {method: 'POST', headers: {'Content-Type': 'application/json'},
+            ownedFetch(cancelUrl, {method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: operation ? '{}' : JSON.stringify({uuid: 'default-user'})}).catch(() => {});
         }
         throw error;

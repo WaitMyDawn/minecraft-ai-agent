@@ -8,6 +8,18 @@ import static org.junit.jupiter.api.Assertions.*;
 import static yagen.waitmydawn.maa.model.OptimizationPortfolio.*;
 
 class OptimizationPortfolioTest {
+    @Test void hardwareBenchmarksAndModNamesDoNotProveMemoryOrCpuMechanisms() {
+        for (String text : List.of("BadOptimizations tested on Intel i7 CPU with 4GB allocated RAM",
+                "Performance optimization benchmark with Intel CPU and 4GB allocated RAM improves FPS",
+                "Faster loading tested on a CPU with 8GB RAM", "提升帧率，测试配置为CPU和4GB内存")) {
+            var roles = classify(text); assertFalse(roles.containsKey(Role.MEMORY), text); assertFalse(roles.containsKey(Role.CPU), text);
+        }
+        String text = "Tested with 4GB RAM on an Intel CPU, this mod reduces memory usage";
+        assertTrue(classify(text).containsKey(Role.MEMORY)); assertFalse(classify(text).containsKey(Role.CPU));
+        assertTrue(classify(text).get(Role.MEMORY).contains("reduces memory usage"));
+        assertTrue(classify("Memory usage optimizations").containsKey(Role.MEMORY));
+        assertTrue(classify("CPU overhead is reduced").containsKey(Role.CPU));
+    }
     private final ObjectMapper json = new ObjectMapper();
     private BuildRequirement requirement(String text) {
         return new BuildRequirement("r-0000000000000001", text, BuildRequirement.Kind.CAPABILITY, List.of(), List.of(BuildRequirement.Capability.PERFORMANCE));

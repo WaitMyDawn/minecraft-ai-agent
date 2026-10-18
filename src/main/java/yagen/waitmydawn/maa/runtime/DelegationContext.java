@@ -111,6 +111,30 @@ public final class DelegationContext {
     private final AtomicLong lastWantNanos = new AtomicLong();
     private final AtomicInteger served = new AtomicInteger();
     private final AtomicInteger browserHttp = new AtomicInteger();
+    private final AtomicInteger clientCacheHits = new AtomicInteger(), clientCoalesced = new AtomicInteger();
+    private final Set<String> clientProviders = ConcurrentHashMap.newKeySet();
+    public enum ClientFailure { REQUEST_TIMEOUT, BUDGET_EXHAUSTED, RATE_LIMITED, UPSTREAM_HTTP, NETWORK_OR_CORS,
+        NETWORK_ERROR, INVALID_RESPONSE, RECEIPT_REJECTED, CLIENT_ABORTED, UNSPECIFIED }
+    private final Map<ClientFailure, AtomicInteger> clientFailures = new ConcurrentHashMap<>();
+
+    /** 客户端自报的诊断只用于观测，不改变数据校验、配额或回退权限。 */
+    public void recordClientMetrics(JsonNode client) {
+        if (!client.isObject()) return;
+        recordBrowserHttp(client.path("requests").asInt(0));
+        int hits = client.path("cacheHits").asInt(0), combined = client.path("coalesced").asInt(0);
+        if (hits >= 0 && hits <= 10000) clientCacheHits.addAndGet(hits);
+        if (combined >= 0 && combined <= 10000) clientCoalesced.addAndGet(combined);
+        String via = client.path("via").asText("");
+        clientProviders.add(Set.of("browser", "eval-jvm").contains(via) ? via : "unknown");
+    }
+    public int clientCacheHits() { return clientCacheHits.get(); }
+    public int clientCoalesced() { return clientCoalesced.get(); }
+    public Set<String> clientProviders() { return Set.copyOf(clientProviders); }
+    public Map<String, Integer> clientFailureCounts() {
+        var counts = new java.util.TreeMap<String, Integer>();
+        clientFailures.forEach((reason, count) -> counts.put(reason.name(), count.get()));
+        return Map.copyOf(counts);
+    }
 
     public void recordBrowserHttp(int requests) {
         if (requests >= 0 && requests <= 10000) browserHttp.addAndGet(requests);
@@ -289,10 +313,19 @@ public final class DelegationContext {
      * 服务器照着 missing 当作确定不存在，兜底就失效了。
      */
     public synchronized void handBack(Kind kind, String key) {
+        handBack(kind, key, "UNSPECIFIED");
+    }
+    public synchronized void handBack(Kind kind, String key, String reason) {
         String id = id(kind, key);
         CompletableFuture<Answer> future = waiting.get(id);
         if (future != null) {
-            if (future.complete(new Answer(Outcome.TIMEOUT, null))) { timedOut.incrementAndGet(); handBacks.incrementAndGet(); }
+            if (future.complete(new Answer(Outcome.TIMEOUT, null))) {
+                timedOut.incrementAndGet(); handBacks.incrementAndGet();
+                ClientFailure failure;
+                try { failure = ClientFailure.valueOf(reason); }
+                catch (IllegalArgumentException | NullPointerException invalid) { failure = ClientFailure.UNSPECIFIED; }
+                clientFailures.computeIfAbsent(failure, unused -> new AtomicInteger()).incrementAndGet();
+            }
         }
     }
 

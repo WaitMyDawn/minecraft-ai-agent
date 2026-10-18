@@ -27,6 +27,31 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 换成正连的 {@code JdbcDataSource} 跑通说明不了生产路径也对。
  */
 class BackupServiceTest {
+    @Test @org.junit.jupiter.api.Timeout(10)
+    void concurrentSameTagHasOneWinnerAndDoesNotOverwriteTheArchive() throws Exception {
+        HikariDataSource ds = freshDatabase("knowledge");
+        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var service = new BackupService(ds, tmp.resolve("backups").toString());
+            var start = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.Callable<Boolean> operation = () -> {
+                start.await(); try { service.backup("shared"); return true; }
+                catch (IllegalStateException exists) { return false; }
+            };
+            var one = executor.submit(operation); var two = executor.submit(operation); start.countDown();
+            assertEquals(1, (one.get() ? 1 : 0) + (two.get() ? 1 : 0));
+            Path zip = tmp.resolve("backups/shared/knowledge.zip"); byte[] original = Files.readAllBytes(zip);
+            assertThrows(IllegalStateException.class, () -> service.backup("shared"));
+            org.junit.jupiter.api.Assertions.assertArrayEquals(original, Files.readAllBytes(zip));
+        } finally { shutdown(ds); }
+    }
+
+    @Test void configuredBackupDirectoryCanContainASingleQuote() throws Exception {
+        HikariDataSource ds = freshDatabase("knowledge");
+        try {
+            var result = new BackupService(ds, tmp.resolve("backup's").toString()).backup("fixture");
+            assertTrue(Files.size(Path.of(result.file())) > 0);
+        } finally { shutdown(ds); }
+    }
 
     @TempDir
     Path tmp;

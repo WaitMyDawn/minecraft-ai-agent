@@ -114,4 +114,36 @@ class VersionCoordinationTest {
         assertTrue(r.isComplete(), r.summary());
         verify(api, never()).getCompatibleVersions(anyString(), anyString(), anyString());
     }
+    @Test void bothOwnersOfContradictoryExactRequirementsCanBeCoordinated() {
+        var a = version("A1", "PA", "vid:C2"); project("a", "PA", a);
+        var latest = version("B2", "PB", "vid:C1");
+        var compatible = version("B1", "PB", "PC");
+        project("b", "PB", latest);
+        project("core", "PC", version("C2", "PC")); version("C1", "PC");
+        var generic = version("G1", "PG", "PC");
+        ((tools.jackson.databind.node.ObjectNode) generic.path("dependencies").get(0)).putNull("version_id");
+        project("generic", "PG", generic);
+        when(api.getCompatibleVersions(eq("PA"), anyString(), anyString())).thenReturn(json.createArrayNode().add(a));
+        when(api.getCompatibleVersions(eq("PB"), anyString(), anyString())).thenReturn(json.createArrayNode().add(latest).add(compatible));
+        var r = engine.resolveWithReport(Set.of("a", "b", "core", "generic"), "neoforge", "1.21.1");
+        assertTrue(r.isComplete(), r.summary());
+        assertEquals("B1", r.graph().selectedVersions.get("b").path("id").asText());
+        assertEquals("C2", r.graph().selectedVersions.get("core").path("id").asText());
+        assertTrue(r.coordination().attempts() <= 6); assertTrue(r.coordination().queries() <= 4);
+        verify(api, never()).getCompatibleVersions(eq("PG"), anyString(), anyString());
+    }
+    @Test void theOtherSideOfAConflictCanChangeButAHardPinCannot() {
+        var a = version("A1", "PA");
+        ((tools.jackson.databind.node.ArrayNode) a.path("dependencies")).addObject().put("dependency_type", "incompatible").put("version_id", "B2").put("project_id", "PB");
+        project("a", "PA", a);
+        var latest = version("B2", "PB"); var compatible = version("B1", "PB"); project("b", "PB", latest);
+        when(api.getCompatibleVersions(eq("PA"), anyString(), anyString())).thenReturn(json.createArrayNode().add(a));
+        when(api.getCompatibleVersions(eq("PB"), anyString(), anyString())).thenReturn(json.createArrayNode().add(latest).add(compatible));
+        var r = engine.resolveWithReport(Set.of("a", "b"), "neoforge", "1.21.1");
+        assertTrue(r.isComplete(), r.summary()); assertEquals("B1", r.graph().selectedVersions.get("b").path("id").asText());
+        clearInvocations(api);
+        var pinned = engine.resolveWithReport(Set.of("a", "vid:B2"), "neoforge", "1.21.1");
+        assertFalse(pinned.isComplete()); assertEquals("B2", pinned.graph().selectedVersions.get("b").path("id").asText());
+        verify(api, never()).getCompatibleVersions(eq("PB"), anyString(), anyString());
+    }
 }

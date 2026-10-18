@@ -21,7 +21,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * MAA 黄金测试集执行器（离线评测闭环）。
+ * MAA 黄金测试集执行器（黑盒评测闭环）。
  *
  * 设计依据：固定题集 + 预先写死的判分标准 + 程序自动判分 + 可重复对比。
  * 题集见 eval/golden-set.json，本类只负责"跑题 + 判定 + 出报告"，期望值全部写在题集里。
@@ -279,6 +279,8 @@ class GoldenSetEval {
             if (a.has("facts")) run.failures.addAll(GoldenAssertions.check(facts, a.get("facts")));
             if (a.has("coverage")) run.failures.addAll(GoldenAssertions.checkCoverage(facts, finalMods, a.get("coverage")));
             if (a.has("optimization")) run.failures.addAll(GoldenAssertions.checkOptimization(facts, finalMods, a.get("optimization")));
+            if (a.has("generation")) run.failures.addAll(GoldenAssertions.checkGeneration(facts, finalMods, a.get("generation")));
+            if (a.has("composition")) run.failures.addAll(GoldenAssertions.checkComposition(facts, finalMods, a.get("composition")));
             for (JsonNode phrase : a.path("visibleReplyContains")) if (!visible.contains(phrase.asText()))
                 run.failures.add("可见回复缺少: " + phrase.asText());
             // 条件断言只检查实际发生的缺口，不将实时上游的某个冲突写成永久期望。
@@ -382,12 +384,14 @@ class GoldenSetEval {
     }
 
     static void validateConfirmation(JsonNode rule) {
-        if (!rule.isObject() || !Set.of("BASIC", "OVERLAP").contains(rule.path("kind").asText()))
+        if (!rule.isObject() || !Set.of("BASIC", "OVERLAP", "GENERATION").contains(rule.path("kind").asText()))
             throw new IllegalArgumentException("未知确认类型");
         rule.properties().forEach(e -> { if (!Set.of("kind", "answer", "strategy").contains(e.getKey())) throw new IllegalArgumentException("未知确认字段"); });
         if (rule.path("kind").asText().equals("BASIC")) {
             if (!rule.path("answer").isTextual() || rule.path("answer").asText().isBlank() || rule.has("strategy")) throw new IllegalArgumentException("基本确认缺少 answer");
-        } else if (!rule.path("strategy").asText().equals("KEEP_ALL") || rule.has("answer")) throw new IllegalArgumentException("重叠确认需要显式 KEEP_ALL 策略");
+        } else if ((!rule.path("strategy").asText().equals("KEEP_ALL")
+                && !(rule.path("kind").asText().equals("GENERATION") && rule.path("strategy").asText().equals("SELECT_RECOMMENDED")))
+                || rule.has("answer")) throw new IllegalArgumentException("候选确认需要显式选择策略");
     }
     static ObjectNode confirmationInput(ObjectNode original, String reply, JsonNode rule) {
         validateConfirmation(rule);
@@ -401,14 +405,20 @@ class GoldenSetEval {
         if (kind.equals("BASIC")) {
             result.put("prompt", rule.path("answer").asText()); result.put("clarificationTicket", options.path("ticket").asText());
         } else {
-            if (!options.path("kind").asText().equals("OVERLAP") || !options.path("groups").isArray() || options.path("groups").isEmpty()) throw new IllegalArgumentException("不是重叠确认");
+            if (!options.path("kind").asText().equals(kind) || !options.path("groups").isArray() || options.path("groups").isEmpty()) throw new IllegalArgumentException("候选确认类型或分组不符");
             var choices = json.createObjectNode();
+            var recommended = new LinkedHashSet<String>();
+            for (var group : options.path("groups")) for (var candidate : group.path("candidates"))
+                if (candidate.path("recommended").asBoolean() || candidate.path("protectedSelection").asBoolean()) recommended.add(candidate.path("slug").asText());
             for (var group : options.path("groups")) {
                 var selected = choices.putObject(group.path("original").asText()); var slugs = selected.putArray("slugs");
-                group.path("candidates").forEach(candidate -> slugs.add(candidate.path("slug").asText()));
+                group.path("candidates").forEach(candidate -> {
+                    if (rule.path("strategy").asText().equals("KEEP_ALL") || recommended.contains(candidate.path("slug").asText())) slugs.add(candidate.path("slug").asText());
+                });
+                if (slugs.isEmpty()) throw new IllegalArgumentException("候选组没有所声明策略可选的项目");
                 selected.put("drop", false).put("manualSlug", "");
             }
-            result.put("selectionKind", "OVERLAP").put("replacementTicket", options.path("ticket").asText())
+            result.put("selectionKind", kind).put("replacementTicket", options.path("ticket").asText())
                     .put("replacementChoices", json.writeValueAsString(choices));
         }
         return result;
@@ -438,12 +448,14 @@ class GoldenSetEval {
         Set<String> supported = Set.of("httpOk", "nodesContain", "nodesNotContain", "minNodes", "maxNodes", "conflictsEmpty",
                 "conflictsMissing", "conflictsRequiredBy", "uniqueNodeIds", "modsContain", "modsNotContain", "minMods", "maxMods",
                 "envMc", "envLoader", "maxMs", "replyContains", "replyNotContains", "trace", "facts", "coverage", "optimization", "visibleReplyContains",
-                "resolutionReported", "quantityReported");
+                "resolutionReported", "quantityReported", "generation", "composition");
         if (!a.isObject() || a.isEmpty()) throw new IllegalArgumentException("缺少 assert");
         a.properties().forEach(entry -> { if (!supported.contains(entry.getKey())) throw new IllegalArgumentException("未知 assert 字段 " + entry.getKey()); });
         if (a.has("facts")) GoldenAssertions.validate(a.get("facts"));
         if (a.has("coverage")) GoldenAssertions.validateCoverage(a.get("coverage"));
         if (a.has("optimization")) GoldenAssertions.validateOptimization(a.get("optimization"));
+        if (a.has("generation")) GoldenAssertions.validateGeneration(a.get("generation"));
+        if (a.has("composition")) GoldenAssertions.validateComposition(a.get("composition"));
         if (a.has("trace")) {
             if (!a.get("trace").isObject()) throw new IllegalArgumentException("trace 断言必须是对象");
             Set<String> trace = Set.of("exists", "countInRange", "trimSuggested", "modOpsReported", "criticDegradedReported", "trimWhenOverRange", "maxTotalTokens");

@@ -35,7 +35,7 @@ export const confirmReplacement = () => {
     for (const group of replacementPrompt.value.groups) {
         const choice = group.choice;
         const manualSlug = choice.manualSlug.trim();
-        if (replacementPrompt.value.kind === 'OVERLAP') {
+        if (['OVERLAP', 'GENERATION'].includes(replacementPrompt.value.kind)) {
             if (!choice.slugs.length || group.candidates.some(c => c.protectedSelection && !choice.slugs.includes(c.slug))) {
                 replacementPrompt.value.error = '每组至少保留一个项目，并保留点名核心、锁定版本及必要前置。';
                 return;
@@ -61,7 +61,7 @@ export const sameSelectionWorkspace = (request) => request.currentMods === (pack
     && request.constraints === (packData.constraints ? JSON.stringify(packData.constraints) : '')
     && request.excludedSlugs === (packData.excludedSlugs || []).join(',');
 export const syncReplacementSelection = (slug, checked) => {
-    if (replacementPrompt.value?.kind !== 'OVERLAP') return;
+    if (!['OVERLAP', 'GENERATION'].includes(replacementPrompt.value?.kind)) return;
     for (const group of replacementPrompt.value.groups) if (group.candidates.some(c => c.slug === slug)) {
         group.choice.slugs = checked ? [...new Set([...group.choice.slugs, slug])] : group.choice.slugs.filter(s => s !== slug);
     }
@@ -70,9 +70,9 @@ export const chooseReplacements = (options, signal, previous = null, message = '
     signal.throwIfAborted();
     replacementPrompt.value = {...options, error: message, groups: options.groups.map(group => ({...group,
         choice: previous?.[group.original] ? {...previous[group.original], slugs: [...previous[group.original].slugs]}
-            : {slugs: options.kind === 'OVERLAP' ? group.candidates.filter(c => c.recommended || c.protectedSelection).map(c => c.slug)
+            : {slugs: ['OVERLAP', 'GENERATION'].includes(options.kind) ? group.candidates.filter(c => c.recommended || c.protectedSelection).map(c => c.slug)
                 : group.candidates.length ? [group.candidates[0].slug] : [], drop: false, manualSlug: ''}}))};
-    if (options.kind === 'OVERLAP') {
+    if (['OVERLAP', 'GENERATION'].includes(options.kind)) {
         const selected = new Set(replacementPrompt.value.groups.flatMap(group => group.choice.slugs));
         for (const group of replacementPrompt.value.groups)
             group.choice.slugs = group.candidates.filter(c => selected.has(c.slug)).map(c => c.slug);
@@ -173,13 +173,18 @@ export const sendMessage = async () => {
     let msg = userInput.value.trim();
     const attached = pendingMrpack.value;
     if ((!msg && !attached) || isLoading.value) return;
+    const ownerToken = authUser.value.token;
     const request = new AbortController();
+    const checkRequest = () => {
+        if (authUser.value?.token !== ownerToken) request.abort(new DOMException('账号已切换', 'AbortError'));
+        request.signal.throwIfAborted();
+    };
     activeRequest = request;
     startThinking();
 
     try {
         if (authUser.value && !currentConvId.value) await newConversation();
-        request.signal.throwIfAborted();
+        checkRequest();
         const lastReply = chatHistory.value.at(-1);
         const clarificationTicket = !attached && lastReply?.role === 'ai' ? readClarificationTicket(lastReply.content) : null;
         // 🔥 立即显示用户消息 (含附件标记)
@@ -205,7 +210,7 @@ export const sendMessage = async () => {
                     method: 'POST', body: fd, headers: authHeader(), signal: request.signal
                 });
                 const parseData = await parseRes.json();
-                request.signal.throwIfAborted();
+                checkRequest();
                 if (Array.isArray(parseData.slugs) && parseData.importedPack) {
                     baseSlugs = parseData.slugs;
                     packData.name = parseData.name;
@@ -280,7 +285,7 @@ export const sendMessage = async () => {
                 body: JSON.stringify(buildRequest)
             });
             let payload = await readChatResponse(res);
-            request.signal.throwIfAborted();
+            checkRequest();
 
             // 🔁 委派循环：服务器需要外部事实时会把清单发下来，浏览器取完再回传，
             // 它继续跑并返回"下一份清单"或"最终回复"。不需要外部数据的轮次一次都不会进来
@@ -292,7 +297,7 @@ export const sendMessage = async () => {
                 }
                 const wanted = payload.data.wanted || [];
                 const facts = await fulfilWanted(wanted, request.signal);
-                request.signal.throwIfAborted();
+                checkRequest();
                 res = await apiFetch(`/api/chat/task/${encodeURIComponent(payload.data.taskId)}/facts`, {
                     method: 'POST',
                     signal: request.signal,
@@ -300,7 +305,7 @@ export const sendMessage = async () => {
                     body: JSON.stringify(facts)
                 });
                 payload = await readChatResponse(res);
-                request.signal.throwIfAborted();
+                checkRequest();
             }
 
             let aiReply = payload.data;
@@ -320,7 +325,7 @@ export const sendMessage = async () => {
                     let choices;
                     try { choices = await chooseReplacements(selection, request.signal, previousSelection, selectionError); }
                     finally { request.signal.removeEventListener('abort', releaseSelection); }
-                    request.signal.throwIfAborted();
+                    checkRequest();
                     if (!choices) {
                         await releaseSelection();
                         aiReply = '已暂停构建，尚未修改整合包清单。可重新提交需求选择候选。';
@@ -349,7 +354,7 @@ export const sendMessage = async () => {
                 }
                 if (aiReply.startsWith('已暂停构建')) break;
                 payload = await readChatResponse(res);
-                request.signal.throwIfAborted();
+                checkRequest();
                 aiReply = payload.data;
             }
             if (aiReply.includes("⛔ 思考已手动终止")) return;
@@ -402,7 +407,7 @@ export const sendMessage = async () => {
                 role: 'ai', content: cleanReply + importNotice, hasData, ops, thinkTime: finalTime
             });
         } catch (e) {
-            if (!request.signal.aborted) {
+            if (!request.signal.aborted && authUser.value?.token === ownerToken) {
                 stopThinking();
                 const retainedContext = clarificationTicket && [409, 429].includes(e.status)
                     ? '\n<clarification_context>' + JSON.stringify({schemaVersion: 1, ticket: clarificationTicket}) + '</clarification_context>' : '';
@@ -417,12 +422,13 @@ export const sendMessage = async () => {
             });
         }
     } finally {
-        if (activeRequest === request && !request.signal.aborted) { activeRequest = null; stopThinking(); }
+        if (activeRequest === request) { activeRequest = null; stopThinking(); }
         // 登录用户：本轮对话落库（原 sendMessageWithHistory 包装体内联）。
         // 放 finally 是为了覆盖三条早退路径：附件解析失败 / 纯附件建图 / 手动终止。
-        if (authUser.value && currentConvId.value && !request.signal.aborted) {
+        if (authUser.value?.token === ownerToken && currentConvId.value && !request.signal.aborted) {
             saveMsg('user', msg + (attached ? ' 📦' + attached.name : ''), false, '', []);
             nextTick(() => {
+                if (authUser.value?.token !== ownerToken || request.signal.aborted) return;
                 const last = chatHistory.value[chatHistory.value.length - 1];
                 if (last && last.role === 'ai') {
                     // 这一轮也构成"一版"：落库时带上完整状态，并把版本号挂到消息上，

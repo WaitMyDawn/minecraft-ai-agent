@@ -41,6 +41,11 @@ public final class OverlapSelections {
     }
     public String prepare(Long owner, Long conversation, Map<String, String> payload, String reply,
                           AssemblySnapshot assembly, DependencyClosure closure, ModrinthApiClient api, java.util.function.BooleanSupplier aborted) {
+        return prepare(owner, conversation, payload, reply, assembly, closure, api, aborted, Map.of());
+    }
+    public String prepare(Long owner, Long conversation, Map<String, String> payload, String reply,
+                          AssemblySnapshot assembly, DependencyClosure closure, ModrinthApiClient api, java.util.function.BooleanSupplier aborted,
+                          Map<String, List<String>> confirmedGeneration) {
         if (owner == null || assembly == null || closure == null) return reply;
         var selected = assembly.versions().keySet();
         Set<String> outputFiles = new HashSet<>(Arrays.asList(tag(reply, "mods").split(",")));
@@ -76,7 +81,7 @@ public final class OverlapSelections {
                         info.path("downloads").asLong()));
             } catch (RuntimeException unavailable) { unknown++; }
         }
-        var groups = ContentOverlap.detect(projects, protectedSlugs).stream().filter(group -> acknowledgements.getIfPresent(
+        var groups = ContentOverlap.detectByDimension(projects, protectedSlugs, confirmedGeneration).stream().filter(group -> acknowledgements.getIfPresent(
                 fingerprint(owner, conversation, payload.getOrDefault("uuid", ""), assembly, group, Set.of())) == null).toList();
         var updatedTrace = (ObjectNode) JSON.readTree(tag(reply, "trace"));
         updatedTrace.set("upstream", JSON.readTree(yagen.waitmydawn.maa.runtime.RequestScope.toTraceJson()));
@@ -189,7 +194,7 @@ public final class OverlapSelections {
                 object.set("draftFinalEvidence", row.path("finalEvidence").deepCopy());
                 object.set("finalEvidence", JSON.createArrayNode());
                 object.put("finalEvidenceStatus", retained ? "REQUIRES_RECHECK_AFTER_SELECTION" : "NOT_RETAINED");
-                object.put("finalVersionVerified", retained);
+                object.put("finalVersionVerified", retained && row.path("finalVersionVerified").asBoolean());
             }
         }
         for (var row : trace.path("goalEvidence")) if (row instanceof ObjectNode object) {
@@ -226,7 +231,7 @@ public final class OverlapSelections {
     private static List<Map<String, Object>> decisionEvidence(Pending value, Set<String> rejected) {
         return value.groups().stream().map(group -> Map.<String, Object>of("id", group.original(), "explanation", group.explanation(),
                 "members", group.candidates().stream().map(c -> Map.of("slug", c.slug(), "quote", c.evidence(), "scope", c.scope(), "scopeQuote", c.scopeEvidence(),
-                        "selected", !rejected.contains(c.slug()))).toList())).toList();
+                        "scopeNote", c.scopeNote(), "selected", !rejected.contains(c.slug()))).toList())).toList();
     }
     private static String fingerprint(Long owner, Long conversation, String uuid, AssemblySnapshot assembly,
                                       ContentOverlap.Group group, Set<String> rejected) {
@@ -262,14 +267,19 @@ public final class OverlapSelections {
         for (var item : row.path("mods")) {
             String slug = item.path("slug").asText();
             String type = item.path("evidenceType").asText();
-            boolean relationInvalid = invalidatedRelations.contains(slug) && (type.equals("VERSION_RELATION")
+            boolean removedPartner = false;
+            for (var partner : item.path("partners")) removedPartner |= removed.contains(partner.asText());
+            boolean relationInvalid = (invalidatedRelations.contains(slug) || removedPartner) && (type.equals("VERSION_RELATION") || type.equals("DESCRIPTION_RELATION")
                     || (type.isEmpty() && item.path("quote").asText().isBlank()));
             if (!removed.contains(slug) && !relationInvalid) { kept.add(item); continue; }
             changed = true;
             relationChanged |= !removed.contains(slug) && relationInvalid;
             if (removed.contains(slug) && type.equals("PROJECT_IDENTITY") && missing.add(slug)) addedMissing++;
         }
-        if (!changed && !childChanged && !(truncated && !invalidatedRelations.isEmpty())) return false;
+        boolean generationChanged = false;
+        for (var realm : row.path("evidenceState").path("generation"))
+            for (var project : realm.path("projects")) generationChanged |= removed.contains(project.asText());
+        if (!changed && !childChanged && !generationChanged && !(truncated && !invalidatedRelations.isEmpty())) return false;
         row.set("mods", kept); row.put("modCount", kept.size());
         row.set("missing", JSON.valueToTree(missing)); row.put("missingCount", Math.max(previousMissingCount + addedMissing, missing.size()));
         boolean pendingChild = false;
@@ -285,10 +295,24 @@ public final class OverlapSelections {
                 && state.path("countsComplete").asBoolean(true);
         for (var child : row.path("criteria")) complete &= child.path("evidenceState").path("countsComplete").asBoolean(true);
         state.put("countsComplete", complete);
+        boolean generationMissing = false;
+        var generation = JSON.createArrayNode();
+        for (var realm : state.path("generation")) {
+            var item = (ObjectNode) realm.deepCopy();
+            var projects = JSON.createArrayNode();
+            for (var project : realm.path("projects")) if (!removed.contains(project.asText())) projects.add(project.asText());
+            item.set("projects", projects); generation.add(item);
+            generationMissing |= projects.isEmpty();
+        }
+        if (state.has("generation")) state.set("generation", generation);
         if (row.path("missingCount").asInt() > 0) {
             row.put("status", kept.isEmpty() ? "NOT_RETAINED" : "PARTIAL");
             state.put("code", "PROJECT_MISSING").set("projects", JSON.valueToTree(missing));
             row.put("note", "组合选择后有点名项目未保留");
+        } else if (generationMissing) {
+            row.put("status", kept.isEmpty() ? "UNVERIFIED" : "PARTIAL");
+            state.put("code", "CORE_GENERATION_PENDING");
+            row.put("note", "组合选择后核心世界生成仍待核实；保留局部结构或生物不能替代该依据");
         } else if (previous.equals("SUPPORTING_EVIDENCE") && supporting && !pendingChild) {
             state.put("code", "VERIFIED");
             row.put("note", "组合选择后仍保留有效用途或关系依据");

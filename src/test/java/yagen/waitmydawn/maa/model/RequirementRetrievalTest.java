@@ -6,6 +6,16 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class RequirementRetrievalTest {
+    @Test void coreDimensionQueryPrecedesLocalContentWithinTheSameSharedBudget() {
+        var dimension = new BuildRequirement("r-0000000000000002", "丰富下界生态", BuildRequirement.Kind.CAPABILITY,
+                List.of(), List.of(), List.of(), List.of(new BuildIntent.SearchIntent("adventure", 100, List.of("nether structures"))));
+        var queries = RequirementRetrieval.queries(List.of(r("r-0000000000000001", "utility", "quality of life"), dimension), Set.of());
+        assertEquals(new RequirementRetrieval.Query(dimension.id(), "worldgen", "nether terrain overhaul"), queries.getFirst());
+        assertTrue(queries.stream().anyMatch(q -> q.keyword().equals("nether structures")));
+        assertTrue(RequirementRetrieval.queries(List.of(dimension), Set.of("worldgen")).stream().noneMatch(q -> q.category().equals("worldgen")));
+        var limited = new BuildRequirement(dimension.id(), "下界只加生物，不改地形", dimension.kind(), List.of(), List.of(), List.of(), dimension.searches());
+        assertTrue(RequirementRetrieval.queries(List.of(limited), Set.of()).stream().noneMatch(q -> q.keyword().contains("overhaul")));
+    }
     private BuildRequirement r(String id, String category, String... keywords) {
         return new BuildRequirement(id, "任意玩法要求", BuildRequirement.Kind.CAPABILITY, List.of(), List.of(), List.of(),
                 List.of(new BuildIntent.SearchIntent(category, 100, List.of(keywords))));

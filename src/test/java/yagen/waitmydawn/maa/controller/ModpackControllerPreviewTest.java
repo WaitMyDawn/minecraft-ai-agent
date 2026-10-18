@@ -171,4 +171,28 @@ class ModpackControllerPreviewTest {
         assertEquals(1, body.path("dropped").size());
         assertEquals("CONFLICT_WITH_KEPT", body.path("dropped").get(0).path("reason").asText());
     }
+    @Test void removedDependencyIdentitySurvivesPreviewAuditWithoutDuplicateMissingId() {
+        var json = new ObjectMapper();
+        var graph = new DependencyGraph(); graph.allSlugs.add("structures");
+        graph.projectAliases.put("MISSING", "decoration");
+        var version = json.readTree("""
+                {"id":"V1","project_id":"ROOT","version_number":"1.0",
+                 "dependencies":[{"dependency_type":"required","project_id":"MISSING"}],
+                 "files":[{"filename":"structures.jar","url":"https://cdn.modrinth.com/data/ROOT/versions/V1/structures.jar",
+                           "size":1,"hashes":{"sha1":"1111111111111111111111111111111111111111"}}]}
+                """);
+        graph.selectedVersions.put("structures", version);
+        var result = new ResolutionResult(graph, ResolutionResult.Status.INCOMPLETE, Set.of("structures"),
+                List.of(new ResolutionResult.Unresolved("decoration", "structures", ResolutionResult.Reason.DEPENDENT_OF_DROPPED, "前置已剔除")),
+                List.of(), 500, false);
+        when(dependencyEngine.resolveCachedResult(any(), anyString(), anyString(), any())).thenReturn(result);
+        when(apiClient.getProjectInfo("structures")).thenReturn(json.readTree("{\"id\":\"ROOT\",\"slug\":\"structures\",\"title\":\"Structures\"}"));
+        var response = controller.previewPack(null, request("neoforge", "1.21.1", List.of("structures")));
+        assertEquals(200, response.getStatusCode().value());
+        var closure = response.getBody().path("closure");
+        assertEquals("INCOMPLETE", closure.path("status").asText());
+        assertEquals(1, closure.path("issues").size());
+        assertEquals("decoration", closure.path("issues").get(0).path("dependency").asText());
+        assertEquals("DEPENDENT_OF_DROPPED", closure.path("issues").get(0).path("code").asText());
+    }
 }

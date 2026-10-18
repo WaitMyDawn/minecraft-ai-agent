@@ -66,17 +66,24 @@ public class UserController {
         this.sessions = new SessionRegistry(Math.max(1, sessionTtlDays) * 24L * 60 * 60 * 1000);
     }
 
+    @jakarta.annotation.PostConstruct
+    void validateEncryptionConfiguration() {
+        if (encryptionSecret == null || encryptionSecret.isBlank()
+                || encryptionSecret.trim().equals("replace-with-openssl-rand-base64-32"))
+            throw new IllegalStateException("必须配置独立且稳定的 MAA_ENCRYPTION_SECRET，不能使用空值或示例占位符");
+    }
+
     /**
      * 发验证码。
      *
-     * <p>五个用途，分两类：
+     * <p>四个用途，分两类：
      * <ul>
      *   <li><b>未登录</b>：register（发给待注册邮箱）、reset（发给已注册邮箱）；</li>
      *   <li><b>已登录</b>：change_password（发给<b>当前绑定邮箱</b>）、bind_new（发给待绑定的新邮箱）。</li>
      * </ul>
      *
-     * <p>登录态那两个用途<b>不接受前端指定收件人</b>（change_password 的邮箱直接从登录态推导）——
-     * 否则任何登录用户都能拿这个接口给任意地址发信，等于把"按邮箱日限 3"这道防线绕开。
+     * <p>change_password只发给当前绑定邮箱，bind_new允许指定未被占用的新邮箱；
+     * 收件地址均沿用归一化后的邮箱配额，不能通过用途切换重置额度。
      */
     @PostMapping("/email-code")
     public ResponseEntity<Map<String, Object>> sendEmailCode(
@@ -84,6 +91,8 @@ public class UserController {
             @RequestHeader(value = "X-Auth-Token", required = false) String authToken) {
         String email = EmailNormalizer.normalize(body.get("email"));
         String raw = body.getOrDefault("purpose", "");
+        if (raw == null || raw.length() > 32)
+            return ResponseEntity.badRequest().body(Map.of("error", "验证码用途无效"));
         EmailCodeService.Purpose purpose;
         try {
             purpose = EmailCodeService.Purpose.valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
@@ -158,7 +167,8 @@ public class UserController {
             return ResponseEntity.ok(Map.of("error", "今日邮件发送量已达上限，请明天再试；如急需请联系站长"));
         } catch (Exception e) {
             emailCodeService.rollback(purpose, email, issued);
-            MaaLog.error("验证码邮件发送失败: " + e.getMessage(), e);
+            // SMTP/HTTP异常可能包含邮件正文，不能将验证码随上游错误落入日志。
+            MaaLog.app("验证码邮件发送失败 type=" + e.getClass().getSimpleName());
             return ResponseEntity.ok(Map.of("error", "验证码发送失败，请稍后重试"));
         }
         MaaLog.user("已发送验证码邮件 purpose=" + purpose + " to=" + MailService.mask(email));
@@ -351,12 +361,16 @@ public class UserController {
             return ResponseEntity.status(401).body(Map.of("error", "用户不存在"));
         }
         User user = userOpt.get();
+        if (body.containsKey("apiKey") && body.get("apiKey") != null
+                && (body.get("apiKey").length() > 512 || body.get("apiKey").chars().anyMatch(Character::isISOControl)))
+            return ResponseEntity.badRequest().body(Map.of("error", "API Key 超过长度限制或包含控制字符"));
         if (body.containsKey("username")) user.setUsername(body.get("username"));
         if (body.containsKey("preferenceWeight")) {
             user.setPreferenceWeight(Double.parseDouble(body.get("preferenceWeight")));
         }
         if (body.containsKey("apiKey")) {
-            user.setEncryptedApiKey(encrypt(body.get("apiKey")));
+            String key = body.get("apiKey");
+            user.setEncryptedApiKey(key == null || key.isBlank() ? null : encrypt(key.trim()));
         }
         if (body.containsKey("enableBlacklist")) {
             user.setEnableBlacklist(Boolean.parseBoolean(body.get("enableBlacklist")));
@@ -635,6 +649,7 @@ public class UserController {
 
     // AES 加密/解密 (密钥 = SHA-256 of server-side secret)
     private SecretKeySpec getKey() throws Exception {
+        validateEncryptionConfiguration();
         byte[] key = MessageDigest.getInstance("SHA-256").digest(encryptionSecret.getBytes(StandardCharsets.UTF_8));
         return new SecretKeySpec(key, "AES");
     }
@@ -649,16 +664,14 @@ public class UserController {
             byte[] encrypted = cipher.doFinal(plain.getBytes(StandardCharsets.UTF_8));
             String result = "gcm1:" + Base64.getEncoder().encodeToString(
                     java.nio.ByteBuffer.allocate(nonce.length + encrypted.length).put(nonce).put(encrypted).array());
-            System.out.println("AES 加密成功！");
             return result;
         } catch (Exception e) {
-            System.err.println("AES 加密失败: " + e.getMessage());
-            throw new IllegalStateException("API Key 加密失败", e);
+            throw new IllegalStateException("API Key 加密失败");
         }
     }
 
     private String decrypt(String encrypted) {
-        if (encrypted == null) return null;
+        if (encrypted == null || encrypted.isBlank()) return null;
         try {
             if (encrypted.startsWith("gcm1:")) {
                 byte[] bytes = Base64.getDecoder().decode(encrypted.substring(5));
@@ -673,7 +686,7 @@ public class UserController {
             cipher.init(Cipher.DECRYPT_MODE, getKey());
             return new String(cipher.doFinal(Base64.getDecoder().decode(encrypted)), StandardCharsets.UTF_8);
         } catch (Exception e) {
-            System.err.println("AES 解密失败（可能是加密密钥已变更，请用户重新设置 API Key）: " + e.getMessage());
+            System.err.println("API Key 解密失败，请核对加密配置或重新设置个人 Key");
             return null;
         }
     }

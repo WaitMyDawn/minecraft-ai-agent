@@ -16,7 +16,67 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 靠 sleep 会又慢又飘。
  */
 class EmailCodeServiceTest {
+    @Test void wrongAttemptsCannotExtendTheOriginalFiveMinuteDeadline() {
+        String code = svc.issue(EmailCodeService.Purpose.REGISTER, EMAIL);
+        for (int i = 0; i < 4; i++) { advance(60_000); assertFalse(svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, "invalid")); }
+        advance(60_000);
+        assertFalse(svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, code));
+    }
 
+    @Test void deadlineIsInclusiveAndAResendGetsItsOwnDeadline() {
+        String first = svc.issue(EmailCodeService.Purpose.REGISTER, EMAIL);
+        advance(299_999); assertTrue(svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, first));
+        String second = svc.issue(EmailCodeService.Purpose.REGISTER, EMAIL);
+        advance(300_000); assertFalse(svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, second));
+    }
+
+    @Test @org.junit.jupiter.api.Timeout(5)
+    void simultaneousConsumptionSucceedsExactlyOnce() throws Exception {
+        String code = svc.issue(EmailCodeService.Purpose.REGISTER, EMAIL);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var futures = new java.util.ArrayList<java.util.concurrent.Future<Boolean>>();
+            for (int i = 0; i < 20; i++) futures.add(executor.submit(() -> { start.await(); return svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, code); }));
+            start.countDown(); int successes = 0;
+            for (var future : futures) if (future.get(2, java.util.concurrent.TimeUnit.SECONDS)) successes++;
+            assertEquals(1, successes);
+        }
+    }
+
+    @Test @org.junit.jupiter.api.Timeout(5)
+    void simultaneousIssuanceCannotExceedTheSharedDailyQuota() throws Exception {
+        var service = new EmailCodeService(3, 0, () -> now);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var futures = new java.util.ArrayList<java.util.concurrent.Future<Boolean>>();
+            for (int i = 0; i < 20; i++) {
+                var purpose = EmailCodeService.Purpose.values()[i % 4];
+                futures.add(executor.submit(() -> {
+                    start.await();
+                    try { service.issue(purpose, EMAIL); return true; }
+                    catch (EmailCodeService.RateLimitedException limited) { return false; }
+                }));
+            }
+            start.countDown(); int successes = 0;
+            for (var future : futures) if (future.get(2, java.util.concurrent.TimeUnit.SECONDS)) successes++;
+            assertEquals(3, successes); assertEquals(3, service.sentToday(EMAIL));
+        }
+    }
+
+    @Test void aLateRefundFromYesterdayCannotDeductTodaysQuota() {
+        var old = svc.issueForDelivery(EmailCodeService.Purpose.REGISTER, EMAIL);
+        advance(24 * 60 * 60 * 1000L);
+        var current = svc.issueForDelivery(EmailCodeService.Purpose.REGISTER, EMAIL);
+        svc.rollback(EmailCodeService.Purpose.REGISTER, EMAIL, old);
+        assertEquals(1, svc.sentToday(EMAIL));
+        assertTrue(svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, current.code()));
+    }
+
+    @Test void emailAddressesCannotContainHeaderControlCharacters() {
+        for (String email : new String[]{"a\r\nb@example.com", "a\0b@example.com", "a\u2003b@example.com", "a@exam\nple.com"})
+            assertFalse(EmailNormalizer.isValidFormat(email));
+        assertTrue(EmailNormalizer.isValidFormat("fixture+tag@example.com"));
+    }
     private static final String EMAIL = "user@example.com";
 
     private long now = 1_700_000_000_000L;
@@ -69,9 +129,9 @@ class EmailCodeServiceTest {
     void fiveWrongAttemptsInvalidate() {
         String code = svc.issue(EmailCodeService.Purpose.REGISTER, EMAIL);
         for (int i = 1; i <= 4; i++) {
-            assertFalse(svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, "000000"), "第 " + i + " 次错的码不该过");
+            assertFalse(svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, "invalid"), "第 " + i + " 次错的码不该过");
         }
-        assertFalse(svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, "000000"), "第 5 次错的码不该过");
+        assertFalse(svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, "invalid"), "第 5 次错的码不该过");
         assertFalse(svc.verify(EmailCodeService.Purpose.REGISTER, EMAIL, code), "错 5 次之后连正确的码也必须作废");
     }
 

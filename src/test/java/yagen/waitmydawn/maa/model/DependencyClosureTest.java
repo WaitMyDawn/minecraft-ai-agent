@@ -50,7 +50,7 @@ class DependencyClosureTest {
         var failure = new ResolutionResult.Unresolved("library", "root", ResolutionResult.Reason.NO_VERSION_FOR_ENV, "");
         assertEquals(DependencyClosure.Status.INCOMPLETE, DependencyClosure.capture(graph, List.of(failure), Map.of()).inspect(Set.of("root")).status());
         var unknown = new ResolutionResult.Unresolved("library", "root", ResolutionResult.Reason.UPSTREAM_UNAVAILABLE, "");
-        var report = DependencyClosure.capture(graph, List.of(unknown), Map.of()).inspect(Set.of("root"));
+        var report = DependencyClosure.capture(graph, List.of(unknown), Map.of("B", "library")).inspect(Set.of("root"));
         assertEquals(DependencyClosure.Status.UNVERIFIED, report.status());
         assertTrue(report.issues().stream().allMatch(i -> i.severity() == DependencyClosure.Severity.UNKNOWN));
     }
@@ -83,5 +83,32 @@ class DependencyClosureTest {
         assertEquals(8192, closure.requirements().size());
         assertEquals(DependencyClosure.Status.UNVERIFIED, closure.inspect(graph.allSlugs).status());
         assertTrue(closure.inspect(graph.allSlugs).issues().stream().anyMatch(i -> i.code().equals("AUDIT_BUDGET_EXCEEDED")));
+    }
+    @Test void aNetworkFailureCannotHideAnotherMissingDependencyOfTheSameProject() {
+        var graph = graph(); graph.allSlugs.remove("library"); graph.selectedVersions.remove("library"); graph.depsOf.clear();
+        ((ObjectNode) graph.selectedVersions.get("root")).withArray("dependencies").addObject()
+                .put("dependency_type", "required").put("project_id", "Other");
+        var report = DependencyClosure.capture(graph, List.of(new ResolutionResult.Unresolved("Other", "root",
+                ResolutionResult.Reason.UPSTREAM_UNAVAILABLE, "network")), Map.of()).inspect(Set.of("root"));
+        assertEquals(DependencyClosure.Status.INCOMPLETE, report.status());
+        assertTrue(report.issues().stream().anyMatch(i -> i.dependency().equals("B") && i.code().equals("MISSING_REQUIRED")));
+        assertFalse(report.issues().stream().anyMatch(i -> i.dependency().equals("Other") && i.code().equals("MISSING_REQUIRED")));
+    }
+    @Test void anExplainedMissingEdgeDoesNotAlsoProduceGenericMissingRequired() {
+        var graph = graph(); graph.allSlugs.remove("library"); graph.selectedVersions.remove("library"); graph.depsOf.clear();
+        var report = DependencyClosure.capture(graph, List.of(new ResolutionResult.Unresolved("B", "root",
+                ResolutionResult.Reason.NO_VERSION_FOR_ENV, "no compatible version")), Map.of()).inspect(Set.of("root"));
+        assertEquals(1, report.issues().size()); assertEquals("NO_VERSION_FOR_ENV", report.issues().getFirst().code());
+    }
+    @Test void ambiguousMultiLoaderDependenciesRemainRequiredAndIncomplete() {
+        var graph = graph(); graph.allSlugs.remove("library"); graph.selectedVersions.remove("library"); graph.depsOf.clear();
+        ((ObjectNode) graph.selectedVersions.get("root")).putArray("loaders").add("fabric").add("neoforge").add("quilt");
+        var closure = DependencyClosure.capture(graph, List.of(new ResolutionResult.Unresolved("B", "root",
+                ResolutionResult.Reason.NO_VERSION_FOR_ENV, "no compatible version")), Map.of());
+        assertFalse(closure.requirements().isEmpty());
+        var report = closure.inspect(Set.of("root"));
+        assertEquals(DependencyClosure.Status.INCOMPLETE, report.status());
+        assertTrue(report.issues().stream().anyMatch(i -> i.code().equals("MULTILOADER_DEPENDENCY_UNVERIFIED")));
+        assertTrue(report.issues().stream().anyMatch(i -> i.code().equals("NO_VERSION_FOR_ENV") && i.severity() == DependencyClosure.Severity.BROKEN));
     }
 }

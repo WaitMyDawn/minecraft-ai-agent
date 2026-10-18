@@ -29,6 +29,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 进而生成缺模组的包</b>——这正是本项目里 {@code UnavailableException} 一直强调要分开的那条线。
  */
 class DelegationContextTest {
+    @Test void handBackReasonsAreBoundedAndRepeatedReceiptsDoNotCountAgain() throws Exception {
+        var ctx = new DelegationContext();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var pending = executor.submit(() -> ctx.await(Kind.PROJECT, "cost", 3000));
+            for (int i = 0; i < 400 && !ctx.hasPending(); i++) Thread.sleep(5);
+            assertTrue(ctx.hasPending());
+            ctx.handBack(Kind.PROJECT, "cost", "REQUEST_TIMEOUT");
+            ctx.handBack(Kind.PROJECT, "cost", "arbitrary-secret-text");
+            assertEquals(Outcome.TIMEOUT, pending.get(2, TimeUnit.SECONDS).outcome());
+            assertEquals(java.util.Map.of("REQUEST_TIMEOUT", 1), ctx.clientFailureCounts());
+            assertEquals(1, ctx.handBackCount());
+        }
+        ctx.recordClientMetrics(mapper.readTree("{\"via\":\"eval-jvm\",\"requests\":2,\"cacheHits\":1,\"coalesced\":3}"));
+        ctx.recordClientMetrics(mapper.readTree("{\"via\":\"unbounded-value\",\"requests\":-1,\"cacheHits\":20000,\"coalesced\":-1}"));
+        assertEquals(2, ctx.browserHttpCount()); assertEquals(1, ctx.clientCacheHits()); assertEquals(3, ctx.clientCoalesced());
+        assertEquals(java.util.Set.of("eval-jvm", "unknown"), ctx.clientProviders());
+    }
 
     private final ObjectMapper mapper = new ObjectMapper();
 

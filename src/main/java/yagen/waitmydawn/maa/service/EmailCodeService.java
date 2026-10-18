@@ -128,14 +128,14 @@ public class EmailCodeService {
     }
 
     /** 发送凭据区分重发轮次，旧邮件失败不得撤销后来成功签发的验证码。 */
-    public IssuedCode issueForDelivery(Purpose purpose, String email) {
+    public synchronized IssuedCode issueForDelivery(Purpose purpose, String email) {
         String key = key(purpose, email);
         String quotaKey = EmailNormalizer.normalize(email);
         long now = clock.getAsLong();
-        LocalDate today = today();
+        LocalDate today = LocalDate.ofInstant(Instant.ofEpochMilli(now), ZoneId.systemDefault());
 
         // compute 里做判断并返回新配额：同一个邮箱并发发码时不会互相覆盖（Caffeine 的 asMap 支持原子 compute）
-        Quota next = quota.asMap().compute(quotaKey, (k, old) -> {
+        quota.asMap().compute(quotaKey, (k, old) -> {
             if (old == null || !old.day.equals(today)) {
                 return new Quota(today, 1, now);
             }
@@ -149,9 +149,13 @@ public class EmailCodeService {
             return new Quota(today, old.count + 1, now);
         });
 
-        IssuedCode issued = new IssuedCode(randomCode(), today);
+        // 签发与登记在同一短临界区完成；网络发送在调用方执行，不持有此锁。
+        Pending previous = pending.getIfPresent(key);
+        String code;
+        do { code = randomCode(); } while (previous != null && previous.code.equals(code));
+        IssuedCode issued = new IssuedCode(code, today);
         // 重新签发就覆盖旧的（用户点重发后，旧码立即失效，避免"两个码都能用"）
-        pending.put(key, new Pending(issued.code, 0, issued.receipt));
+        pending.put(key, new Pending(issued.code, 0, issued.receipt, now + TimeUnit.MINUTES.toMillis(DEFAULT_TTL_MINUTES)));
         return issued;
     }
 
@@ -168,12 +172,14 @@ public class EmailCodeService {
         boolean[] ok = {false};
         pending.asMap().compute(key, (k, cur) -> {
             if (cur == null) return null;                       // 没签发过 / 已过期
+            // 错误尝试会更新缓存条目，但不能续期签发时确定的截止时间。
+            if (clock.getAsLong() >= cur.expiresAt) return null;
             if (cur.code.equals(input)) {
                 ok[0] = true;
                 return null;                                    // 一次性：用过就删
             }
             int attempts = cur.attempts + 1;
-            return attempts >= DEFAULT_MAX_ATTEMPTS ? null : new Pending(cur.code, attempts, cur.receipt);
+            return attempts >= DEFAULT_MAX_ATTEMPTS ? null : new Pending(cur.code, attempts, cur.receipt, cur.expiresAt);
         });
         return ok[0];
     }
@@ -192,7 +198,7 @@ public class EmailCodeService {
      * <p>为什么<b>保留</b>冷却时间戳（不回滚 lastSentAt）：万一某个收件地址会让 SMTP 立即拒信，
      * 回滚冷却就能被用来"无限次触发发信尝试"。保留冷却 = 这种情况最多每分钟一次，仍然安全。
      */
-    public void rollback(Purpose purpose, String email, IssuedCode issued) {
+    public synchronized void rollback(Purpose purpose, String email, IssuedCode issued) {
         if (issued == null || !issued.refunded.compareAndSet(false, true)) return;
         pending.asMap().computeIfPresent(key(purpose, email), (k, current) ->
                 current.receipt.equals(issued.receipt) ? null : current);
@@ -228,7 +234,7 @@ public class EmailCodeService {
         return String.format(Locale.ROOT, "%06d", RANDOM.nextInt(CODE_BOUND));
     }
 
-    private record Pending(String code, int attempts, String receipt) {}
+    private record Pending(String code, int attempts, String receipt, long expiresAt) {}
 
     private record Quota(LocalDate day, int count, long lastSentAt) {}
 }

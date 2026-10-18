@@ -154,3 +154,4 @@ assert(candidateList.answered.length === 1 && candidateList.answered[0].kind ===
     && candidateList.answered[0].data.length === 4 && candidateList.unavailable.length === 0,
     '兼容候选列表由浏览器取回，最多回传四个版本');
 console.log(process.exitCode ? 'SOME CHECKS FAILED' : 'ALL CHECKS PASSED');
+await import('./fe-modrinth-cost-check.mjs');

@@ -56,7 +56,7 @@ public class DbHealthProbe {
         return checkedAtMillis;
     }
 
-    /** 失败原因的**一句话摘要**（成功时为 null）。故意不带栈：这个端点是对公网开放的。 */
+    /** 公开健康接口仅返回固定故障码，避免暴露驱动异常中的连接配置和路径。 */
     public String lastError() {
         refreshIfStale();
         return lastError;
@@ -75,7 +75,7 @@ public class DbHealthProbe {
             lastError = null;
         } catch (Exception e) {
             state = "down";
-            lastError = e.getClass().getSimpleName() + ": " + e.getMessage();
+            lastError = "DATABASE_PROBE_FAILED";
         } finally {
             checkedAtMillis = now;
         }

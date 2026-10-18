@@ -1,0 +1,341 @@
+{
+  "capturedOn": "2026-10-17",
+  "sources": [
+    "https://api.modrinth.com/v2/versions",
+    "https://api.modrinth.com/v2/project/ends-delight/version",
+    "https://api.modrinth.com/v2/project/epicterrain/version"
+  ],
+  "projects": [
+    {
+      "id": "R2OftAxM",
+      "slug": "farmers-delight",
+      "selectedVersion": "9gp7w8NC",
+      "versions": [
+        {
+          "id": "9gp7w8NC",
+          "project_id": "R2OftAxM",
+          "version_number": "1.21.1-1.3.1",
+          "game_versions": [
+            "1.21.1"
+          ],
+          "loaders": [
+            "neoforge"
+          ],
+          "dependencies": []
+        },
+        {
+          "id": "XJKk7DgU",
+          "project_id": "R2OftAxM",
+          "version_number": "1.21.1-1.3.0",
+          "game_versions": [
+            "1.21.1"
+          ],
+          "loaders": [
+            "neoforge"
+          ],
+          "dependencies": []
+        }
+      ]
+    },
+    {
+      "id": "yHN0njMr",
+      "slug": "ends-delight",
+      "selectedVersion": "YTApg6Hl",
+      "versions": [
+        {
+          "id": "YTApg6Hl",
+          "project_id": "yHN0njMr",
+          "version_number": "2.6.1+neoforge.1.21.1",
+          "game_versions": [
+            "1.21.1"
+          ],
+          "loaders": [
+            "neoforge"
+          ],
+          "dependencies": [
+            {
+              "version_id": "9gp7w8NC",
+              "project_id": "R2OftAxM",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ]
+        },
+        {
+          "id": "La8SvoPm",
+          "project_id": "yHN0njMr",
+          "version_number": "2.6+neoforge.1.21.1",
+          "game_versions": [
+            "1.21.1"
+          ],
+          "loaders": [
+            "neoforge"
+          ],
+          "dependencies": []
+        },
+        {
+          "id": "YxSK1qNm",
+          "project_id": "yHN0njMr",
+          "version_number": "2.5.1+neoforge.1.21.1",
+          "game_versions": [
+            "1.21.1"
+          ],
+          "loaders": [
+            "neoforge"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "R2OftAxM",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ]
+        },
+        {
+          "id": "vvJi0q4u",
+          "project_id": "yHN0njMr",
+          "version_number": "2.5",
+          "game_versions": [
+            "1.21.1"
+          ],
+          "loaders": [
+            "neoforge"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "R2OftAxM",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "1PHi8joa",
+      "slug": "farmers-delight-contracts-feasts",
+      "selectedVersion": "4eljQ0ro",
+      "versions": [
+        {
+          "id": "4eljQ0ro",
+          "project_id": "1PHi8joa",
+          "version_number": "1.0.3",
+          "game_versions": [
+            "1.21.1"
+          ],
+          "loaders": [
+            "neoforge"
+          ],
+          "dependencies": [
+            {
+              "version_id": "XJKk7DgU",
+              "project_id": "R2OftAxM",
+              "file_name": null,
+              "dependency_type": "required"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "7qSJGSHp",
+      "slug": "epicterrain",
+      "selectedVersion": "fR0foOLP",
+      "versions": [
+        {
+          "id": "fR0foOLP",
+          "project_id": "7qSJGSHp",
+          "version_number": "0.1.4+mod",
+          "game_versions": [
+            "1.20.5",
+            "1.20.6",
+            "1.21",
+            "1.21.1"
+          ],
+          "loaders": [
+            "fabric",
+            "forge",
+            "neoforge",
+            "quilt"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "w2O2In9c",
+              "file_name": null,
+              "dependency_type": "required"
+            },
+            {
+              "version_id": null,
+              "project_id": "IuVnevHX",
+              "file_name": null,
+              "dependency_type": "optional"
+            },
+            {
+              "version_id": null,
+              "project_id": "kkmrDlKT",
+              "file_name": null,
+              "dependency_type": "incompatible"
+            }
+          ]
+        },
+        {
+          "id": "GlvIUFVw",
+          "project_id": "7qSJGSHp",
+          "version_number": "0.1.4a+mod",
+          "game_versions": [
+            "1.20.5",
+            "1.20.6",
+            "1.21",
+            "1.21.1"
+          ],
+          "loaders": [
+            "fabric",
+            "forge",
+            "neoforge",
+            "quilt"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "kkmrDlKT",
+              "file_name": null,
+              "dependency_type": "incompatible"
+            },
+            {
+              "version_id": null,
+              "project_id": "IuVnevHX",
+              "file_name": null,
+              "dependency_type": "optional"
+            }
+          ]
+        },
+        {
+          "id": "KzCxlAzZ",
+          "project_id": "7qSJGSHp",
+          "version_number": "0.1.4+mod",
+          "game_versions": [
+            "1.20.5",
+            "1.20.6",
+            "1.21",
+            "1.21.1",
+            "1.21.2",
+            "1.21.3",
+            "1.21.4"
+          ],
+          "loaders": [
+            "fabric",
+            "forge",
+            "neoforge",
+            "quilt"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "IuVnevHX",
+              "file_name": null,
+              "dependency_type": "optional"
+            },
+            {
+              "version_id": null,
+              "project_id": "w2O2In9c",
+              "file_name": null,
+              "dependency_type": "required"
+            },
+            {
+              "version_id": null,
+              "project_id": "kkmrDlKT",
+              "file_name": null,
+              "dependency_type": "incompatible"
+            }
+          ]
+        },
+        {
+          "id": "LlCmSSaf",
+          "project_id": "7qSJGSHp",
+          "version_number": "0.1.3+mod",
+          "game_versions": [
+            "1.20.5",
+            "1.20.6",
+            "1.21",
+            "1.21.1",
+            "1.21.2",
+            "1.21.3",
+            "1.21.4"
+          ],
+          "loaders": [
+            "fabric",
+            "forge",
+            "neoforge",
+            "quilt"
+          ],
+          "dependencies": [
+            {
+              "version_id": null,
+              "project_id": "IuVnevHX",
+              "file_name": null,
+              "dependency_type": "optional"
+            },
+            {
+              "version_id": null,
+              "project_id": "kkmrDlKT",
+              "file_name": null,
+              "dependency_type": "incompatible"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "kkmrDlKT",
+      "slug": "terrablender",
+      "selectedVersion": "6e8GCrLb",
+      "versions": [
+        {
+          "id": "6e8GCrLb",
+          "project_id": "kkmrDlKT",
+          "version_number": "4.1.0.8",
+          "game_versions": [
+            "1.21.1"
+          ],
+          "loaders": [
+            "neoforge"
+          ],
+          "dependencies": []
+        }
+      ]
+    },
+    {
+      "id": "w2O2In9c",
+      "slug": "worldgenfeaturefix",
+      "selectedVersion": "DEPzHzvr",
+      "versions": [
+        {
+          "id": "DEPzHzvr",
+          "project_id": "w2O2In9c",
+          "version_number": "1.0.1",
+          "game_versions": [
+            "1.21",
+            "1.21.1",
+            "1.21.2",
+            "1.21.3",
+            "1.21.4",
+            "1.21.5",
+            "1.21.6",
+            "1.21.7",
+            "1.21.8",
+            "1.21.9",
+            "1.21.10",
+            "1.21.11"
+          ],
+          "loaders": [
+            "neoforge"
+          ],
+          "dependencies": []
+        }
+      ]
+    }
+  ]
+}

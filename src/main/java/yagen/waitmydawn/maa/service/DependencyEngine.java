@@ -234,6 +234,7 @@ public class DependencyEngine {
     }
     private ResolutionResult coordinate(Set<String> initialSlugs, String loader, String mcVersion,
                                         List<KnowledgeRule> activeRules, Map<String, JsonNode> preferences) {
+        activeRules = activeRules.stream().filter(KnowledgeRule::appliesWithoutVersionScope).toList();
         ResolutionResult first = resolveOnce(initialSlugs, loader, mcVersion, activeRules, preferences);
         if (first.isComplete() || first.budgetExhausted()) return first;
         var pending = new ArrayDeque<Map<String, JsonNode>>();
@@ -248,10 +249,7 @@ public class DependencyEngine {
             if (!choices.equals(preferences)) attempts++;
             if (current.roots().containsAll(first.roots()) && quality(current) < quality(best)) best = current;
             if (best.isComplete()) break;
-            var parents = current.unresolved().stream()
-                    .filter(u -> u.reason() == ResolutionResult.Reason.VERSION_CONFLICT || u.reason() == ResolutionResult.Reason.CONFLICT_BETWEEN_ROOTS)
-                    .map(ResolutionResult.Unresolved::requiredBy).filter(s -> !s.startsWith("("))
-                    .distinct().sorted().toList();
+            var parents = coordinationSubjects(current);
             for (String parent : parents) {
                 if (current.graph().pinnedSlugs.contains(parent)) continue;
                 if (!domains.containsKey(parent)) {
@@ -297,6 +295,31 @@ public class DependencyEngine {
                 : attempts >= 6 ? "LIMIT_REACHED" : "UNRESOLVED", changes);
         MaaLog.user("静态版本协调：尝试 " + attempts + "，候选查询 " + domains.size() + "，状态 " + stats.status() + "，选版 " + changes);
         return best.coordinated(stats);
+    }
+    private static List<String> coordinationSubjects(ResolutionResult result) {
+        var conflicts = result.unresolved().stream()
+                .filter(u -> u.reason() == ResolutionResult.Reason.VERSION_CONFLICT || u.reason() == ResolutionResult.Reason.CONFLICT_BETWEEN_ROOTS)
+                .sorted(Comparator.comparing(ResolutionResult.Unresolved::requiredBy).thenComparing(ResolutionResult.Unresolved::slug)).toList();
+        var subjects = new LinkedHashSet<String>();
+        conflicts.stream().map(ResolutionResult.Unresolved::requiredBy).filter(s -> !s.startsWith("(")).forEach(subjects::add);
+        for (var conflict : conflicts) {
+            if (conflict.reason() != ResolutionResult.Reason.VERSION_CONFLICT) continue;
+            var target = result.graph().selectedVersions.get(conflict.slug());
+            if (target == null) continue;
+            String project = target.path("project_id").asText();
+            // 冲突只报告未获满足的一方；已获满足的另一方也可能通过替换附属版本解除精确约束。
+            for (var entry : new TreeMap<>(result.graph().selectedVersions).entrySet()) {
+                for (var dependency : entry.getValue().path("dependencies")) {
+                    if (!"required".equals(dependency.path("dependency_type").asText()) || dependency.path("version_id").asText("").isBlank()) continue;
+                    String ref = dependency.path("project_id").asText();
+                    String alias = result.graph().projectAliases.get("vid:" + dependency.path("version_id").asText());
+                    if ((!project.isBlank() && project.equals(ref)) || conflict.slug().equals(alias)) subjects.add(entry.getKey());
+                }
+            }
+        }
+        conflicts.stream().filter(u -> u.reason() == ResolutionResult.Reason.CONFLICT_BETWEEN_ROOTS)
+                .map(ResolutionResult.Unresolved::slug).filter(result.graph().selectedVersions::containsKey).forEach(subjects::add);
+        return List.copyOf(subjects);
     }
     private static int quality(ResolutionResult result) {
         return result.unresolved().size() + result.dropped().size() + (result.budgetExhausted() ? 10000 : 0);
@@ -407,6 +430,8 @@ public class DependencyEngine {
                             projectId = projectInfo.path("id").asText();
                             realSlug = projectInfo.path("slug").asText();
                             if (realSlug.isBlank()) realSlug = key;
+                            if (!projectId.isBlank()) idToSlug.put(projectId, realSlug);
+                            idToSlug.put(key, realSlug);
 
                             // 2) 取版本（严格 loader：不做跨加载器回退）
                             if (latestVersion == null) {
@@ -637,17 +662,21 @@ public class DependencyEngine {
             if (!kept.contains(a) || !kept.contains(b)) continue;
             boolean aRoot = rootSlugs.contains(a);
             boolean bRoot = rootSlugs.contains(b);
+            String evidence = "声明来源=" + rule.sourceType + (rule.id == null ? "" : "#" + rule.id)
+                    + "，声明方=" + a + "@" + graph.selectedVersions.getOrDefault(a, tools.jackson.databind.node.MissingNode.getInstance()).path("id").asText("未核实")
+                    + "，相关方=" + b + "@" + graph.selectedVersions.getOrDefault(b, tools.jackson.databind.node.MissingNode.getInstance()).path("id").asText("未核实");
             if (aRoot && bRoot) {
                 unresolved.add(new ResolutionResult.Unresolved(b, a,
                         ResolutionResult.Reason.CONFLICT_BETWEEN_ROOTS,
-                        "两个核心模组互斥，需要用户决定保留哪个"));
+                        "两个核心模组存在互斥声明，需要用户决定保留哪个；" + evidence));
                 continue;
             }
             String victim = aRoot ? b : (bRoot ? a : (a.compareTo(b) > 0 ? a : b));
             String keeper = victim.equals(a) ? b : a;
             kept.remove(victim);
             dropped.add(new ResolutionResult.Dropped(victim, ResolutionResult.Reason.CONFLICT_WITH_KEPT,
-                    "与保留的 " + keeper + " 互斥，已剔除"));
+                    "与保留的 " + keeper + " 存在互斥声明，已剔除；" + evidence));
+            MaaLog.user("互斥剔除 " + victim + "，保留 " + keeper + "；" + evidence);
         }
 
         // 互斥裁决可能移除已解析的必需前置，必须重新检查依赖闭包。
@@ -682,6 +711,7 @@ public class DependencyEngine {
         }
         kept.retainAll(reachable);
         DependencyGraph finalGraph = new DependencyGraph();
+        finalGraph.projectAliases.putAll(idToSlug);
         finalGraph.allSlugs.addAll(kept);
         finalGraph.pinnedSlugs.addAll(graph.pinnedSlugs);
         for (String slug : kept) {

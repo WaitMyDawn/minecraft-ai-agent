@@ -93,16 +93,11 @@ public class SessionRegistry {
     }
 
     Long touchAt(String token, long now) {
-        if (token == null) return null;                 // ConcurrentHashMap.get(null) 会 NPE
-        Entry entry = sessions.get(token);
-        if (entry == null) return null;
-        if (now >= entry.expiresAtMillis()) {
-            // 过期的删掉。用 (key, expectedValue) 这一版：万一这期间被别的线程续过期，就不该误删。
-            sessions.remove(token, entry);
-            return null;
-        }
-        sessions.replace(token, entry, new Entry(entry.userId(), now + ttlMs));
-        return entry.userId();
+        if (token == null) return null;
+        // 校验与续期共用每个 token 的原子更新，不能在撤销已完成后返回此前读到的身份。
+        Entry renewed = sessions.computeIfPresent(token, (key, entry) -> now >= entry.expiresAtMillis()
+                ? null : new Entry(entry.userId(), Math.max(entry.expiresAtMillis(), now + ttlMs)));
+        return renewed == null ? null : renewed.userId();
     }
 
     private void sweepIfCrowded(long now) {

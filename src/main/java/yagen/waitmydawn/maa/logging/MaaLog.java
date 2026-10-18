@@ -191,7 +191,7 @@ public final class MaaLog {
             synchronized (lock) {
                 try {
                     Writer w = writer("app-" + dayName() + ".log");
-                    w.write(line);
+                    w.write(SecretRedactor.redact(line));
                     if (!line.endsWith("\n")) w.write("\n");
                     w.flush();
                 } catch (IOException e) {
@@ -205,7 +205,7 @@ public final class MaaLog {
             synchronized (lock) {
                 try {
                     Writer w = writer(fileName);
-                    w.write(content);
+                    w.write(SecretRedactor.redact(content));
                     w.flush();
                 } catch (IOException e) {
                     System.err.println("[MaaLog] 日志写入失败 " + fileName + ": " + e.getMessage());

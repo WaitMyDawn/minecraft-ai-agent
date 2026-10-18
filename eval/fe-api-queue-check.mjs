@@ -86,5 +86,26 @@ await apiFetch('/api/chat', {method: 'POST', body: '{}'});
 assert.equal(globalThis.queueTestState.buildProgress.value.length, 2, 'running/need-data 和旧快照不得覆盖或重复阶段');
 assert.equal(globalThis.queueTestState.buildProgress.value[1].endedAt, 300, '最终响应应补齐阶段收口');
 assert.equal(globalThis.queueTestState.currentThought.value, '', '取数过程不替换业务阶段文案');
+let recoverySubmissions = 0;
+globalThis.fetch = async url => {
+    if (url === '/api/chat') { recoverySubmissions++; return reply({taskId:'lost-task',stage:'running'}, 202); }
+    return reply({error:'任务不存在或已过期'}, 404);
+};
+await assert.rejects(() => apiFetch('/api/chat', {method:'POST',body:'{}'}), error => error.status === 404 && error.message.includes('重新提交'));
+assert.equal(recoverySubmissions, 1, '任务丢失不得自动重建或重新调用模型');
+let completeOldRequest;
+globalThis.fetch = () => new Promise(resolve => { completeOldRequest = resolve; });
+const oldRequest = apiFetch('/api/prefs/export');
+globalThis.queueTestState.authUser.value = {token:'fixture-new-account'};
+completeOldRequest(reply({error:'expired'}, 401));
+await assert.rejects(() => oldRequest, error => error.name === 'AbortError');
+assert.equal(globalThis.queueTestState.authUser.value.token, 'fixture-new-account', '旧401不得清除新账号');
+let oldTaskCalls = 0;
+globalThis.fetch = async () => { oldTaskCalls++; return reply({taskId:'old-account-task',stage:'running'}, 202); };
+const oldTask = apiFetch('/api/chat', {method:'POST',body:'{}'});
+await new Promise(resolve => setImmediate(resolve));
+globalThis.queueTestState.authUser.value = {token:'fixture-next-account'};
+await assert.rejects(() => oldTask, error => error.name === 'AbortError');
+assert.equal(oldTaskCalls, 1, '切换账号后旧任务不得继续轮询或取消新账号任务');
 delete globalThis.queueTestState;
 console.log('前端队列检查通过：排位显示、单次提交、浏览器取数、回执、取消和清理。');

@@ -14,6 +14,10 @@ import java.nio.charset.StandardCharsets;
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class JsonBodyLimitFilter extends OncePerRequestFilter {
     private static final long MAX_BYTES = 8 * 1024 * 1024L;
+    private static final long ACCOUNT_MAX_BYTES = 64 * 1024L;
+    public static final class LimitExceededException extends IOException {
+        public LimitExceededException() { super("JSON 请求超过字节限额"); }
+    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
@@ -23,10 +27,14 @@ public class JsonBodyLimitFilter extends OncePerRequestFilter {
             chain.doFilter(request, response);
             return;
         }
-        if (request.getContentLengthLong() > MAX_BYTES) {
+        String path;
+        try { path = AuthenticationFilter.normalizedPath(request); }
+        catch (IllegalArgumentException invalid) { response.setStatus(400); return; }
+        long limit = path.startsWith("/api/user/") ? ACCOUNT_MAX_BYTES : MAX_BYTES;
+        if (request.getContentLengthLong() > limit) {
             response.setStatus(413);
             response.setContentType("application/json;charset=UTF-8");
-            response.getWriter().write("{\"error\":\"请求内容超过 8MB 限额\"}");
+            response.getWriter().write("{\"error\":\"请求内容超过字节限额\"}");
             return;
         }
         chain.doFilter(new HttpServletRequestWrapper(request) {
@@ -37,7 +45,7 @@ public class JsonBodyLimitFilter extends OncePerRequestFilter {
                 limited = new ServletInputStream() {
                     private long consumed;
                     private void count(int size) throws IOException {
-                        if (size > 0 && (consumed += size) > MAX_BYTES) throw new IOException("JSON 请求超过字节限额");
+                        if (size > 0 && (consumed += size) > limit) throw new LimitExceededException();
                     }
                     @Override public int read() throws IOException { int value = input.read(); count(value < 0 ? 0 : 1); return value; }
                     @Override public int read(byte[] bytes, int offset, int length) throws IOException {

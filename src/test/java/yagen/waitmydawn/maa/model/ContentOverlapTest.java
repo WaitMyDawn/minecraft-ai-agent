@@ -5,6 +5,17 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ContentOverlapTest {
+    @Test void dimensionConfirmationSeparatesKnownRealmsAndDoesNotRepeatConfirmedChoices() {
+        var projects = List.of(project("nether-a", "Nether expansion with custom terrain", 100),
+                project("nether-b", "Overhauls the Nether terrain", 200),
+                project("end-a", "Transforms the End terrain", 300), project("end-b", "Overhauls the End terrain", 400));
+        var groups = ContentOverlap.detectByDimension(projects, Set.of(), Map.of());
+        assertEquals(Set.of("generation:nether", "generation:end"), groups.stream().map(ContentOverlap.Group::original).collect(java.util.stream.Collectors.toSet()));
+        for (var group : groups) assertEquals(1, group.candidates().stream().filter(ContentOverlap.Candidate::recommended).count());
+        assertTrue(ContentOverlap.detectByDimension(projects, Set.of(), Map.of("generation:nether", List.of("nether-a", "nether-b"),
+                "generation:end", List.of("end-a", "end-b"))).isEmpty());
+        assertTrue(ContentOverlap.detectByDimension(List.of(projects.get(0), projects.get(2)), Set.of(), Map.of()).isEmpty());
+    }
     private ContentOverlap.Project project(String slug, String description, long downloads) {
         return new ContentOverlap.Project(slug, slug, description, "", "", downloads);
     }
@@ -21,6 +32,12 @@ class ContentOverlapTest {
                 project("inventory-keep", "Keeps items on death", 1000)), Set.of()).isEmpty());
         assertTrue(ContentOverlap.detect(List.of(project("inventory-sort", "Sorts your inventory", 100),
                 project("inventory-hud", "Displays your inventory on screen", 1000)), Set.of()).isEmpty());
+    }
+    @Test void storageCompressionAndOrganizingFarmOutputDoNotProveInventorySorting() {
+        var sorter = project("inventory-tools", "Help you keep your inventory sorted", 100);
+        var compression = project("resource-blocks", "Smart storage: Great for saving inventory space or organizing output from auto-farms and mining sessions", 200);
+        assertTrue(ContentOverlap.detect(List.of(sorter, compression), Set.of(compression.slug())).isEmpty());
+        assertEquals("inventory-sort", ContentOverlap.detect(List.of(sorter, project("other-sorter", "Automatically sorts your inventory", 50)), Set.of()).getFirst().original());
     }
     @Test void equivalentInventoryFunctionsRequireMatchingDescriptionEvidence() {
         var groups = ContentOverlap.detect(List.of(project("clean-bags", "Sorts your inventory and containers", 100),
@@ -118,5 +135,80 @@ class ContentOverlapTest {
         assertTrue(ContentOverlap.detect(List.of(structure,fortress,world),Set.of()).isEmpty());
         var biome=project("biome","This mod overhauls all vanilla biomes, with different sub biomes",300);
         assertEquals(2,ContentOverlap.detect(List.of(biome,world),Set.of()).getFirst().candidates().size());
+    }
+    @Test void unknownGenerationScopeDoesNotForceSeparateNonemptySelectionsOrLoseDefaults() {
+        var projects = List.of(project("core-a", "Transforms the Overworld with enhanced terrain", 500),
+                project("core-b", "Overhauls the Overworld terrain", 100),
+                project("unknown-biomes", "Explore 100 new biomes", 1000),
+                project("chosen-nether", "Overhauls the Nether terrain", 2000),
+                project("chosen-end", "Transforms the End terrain", 3000));
+        var groups = ContentOverlap.detectByDimension(projects, Set.of("chosen-nether", "chosen-end"),
+                Map.of("generation:nether", List.of("chosen-nether"), "generation:end", List.of("chosen-end")));
+        assertEquals(1, groups.size());
+        assertEquals("major-worldgen", groups.getFirst().original());
+        assertEquals(Set.of("core-a", "core-b", "unknown-biomes", "chosen-nether", "chosen-end"), groups.getFirst().candidates().stream().map(ContentOverlap.Candidate::slug).collect(java.util.stream.Collectors.toSet()));
+        assertEquals(Set.of("core-a", "chosen-nether", "chosen-end"), groups.getFirst().candidates().stream().filter(ContentOverlap.Candidate::recommended).map(ContentOverlap.Candidate::slug).collect(java.util.stream.Collectors.toSet()));
+        assertFalse(groups.getFirst().candidates().stream().filter(c -> c.slug().equals("unknown-biomes")).findFirst().orElseThrow().scopeNote().isEmpty());
+        var protectedGroup = ContentOverlap.detectByDimension(projects, Set.of("core-b", "chosen-nether", "chosen-end"),
+                Map.of("generation:nether", List.of("chosen-nether"), "generation:end", List.of("chosen-end"))).getFirst();
+        assertTrue(protectedGroup.candidates().stream().filter(ContentOverlap.Candidate::protectedSelection).allMatch(ContentOverlap.Candidate::recommended));
+    }
+    @Test void inventoryDisplaysGroupByActualFunctionAndKeepComplementaryToolsSeparate() {
+        var hud = List.of(project("display-a", "Adds your main inventory, potion effects and your equipments to your HUD", 10),
+                project("display-b", "Display your inventory on the screen", 20),
+                project("display-c", "Shows player inventory as a permanent overlay", 30),
+                project("sorter", "Sorts your inventory with a button", 100),
+                project("armor", "Shows armor durability on screen", 200));
+        var groups = ContentOverlap.detectByDimension(hud, Set.of(), Map.of());
+        assertEquals(1, groups.size());
+        assertEquals("inventory-hud", groups.getFirst().original());
+        assertEquals(List.of("display-c", "display-b", "display-a"), groups.getFirst().candidates().stream().map(ContentOverlap.Candidate::slug).toList());
+        assertEquals(List.of("display-c"), groups.getFirst().candidates().stream().filter(ContentOverlap.Candidate::recommended).map(ContentOverlap.Candidate::slug).toList());
+        assertTrue(groups.getFirst().explanation().contains("重复显示"));
+    }
+    @Test void inventoryReferencesAndNonPlayerInterfacesDoNotBecomeDuplicateHuds() {
+        var own = project("own", "Displays your inventory on screen", 10);
+        for (String description : List.of("Compatible with an inventory HUD", "Recommend installing an inventory HUD",
+                "Hides the inventory HUD with a hotkey", "Shows inventory in a tabbed screen",
+                "Displays inventory sorting buttons", "Does not display inventory on screen",
+                "Displays inventories of networked pipes on screen"))
+            assertTrue(ContentOverlap.detectByDimension(List.of(own, project("helper", description, 20)), Set.of(), Map.of()).isEmpty(), description);
+        assertEquals("inventory-hud", ContentOverlap.detectByDimension(List.of(own,
+                project("overlay", "Shows your inventory on screen without opening any menus", 20)), Set.of(), Map.of()).getFirst().original());
+    }
+    @Test void crossDimensionAggregateAndUncertainCandidatesHaveExplicitScopeNotes() {
+        var multi = project("multi", "Adds 50 unique biomes to the Overworld, Nether and End", 500);
+        var card = ContentOverlap.generationCandidate(multi, Set.of()).orElseThrow();
+        assertEquals("下界 / 末地 / 主世界", card.scope());
+        assertTrue(card.scopeNote().contains("不能分别核实"));
+        var projects = List.of(multi, project("overworld", "Overhauls Overworld terrain", 100), project("end", "Overhauls End terrain", 50));
+        assertEquals(1, ContentOverlap.detectByDimension(projects, Set.of(), Map.of()).size());
+        assertTrue(ContentOverlap.detectByDimension(List.of(projects.get(1), projects.get(2)), Set.of(), Map.of()).isEmpty());
+    }
+    @Test void confirmedCombinationsAreNotRepeatedButNewOverlappingProjectsRequireConsent() {
+        var projects = List.of(project("a", "Overhauls Nether terrain", 100), project("b", "Transforms Nether terrain", 200));
+        var confirmed = Map.of("generation:nether", List.of("a", "b"));
+        assertTrue(ContentOverlap.detectByDimension(projects, Set.of(), confirmed).isEmpty());
+        var expanded = new ArrayList<>(projects); expanded.add(project("new", "Adds 30 new Nether biomes", 300));
+        assertEquals(3, ContentOverlap.detectByDimension(expanded, Set.of("a", "b"), confirmed).getFirst().candidates().size());
+        assertTrue(ContentOverlap.detectByDimension(expanded, Set.of(), Map.of("generation:nether", List.of("a", "b", "new"))).isEmpty());
+    }
+    @Test void onlyActuallyConnectedRangesAreMergedAndOrderingIsStable() {
+        var projects = List.of(project("nether-a", "Overhauls Nether terrain", 1), project("nether-b", "Overhauls Nether terrain", 2),
+                project("end-a", "Overhauls End terrain", 1), project("end-b", "Overhauls End terrain", 2),
+                project("structure", "Adds a ruined tower in the End", 100));
+        var groups = ContentOverlap.detectByDimension(projects, Set.of(), Map.of());
+        assertEquals(2, groups.size());
+        var reversed = new ArrayList<>(projects); Collections.reverse(reversed);
+        assertEquals(groups, ContentOverlap.detectByDimension(reversed, Set.of(), Map.of()));
+        assertTrue(groups.stream().allMatch(g -> g.candidates().size() == 2));
+    }
+    @Test void customDimensionScopesDoNotBecomeUnknownOrOverlapUnrelatedRealms() {
+        var projects = List.of(project("a", "Overhauls terrain in the Aether dimension", 10),
+                project("b", "Transforms terrain in the Aether dimension", 20), project("nether", "Overhauls Nether terrain", 30));
+        var groups = ContentOverlap.detectByDimension(projects, Set.of(), Map.of());
+        assertEquals(1, groups.size()); assertEquals("generation:aether", groups.getFirst().original());
+        assertTrue(groups.getFirst().candidates().stream().allMatch(c -> c.scope().equals("aether维度")));
+        assertTrue(ContentOverlap.detectByDimension(projects, Set.of(), Map.of("generation:aether", List.of("a", "b"))).isEmpty());
     }
 }

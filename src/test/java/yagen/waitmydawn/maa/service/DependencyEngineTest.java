@@ -68,6 +68,25 @@ class DependencyEngineTest {
         var result = resolve("a", "b");
         assertFalse(result.isComplete());
         assertTrue(result.unresolved().stream().anyMatch(u -> u.reason() == ResolutionResult.Reason.CONFLICT_BETWEEN_ROOTS));
+        assertTrue(result.unresolved().stream().anyMatch(u -> u.detail().contains("声明来源=MODRINTH") && u.detail().contains("声明方=a@")));
+    }
+    @Test void versionlessPersistedModrinthRulesCannotOverrideSelectedVersionMetadata() {
+        register("a", "PA", List.of()); register("b", "PB", List.of());
+        when(knowledgeDb.getActiveRules(anyString(), any())).thenReturn(List.of(
+                new KnowledgeRule("", "a", "b", "CONFLICTS_WITH", KnowledgeRule.SourceType.MODRINTH, 100),
+                new KnowledgeRule("", "a", "missing", "DEPENDS_ON", KnowledgeRule.SourceType.MODRINTH, 100)));
+        var result = resolve("a", "b");
+        assertTrue(result.isComplete()); assertEquals(Set.of("a", "b"), result.orderedSlugs());
+        verify(api, never()).getProjectInfo("missing");
+    }
+    @Test void knownIdentitySurvivesMissingVersionAndKeepsClosureOnTheSameEdge() {
+        register("a", "PA", List.of("required:PB")); register("b", "PB", List.of());
+        when(api.getLatestVersion(eq("PB"), eq(MC), anyString())).thenReturn(null);
+        var result = resolve("a");
+        assertEquals("b", result.graph().projectAliases.get("PB"));
+        var closure = yagen.waitmydawn.maa.model.DependencyClosure.capture(result.graph(), result.unresolved(), java.util.Map.of()).inspect(result.orderedSlugs());
+        assertEquals(1, closure.issues().size()); assertEquals("b", closure.issues().getFirst().dependency());
+        assertEquals("NO_VERSION_FOR_ENV", closure.issues().getFirst().code());
     }
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

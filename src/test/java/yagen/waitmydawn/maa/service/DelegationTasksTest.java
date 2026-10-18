@@ -28,6 +28,47 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 打包成一份清单的，是 BFS 一层里那几十个并发虚拟线程。下面两条用例分别钉住这两种形态。
  */
 class DelegationTasksTest {
+    @Test @org.junit.jupiter.api.Timeout(5)
+    void closingCancelsRunningAndQueuedTasksAndRejectsAdmission() throws Exception {
+        var tasks = new DelegationTasks(true, 10000, 1, 4);
+        var started = new java.util.concurrent.CountDownLatch(1);
+        var stopped = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        try {
+            var running = tasks.submit("closing-running", 1L, "one", null, () -> {
+                started.countDown(); try { release.await(); return "unexpected"; } finally { stopped.countDown(); }
+            });
+            assertTrue(started.await(1, TimeUnit.SECONDS));
+            var queued = tasks.submit("closing-queued", 2L, "two", null, () -> "must-not-run");
+            tasks.close(); tasks.close();
+            assertTrue(running.result().isCancelled()); assertTrue(queued.result().isCancelled());
+            assertTrue(stopped.await(1, TimeUnit.SECONDS)); assertFalse(queued.hasStarted());
+            var failure = org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                    () -> tasks.submit(null, 1L, "after-close", null, () -> "must-not-run"));
+            assertEquals(503, failure.getStatusCode().value()); assertTrue(tasks.all().isEmpty());
+        } finally { release.countDown(); tasks.close(); }
+    }
+
+    @Test @org.junit.jupiter.api.Timeout(5)
+    void admissionRacingCloseNeverLeavesAnUnfinishedTask() throws Exception {
+        var tasks = new DelegationTasks(true, 10000, 1, 32);
+        var start = new java.util.concurrent.CountDownLatch(1); var release = new java.util.concurrent.CountDownLatch(1);
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var futures = new java.util.ArrayList<Future<DelegationTasks.Task>>();
+            for (long owner = 1; owner <= 20; owner++) {
+                long identity = owner;
+                futures.add(executor.submit(() -> {
+                    start.await();
+                    try { return tasks.submit(null, identity, "race", null, () -> { release.await(); return "done"; }); }
+                    catch (org.springframework.web.server.ResponseStatusException closed) { assertEquals(503, closed.getStatusCode().value()); return null; }
+                }));
+            }
+            var closer = executor.submit(() -> { start.await(); tasks.close(); return true; });
+            start.countDown(); closer.get(2, TimeUnit.SECONDS);
+            for (var future : futures) { var task = future.get(2, TimeUnit.SECONDS); if (task != null) assertTrue(task.isDone()); }
+            assertTrue(tasks.all().isEmpty());
+        } finally { release.countDown(); tasks.close(); }
+    }
     @Test
     void hundredDistinctAccountsCanWaitAndCancelledQueueEntryNeverExecutes() throws Exception {
         var release = new java.util.concurrent.CountDownLatch(1);

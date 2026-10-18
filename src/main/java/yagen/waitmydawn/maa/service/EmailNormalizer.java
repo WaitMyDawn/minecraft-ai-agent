@@ -38,6 +38,6 @@ public final class EmailNormalizer {
         String domain = e.substring(at + 1);
         int dot = domain.indexOf('.');
         if (dot <= 0 || dot == domain.length() - 1) return false; // 域名里必须有点号且点号不在首尾
-        return e.indexOf(' ') < 0 && e.indexOf('\t') < 0;
+        return e.codePoints().noneMatch(c -> Character.isWhitespace(c) || Character.isISOControl(c));
     }
 }

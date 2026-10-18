@@ -43,7 +43,7 @@ public final class AgentSchemas {
                 "clearCount", type("boolean"), "replacementPolicyChanged", type("boolean"), "maxDownloadsChanged", type("boolean"),
                 "releaseRequirements", array(text(1, 64).put("pattern", "^r-[a-f0-9]{16}$"), 0, 64, true),
                 "releaseCapabilities", array(enumeration(BuildRequirement.Capability.class), 0, BuildRequirement.Capability.values().length, true));
-        return root("maa-build-intent-v3", object(BuildIntent.class,
+        var schema = root("maa-build-intent-v3", object(BuildIntent.class,
                 "schemaVersion", type("integer").put("const", 3), "mode", enumeration(BuildIntent.Mode.class),
                 "reply", text(0, ContractRules.MAX_REPLY), "name", text(0, 60),
                 "environment", nullable(environment), "count", nullable(count),
@@ -53,6 +53,10 @@ public final class AgentSchemas {
                 "excludedCategories", array(strings(CategoryRegistry.CATEGORIES), 0, ContractRules.MAX_SEARCH_INTENTS, true),
                 "maxDownloads", integer(0, Long.MAX_VALUE), "constraintChanges", changes,
                 "requirements", array(requirement, 0, 64, false)));
+        var countRequired = schema.putArray("allOf").addObject();
+        countRequired.putObject("if").putObject("properties").putObject("mode").putArray("enum").add("NEW").add("EMPTY");
+        countRequired.putObject("then").putObject("properties").set("count", count.deepCopy());
+        return schema;
     }
 
     public static ObjectNode reviewDecision() {

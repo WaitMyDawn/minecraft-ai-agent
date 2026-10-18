@@ -55,15 +55,20 @@ public class BackupService {
     public Result backup(String rawTag) throws Exception {
         String tag = sanitizeTag(rawTag);
         Path dir = root.resolve(tag);
-        Files.createDirectories(dir);
+        Files.createDirectories(root);
+        // 原子占用目录，同名并发与失败残留均不能覆盖既有备份。
+        try { Files.createDirectory(dir); }
+        catch (java.nio.file.FileAlreadyExistsException exists) {
+            throw new IllegalStateException("同名备份目录已存在，未覆盖");
+        }
         Path out = dir.resolve(ZIP_NAME);
         if (Files.exists(out)) {
             throw new IllegalStateException("同名备份已存在，未覆盖：" + out);
         }
 
         long t0 = System.currentTimeMillis();
-        // H2 的字符串字面量用 '' 转义单引号；这里的路径由配置 + 净化后的 tag 拼成，不含单引号
-        String h2Path = out.toString().replace('\\', '/');
+        // tag已净化，但配置目录本身仍可能含单引号，需按H2字符串字面量转义。
+        String h2Path = out.toString().replace('\\', '/').replace("'", "''");
         try (Connection conn = dataSource.getConnection();
              Statement st = conn.createStatement()) {
             st.execute("BACKUP TO '" + h2Path + "'");

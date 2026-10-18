@@ -25,11 +25,8 @@ public class KnowledgeController {
     /**
      * 知识库管理视图的数据源。
      *
-     * <p>刻意不直接吐实体：实体里躺着 {@code approvedUsers} / {@code disapprovedUsers} 两个名单
-     * （内容是别人的账号号），而这个接口是公开可读的 —— 直接把投票人的账号广播给所有人没必要。
-     * 改成 DTO 只给计数 + 当前访问者自己的投票状态。
-     *
-     * <p>token 是<b>可选</b>的：不登录也能看知识库，只是 {@code myVote} 永远为 null（按钮画不出按下态）。
+     * <p>业务登录由 AuthenticationFilter 统一校验；DTO 仅返回计数与当前账号的投票，
+     * 避免将实体中的 approvedUsers / disapprovedUsers 账号名单暴露给其它用户。
      */
     @GetMapping
     public List<Map<String, Object>> getAllRules(

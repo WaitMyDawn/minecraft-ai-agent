@@ -70,7 +70,7 @@ export default {
                     <span v-else class="w-6 h-6 rounded bg-slate-100 inline-flex items-center justify-center">📦</span>
                     <span class="break-all">{{ mod.slug }}</span>
                   </a><p class="mt-1 text-slate-600">{{ mod.purpose }}</p>
-                  <details v-if="mod.quote" class="mt-1 text-xs text-slate-400"><summary class="cursor-pointer">查看用途依据</summary><p class="mt-1">{{ mod.quote }}</p></details>
+                  <details v-if="mod.quote" class="mt-1 text-xs text-slate-400"><summary class="cursor-pointer">{{ mod.evidenceType === 'PROJECT_GENERATION' ? '查看项目原文依据' : '查看用途依据' }}</summary><p class="mt-1">{{ mod.quote }}</p></details>
                 </div>
                 <p v-if="criterion.missing.length" class="text-xs text-amber-700">未保留：<a v-for="slug in criterion.missing" :key="slug" :href="modProjectLink(slug)" target="_blank" rel="noopener noreferrer" class="mr-2 underline">{{ slug }}</a></p>
                 <p v-if="criterion.evidenceState?.countsComplete !== false && (criterion.modCount > criterion.mods.length || criterion.missingCount > criterion.missing.length)" class="text-xs text-slate-400">仅列前24项；关联项目共 {{ criterion.modCount }} 项，未保留项目共 {{ criterion.missingCount }} 项。</p>
@@ -155,6 +155,12 @@ export default {
                 </a>
               </div>
               <p class="mt-2 text-xs text-slate-600">{{ issue.dropped ? '未加入清单' : '前置待处理' }} · {{ issueReason(issue.reason) }}<span v-if="issue.versionId && !issue.dependency"> · 版本引用 {{ issue.versionId }}（项目名暂未取得）</span></p>
+              <p v-if="issue.codes.includes('MULTILOADER_DEPENDENCY_UNVERIFIED')" class="mt-2 text-xs text-amber-800">该版本声明多个加载器，尚未核实这条依赖在当前加载器下的适用范围；必需依赖声明仍保留，未按可选项忽略。</p>
+              <details v-if="issue.detail || issue.requiredVersions.length" class="mt-2 text-xs text-slate-500">
+                <summary class="cursor-pointer">查看依赖判定依据</summary>
+                <p v-if="issue.detail" class="mt-1 break-words">{{ issue.detail }}</p>
+                <p v-if="issue.requiredVersions.length" class="mt-1 break-all">要求的版本：{{ issue.requiredVersions.join('、') }}</p>
+              </details>
             </div>
           </div>
         </details>

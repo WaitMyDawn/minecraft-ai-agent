@@ -11,6 +11,15 @@ const report = readBuildReport(text);
 assert.equal(report.categories[0].percentage, 80);
 assert.equal(report.categories[1].percentage, 70);
 assert.equal(report.issues[0].dependency, 'core');
+assert.deepEqual(report.issues[0].requiredVersions, ['V1']);
+const detailed = readBuildReport('<build_report>' + JSON.stringify({schemaVersion: 1, total: 1, categories: {}, issues: [{
+    mod: 'addon', dependency: 'api', versionId: '', reason: 'NO_VERSION_FOR_ENV', dropped: false,
+    detail: '声明来源=MODRINTH，声明方=addon@V1', codes: ['NO_VERSION_FOR_ENV', 'MULTILOADER_DEPENDENCY_UNVERIFIED', {}, '<script>'],
+    requiredVersions: ['V1', 'V2', null, '../escape']}]}) + '</build_report>');
+assert.deepEqual(detailed.issues[0].codes, ['NO_VERSION_FOR_ENV', 'MULTILOADER_DEPENDENCY_UNVERIFIED']);
+assert.deepEqual(detailed.issues[0].requiredVersions, ['V1', 'V2']);
+assert.match(detailed.issues[0].detail, /声明来源/);
+assert.match(issueReason('MULTILOADER_DEPENDENCY_UNVERIFIED'), /适用范围待核实/);
 assert.equal(readBuildReport('<build_report>{bad}</build_report>'), null);
 assert.equal(readBuildReport('<build_report>{"schemaVersion":2,"total":10}</build_report>'), null);
 assert.doesNotMatch(renderMarkdownSafe(text), /build_report|VERSION_CONFLICT/);
@@ -54,6 +63,16 @@ assert.equal(pendingCoverage.requirements[0].evidenceState.countsComplete, false
 assert.equal(requirementStatus(pendingCoverage.requirements[0]), '版本待核实');
 childCoverage.requirements[0].evidenceState.code = 'UNKNOWN';
 assert.equal(readRequirementReport('<requirement_report>' + JSON.stringify(childCoverage) + '</requirement_report>').requirements[0].evidenceState, null);
+childCoverage.requirements[0].evidenceState = {code:'CORE_GENERATION_PENDING', projects:[], generation:[
+    {dimension:'nether', label:'下界', projects:['core', 'javascript:bad']}, {dimension:[], label:'无效', projects:[]}]};
+childCoverage.requirements[0].mods = [
+    {slug:'core', purpose:'项目原文描述下界大规模生成', quote:'x'.repeat(600), evidenceType:'PROJECT_GENERATION'},
+    {slug:'bad-review', purpose:'模型摘录不能扩大', quote:'x'.repeat(600), evidenceType:'REVIEW_QUOTE'},
+    {slug:'too-long', purpose:'超限原文', quote:'x'.repeat(1001), evidenceType:'PROJECT_GENERATION'}];
+const generationReport = readRequirementReport('<requirement_report>' + JSON.stringify(childCoverage) + '</requirement_report>').requirements[0];
+assert.equal(requirementStatus(generationReport), '核心生成待核实');
+assert.deepEqual(generationReport.evidenceState.generation, [{dimension:'nether', label:'下界', projects:['core']}]);
+assert.deepEqual(generationReport.mods.map(m => m.slug), ['core']);
 
 // 运行生产预览收口，验证关系错误不会删除仍在最终图中的核心。
 const snapshot = await readFile(new URL('../src/main/resources/static/js/features/pack-snapshot.js', import.meta.url), 'utf8');

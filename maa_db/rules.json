@@ -49,7 +49,6 @@
     { "modA": "ars_n_spells", "modB": "ars_nouveau", "relationType": "DEPENDS_ON" },
     { "modA": "optifine", "modB": "embeddium", "relationType": "CONFLICTS_WITH" },
     { "modA": "sodium", "modB": "embeddium", "relationType": "CONFLICTS_WITH" },
-    { "modA": "sodium", "modB": "supplementaries", "relationType": "CONFLICTS_WITH" },
     { "modA": "shoulder-surfing-reloaded", "modB": "better-third-person", "relationType": "CONFLICTS_WITH" }
   ]
 }

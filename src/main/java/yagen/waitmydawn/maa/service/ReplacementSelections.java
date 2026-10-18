@@ -5,13 +5,23 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import yagen.waitmydawn.maa.model.agent.*;
+import yagen.waitmydawn.maa.model.ContentOverlap;
+import yagen.waitmydawn.maa.model.RetrievalBudget;
 import java.util.*;
 
 /** 选择票据保存已验证的计划，绑定账号与工作区快照，续建不再调用规划师重写需求。 */
 public final class ReplacementSelections {
     public record Pending(Long owner, String snapshot, BuildIntent intent, BuildConstraints constraints,
                           AiAgentService.AgentCallResult architect, List<AgentContractCodec.Failure> failures,
-                          List<RequiredModAlternatives.Group> groups) {}
+                          List<RequiredModAlternatives.Group> groups, GenerationContext generation) {
+        public Pending(Long owner, String snapshot, BuildIntent intent, BuildConstraints constraints,
+                       AiAgentService.AgentCallResult architect, List<AgentContractCodec.Failure> failures,
+                       List<RequiredModAlternatives.Group> groups) { this(owner, snapshot, intent, constraints, architect, failures, groups, null); }
+    }
+    public record GenerationContext(List<ContentOverlap.Group> groups, RetrievalBudget budget,
+                                    Map<String, List<String>> priorReplacements, Map<String, List<String>> selected) {
+        public GenerationContext { groups = List.copyOf(groups); priorReplacements = Map.copyOf(priorReplacements); selected = Map.copyOf(selected); }
+    }
     public record Selection(List<String> slugs, boolean drop, String manualSlug) {}
     public record Resumed(Pending pending, BuildIntent intent, BuildConstraints constraints,
                           Map<String, List<String>> replacements) {}
@@ -63,6 +73,7 @@ public final class ReplacementSelections {
             if (slugs.stream().anyMatch(value.intent().exclude()::contains)) throw new IllegalArgumentException("选择与已有排除项冲突");
             replacements.put(group.original(), List.copyOf(slugs));
         }
+        if (value.generation() != null) return resumeGeneration(ticket, value, replacements, choices);
         var i = value.intent();
         BuildIntent resolved = new BuildIntent(i.schemaVersion(), i.mode(), i.reply(), i.name(), i.environment(), i.count(),
                 replace(i.mustHave(), replacements), replace(i.add(), replacements), i.remove(), i.exclude(),
@@ -74,6 +85,40 @@ public final class ReplacementSelections {
                 remapRequirements(c.requirements(), replacements));
         if (!pending.asMap().remove(ticket, value)) throw new IllegalArgumentException("该选择已提交，请等待构建结果");
         return new Resumed(value, resolved, constraints, Map.copyOf(replacements));
+    }
+    private Resumed resumeGeneration(String ticket, Pending value, Map<String, List<String>> selected, JsonNode choices) {
+        var chosen = new LinkedHashSet<String>(); var rejected = new LinkedHashSet<String>();
+        var states = new HashMap<String, Boolean>();
+        for (var group : value.generation().groups()) {
+            var choice = choices.path(group.original());
+            if (choice.path("drop").asBoolean() || !choice.path("manualSlug").asText().isEmpty())
+                throw new IllegalArgumentException("维度生成确认只能选择已核实的候选");
+            for (var candidate : group.candidates()) {
+                boolean keep = selected.get(group.original()).contains(candidate.slug());
+                if (candidate.protectedSelection() && !keep) throw new IllegalArgumentException("点名核心及锁定项目必须保留");
+                Boolean previous = states.putIfAbsent(candidate.slug(), keep);
+                if (previous != null && previous != keep) throw new IllegalArgumentException("同一项目在不同维度的选择不一致");
+                if (keep) chosen.add(candidate.slug()); else rejected.add(candidate.slug());
+            }
+        }
+        var i = value.intent(); var c = value.constraints();
+        var must = new LinkedHashSet<>(i.mustHave()); must.addAll(chosen);
+        var add = new LinkedHashSet<>(i.add()); add.addAll(chosen);
+        var exclude = new LinkedHashSet<>(i.exclude()); exclude.addAll(rejected);
+        var remove = new LinkedHashSet<>(i.remove());
+        // 旧工作区中未锁定的候选也必须遵守明确选择，不能由 EDIT 再次带入。
+        if (i.mode() == BuildIntent.Mode.EDIT) remove.addAll(rejected);
+        var intent = new BuildIntent(i.schemaVersion(), i.mode(), i.reply(), i.name(), i.environment(), i.count(), List.copyOf(must),
+                List.copyOf(add), List.copyOf(remove), List.copyOf(exclude), i.expandAddons(), i.replacementPolicy(),
+                i.searchIntents(), i.excludedCategories(), i.maxDownloads(), i.constraintChanges(), i.requirements());
+        var retainedMust = new LinkedHashSet<>(c.mustHave()); retainedMust.addAll(chosen);
+        var retainedExclude = new LinkedHashSet<>(c.exclude()); retainedExclude.addAll(rejected);
+        var constraints = new BuildConstraints(c.schemaVersion(), List.copyOf(retainedMust), List.copyOf(retainedExclude), c.excludedCategories(),
+                c.count(), c.replacementPolicy(), c.maxDownloads(), c.requirements());
+        var context = new GenerationContext(value.generation().groups(), value.generation().budget(), value.generation().priorReplacements(), selected);
+        var resumed = new Pending(value.owner(), value.snapshot(), intent, constraints, value.architect(), value.failures(), value.groups(), context);
+        if (!pending.asMap().remove(ticket, value)) throw new IllegalArgumentException("该选择已提交，请等待构建结果");
+        return new Resumed(resumed, intent, constraints, context.priorReplacements());
     }
     private static List<BuildRequirement> remapRequirements(
             List<BuildRequirement> entries, Map<String, List<String>> replacements) {
@@ -93,10 +138,11 @@ public final class ReplacementSelections {
     /** 提交与失败回滚在同一临界区，队列拒绝期间不能被新票据抢占容量。 */
     public synchronized <T> T admit(String ticket, Long owner, Map<String, String> payload,
                                      java.util.function.Function<Resumed, T> submit) {
+        Pending original = pending.getIfPresent(ticket);
         Resumed value = resume(ticket, owner, payload);
         try { return submit.apply(value); }
         catch (RuntimeException rejected) {
-            restore(ticket, value.pending());
+            restore(ticket, original);
             throw rejected;
         }
     }
@@ -112,7 +158,7 @@ public final class ReplacementSelections {
     public static String snapshot(Map<String, String> payload) {
         // 仅摘要构建输入，不保存请求中的鉴权信息或个人密钥。
         var fields = new TreeMap<String, String>();
-        for (String name : List.of("prompt", "currentMods", "importedPack", "uuid", "mcVersion", "loader", "excludedSlugs", "constraints"))
+        for (String name : List.of("prompt", "currentMods", "importedPack", "assembly", "uuid", "mcVersion", "loader", "excludedSlugs", "constraints"))
             fields.put(name, payload.getOrDefault(name, ""));
         try {
             return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")

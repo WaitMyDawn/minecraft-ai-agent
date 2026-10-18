@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * 运维端点令牌校验测试。
@@ -13,6 +14,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 没配 token（功能关闭）、token 为空、token 不匹配，三种都必须拒绝。
  */
 class OpsControllerTest {
+
+    @Test
+    void everyOpsRouteRejectsBeforeCallingExternalServices() {
+        for (String configured : new String[]{"", "fixture-ops-token"}) {
+            OpsController controller = new OpsController(null, null, null, configured);
+            int expected = configured.isEmpty() ? 404 : 403;
+            for (String given : new String[]{null, "wrong-token"}) {
+                assertEquals(expected, controller.backup(given, null).getStatusCode().value());
+                assertEquals(expected, controller.mailTest(given, null).getStatusCode().value());
+                assertEquals(expected, controller.mailStatus(given, true).getStatusCode().value());
+            }
+        }
+    }
 
     @Test
     @DisplayName("token 一致才放行")

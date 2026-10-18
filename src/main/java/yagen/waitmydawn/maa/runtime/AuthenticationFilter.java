@@ -28,17 +28,21 @@ public class AuthenticationFilter extends OncePerRequestFilter {
 
     public AuthenticationFilter(UserController users) { this.users = users; }
 
+    static String normalizedPath(HttpServletRequest request) {
+        String raw = request.getServletPath();
+        if (raw == null || raw.isBlank()) raw = request.getRequestURI().substring(request.getContextPath().length());
+        String path = java.net.URLDecoder.decode(raw.replace("+", "%2B"), java.nio.charset.StandardCharsets.UTF_8)
+                .replaceAll(";[^/]*", "").replaceAll("/{2,}", "/");
+        return java.net.URI.create(path).normalize().getPath();
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
         String path;
         try {
-            String raw = request.getServletPath();
-            if (raw == null || raw.isBlank()) raw = request.getRequestURI().substring(request.getContextPath().length());
             // 与路由的解码、矩阵参数和路径规范化语义对齐，避免原始 URI 绕过 /api/ 判定。
-            path = java.net.URLDecoder.decode(raw.replace("+", "%2B"), java.nio.charset.StandardCharsets.UTF_8)
-                    .replaceAll(";[^/]*", "").replaceAll("/{2,}", "/");
-            path = java.net.URI.create(path).normalize().getPath();
+            path = normalizedPath(request);
         } catch (IllegalArgumentException e) {
             response.setStatus(400);
             return;
