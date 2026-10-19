@@ -229,9 +229,11 @@ public class AiAgentService {
                 List.of(SystemMessage.from(instructions), UserMessage.from(input))), callBudgetMs);
         if (capture) yagen.waitmydawn.maa.logging.MaaLog.user("[Agent output]\n" + redact(response.aiMessage().text()));
         int truncated = response.finishReason() == dev.langchain4j.model.output.FinishReason.LENGTH ? 1 : 0;
+        long elapsedMs = (System.nanoTime() - started) / 1_000_000;
         yagen.waitmydawn.maa.logging.MaaLog.user("模型完成摘要：finishReason=" + response.finishReason()
-                + "，输出token=" + usage.outputTokens() + "，输出上限=" + outputLimit);
-        return new AgentCallResult(response.aiMessage().text(), (System.nanoTime() - started) / 1_000_000,
+                + "，输出token=" + usage.outputTokens() + "，输出上限=" + outputLimit
+                + "，耗时ms=" + elapsedMs + "，输入token=" + usage.inputTokens());
+        return new AgentCallResult(response.aiMessage().text(), elapsedMs,
                 usage.modelCalls(), usage.inputTokens(), usage.outputTokens(), truncated);
     }
     private boolean capturingAgentIo() {

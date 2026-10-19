@@ -97,24 +97,8 @@ await preview.handlePreviewResult({state: fixture.packStateOf(fixture.packData),
     unresolved: [{slug: 'core', reason: 'VERSION_CONFLICT'}], dropped: []});
 assert.deepEqual(fixture.packData.modSlugs, ['core'], '精确版本冲突本身不能授予删除权限');
 
-// 执行生产元数据加载函数，验证并行调用不会重复发送同一项目请求。
-const prefs = await readFile(new URL('../src/main/resources/static/js/features/prefs.js', import.meta.url), 'utf8');
-const cacheSource = prefs.slice(prefs.indexOf('const pendingModInfo'), prefs.indexOf('// 手动 slug 输入添加'));
-let requests = 0;
-globalThis.reportCacheFixture = {modInfoCache: {value: {}}, apiFetch: async url => {
-    requests++;
-    await new Promise(resolve => setTimeout(resolve, 5));
-    if (url.endsWith('/broken')) throw new Error('fixture failure');
-    return {json: async () => ({slug: 'core', icon: 'https://cdn.modrinth.com/fixture.png'})};
-}};
-const {loadModInfoCache} = await import('data:text/javascript;base64,' + Buffer.from(
-    'const {modInfoCache,apiFetch}=globalThis.reportCacheFixture;\n' + cacheSource).toString('base64'));
-await Promise.all([loadModInfoCache(['core']), loadModInfoCache(['core'])]);
-assert.equal(requests, 1);
-await loadModInfoCache(['broken']);
-await loadModInfoCache(['broken']);
-assert.equal(requests, 2, '失败冷却期间不重复请求');
-console.log('构建展示检查通过：多标签占比、JSON 历史、隐藏协议文本、原因翻译、链接编码、图标请求合并及失败冷却。');
+await import('./fe-mod-info-check.mjs');
+console.log('构建展示检查通过：多标签占比、JSON 历史、隐藏协议文本、原因翻译、链接编码及资料按需加载。');
 
 const optimizationFixture = {schemaVersion: 1, total: 100, categories: {}, issues: [], optimization: {
     schemaVersion: 1, totalFiles: 100, modCount: 1, referenceActive: true, rootsKnown: true,

@@ -674,7 +674,7 @@ public class ChatController {
             }
             if (!assembled.contains("<mods>")) return assembled;
             assembled += "\n<constraints>" + AGENT_CODEC.write(appliedConstraints.constraints()) + "</constraints>";
-            yagen.waitmydawn.maa.runtime.BuildProgress.stage("核查最终组合及生成报告");
+            yagen.waitmydawn.maa.runtime.BuildProgress.stage("核查内容重叠与确认选项");
             return overlapSelections.prepare(userId, convId, payload, assembled, state.getFinishedAssembly(),
                     state.getFinishedClosure(), apiClient, () -> isAborted(uuid), state.getConfirmedGeneration());
         } catch (Exception e) {
@@ -1610,7 +1610,7 @@ public class ChatController {
         return budget;
     }
 
-    /** 并发(≤5)校验候选池，只保留兼容模组；负面与 versions 命中不会产生 live 请求 */
+    /** 在召回预算内校验候选池；网络并发受委派波次和访问层限额控制。 */
     private List<CandidateMod> verifyPoolCompatibility(List<CandidateMod> pool,
                                                        String loader, String mcVersion) {
         return verifyPoolCompatibility(pool, loader, mcVersion, new yagen.waitmydawn.maa.model.RetrievalBudget());
@@ -2857,6 +2857,10 @@ public class ChatController {
                         });
                         criticContext.append("\n【完整有效需求账本】\n")
                                 .append(new tools.jackson.databind.ObjectMapper().writeValueAsString(structured.requirements()))
+                                .append("\n【审核子目标结构骨架】以下只固定父项id和子目标source的对应关系，不表示已满足。"
+                                        + "每个source逐字保留，恰好审核一次，允许调整顺序；证据和缺口填在子目标，父项evidence=[]、gap=空字符串。"
+                                        + "缺少依据的子目标必须填写真实gap，不能直接复制空白骨架当作完整审核。其它无子目标需求仍按需求账本审核。\n")
+                                .append(MessageJson.write(RequirementCoverage.reviewSkeleton(structured.requirements())))
                                 .append("\n【项目用途事实】quote 只能逐字摘录下列值，不能摘录召回标签或相关性分数：\n")
                                 .append(new tools.jackson.databind.ObjectMapper().writeValueAsString(coverageFacts));
                         if (!generationTargets.isEmpty()) criticContext.append("\n【维度核心生成目标】每个目标应优先选择一个有明确对应维度地貌/大规模生成依据的兼容候选。"
@@ -2944,18 +2948,27 @@ public class ChatController {
                                 if (criticDegradationForced()) throw invalid;
                                 if (isAborted(uuid)) return "⛔ 思考已手动终止。";
                                 final String invalidDecision = criticReply;
+                                final boolean reportOnlyRepair = invalid instanceof RequirementCoverage.ReviewAlignmentException;
                                 final String correctionReason = invalid.getMessage() + (criticCall.truncatedCalls() > 0
                                         ? "；上游报告finish_reason=length，JSON因输出额度截断。每个子目标只保留1～2条代表性引用，缩短quote/purpose及否决说明，不丢失目标和必填字段"
                                         : "");
+                                final String repairInstruction = reportOnlyRepair
+                                        ? "\n【用途报告定向修正】只修正requirements的父子对应关系及对应证据/缺口，"
+                                            + "approved、rejected、allowBackfill必须与上一响应逐项相同（包括顺序和否决说明），不得重新选模。"
+                                            + "对照审核子目标结构骨架逐项核对，保留未受影响的证据；不要将父项证据无依据地复制到所有子目标。"
+                                            + "缺少依据时写明gap，不编造引用。错误列表中的criterionIndex是规划criteria的从0开始索引；pointer指向上一响应。\n"
+                                            + MessageJson.write(((RequirementCoverage.ReviewAlignmentException) invalid).issues())
+                                        : "。请重新裁决，批准最多 " + approvalLimit
+                                            + " 项，检查候选范围、重复和批准/拒绝互斥。"
+                                            + "先确定明确拒绝项，再从其余候选中选取 approved；不要输出每个未选项的解释。";
                                 var repair = callAgentWithRetry("审核员格式修正", uuid,
                                         () -> aiAgentService.criticPools(criticContext + "\n【裁决修正】上一响应未通过校验："
-                                                + correctionReason + "。请重新裁决，批准最多 " + approvalLimit
-                                                + " 项，检查候选范围、重复和批准/拒绝互斥。"
-                                                + "先确定明确拒绝项，再从其余候选中选取 approved；不要输出每个未选项的解释。"
+                                                + correctionReason + repairInstruction
                                                 + "修正以下上一响应，返回完整 JSON 对象：\n" + invalidDecision, effectiveApiKey,
                                                 submittedCandidates, approvalLimit));
                                 criticCall = criticCall.followedBy(repair);
                                 criticReply = repair.text();
+                                if (reportOnlyRepair) AGENT_CODEC.requireSameReviewSelection(invalidDecision, criticReply);
                                 var selectionOnly = readValidatedSelection(criticReply, submittedCandidates, approvalLimit);
                                 if (selectionOnly != null) {
                                     validatedSelection = selectionOnly;
@@ -3280,6 +3293,7 @@ public class ChatController {
                 return "⚠️ 依赖取数失败，尚未取得可用的项目或版本资料，本轮未修改整合包清单。请稍后重试。\n<trace>"
                         + buildTrace(unavailable) + "</trace>";
             }
+            yagen.waitmydawn.maa.runtime.BuildProgress.stage("核对需求覆盖与数量");
             var canonicalIdentities = new HashMap<String, String>();
             resolution.graph().selectedVersions.forEach((slug, version) -> {
                 String id = version.path("project_id").asText();
@@ -3320,6 +3334,7 @@ public class ChatController {
                         .filter(r -> structured.mode() != BuildIntent.Mode.EDIT || freshIds.contains(r.id())).toList();
                 CoverageFollowup followup = null;
                 if (resolution.isComplete() && !RequirementCoverage.missingTargets(repairRequirements, beforeCoverage).isEmpty()) {
+                    yagen.waitmydawn.maa.runtime.BuildProgress.stage("定向召回与复核未覆盖目标");
                     followup = reviewMissingCriteria(repairRequirements, beforeCoverage, coverageReviews, coverageFacts, coverageEligible,
                             resolution.graph().allSlugs, addonVetoes, execution, retrieval, loader, mcVersion, maxDownloads, uuid, effectiveApiKey);
                     if (!optimizationGoals.isEmpty()) {
@@ -3348,6 +3363,7 @@ public class ChatController {
                 var previousRoots = execution == null ? Set.<String>of() : execution.original().stream()
                         .map(s -> canonicalIdentities.getOrDefault(s, s)).collect(Collectors.toSet());
                 final String repairLoader = loader, repairMc = mcVersion;
+                if (!proposed.isEmpty()) yagen.waitmydawn.maa.runtime.BuildProgress.stage("协调补缺版本与依赖");
                 var repair = RequirementRepair.attempt(resolution, initialMods, proposed, blockedRepair,
                         structured.count(), previousRoots, roots -> {
                             if (isAborted(uuid)) throw new java.util.concurrent.CancellationException();
@@ -3362,6 +3378,7 @@ public class ChatController {
                 for (String added : coverageRepaired) logModIn(added, "最终需求复核：已有审核元数据证据，定向补缺入包");
                 MaaLog.user("最终需求补缺: " + coverageRepairStatus + "，新增 " + coverageRepaired);
             }
+            yagen.waitmydawn.maa.runtime.BuildProgress.stage("复核最终附属与生成准入");
             DependencyGraph resolvedGraph = resolution.graph();
             var finalApplicability = auditAddonApplicability(initialMods, resolvedGraph.allSlugs, addonCandidates, resolvedGraph.selectedVersions, addonMetadata,
                     retrieval, loader, mcVersion);
@@ -3477,11 +3494,13 @@ public class ChatController {
                 MaaLog.user("模组调整: " + modDeltas.size() + " 项（平替/剔除/去重，已在回复中告知）");
             }
 
+            yagen.waitmydawn.maa.runtime.BuildProgress.stage("整理类别与依赖问题");
             Map<String, Set<String>> poolCategories = new HashMap<>();
             poolCategoryOfSlug.forEach((slug, cat) -> poolCategories.put(slug, Set.of(cat)));
             Map<String, Integer> inPack = inPackCategoryCounts(finalPerfectMods, poolCategories, modrinthCacheService);
             var presentation = BuildPresentation.create(apiClient, resolvedGraph, resolution, finalClosure, finalPerfectMods, inPack);
             if (!reportOptimizationGoals.isEmpty()) {
+                yagen.waitmydawn.maa.runtime.BuildProgress.stage("补全优化用途资料");
                 try {
                     var missingFacts = resolution.roots().stream().filter(finalPerfectMods::contains).filter(slug -> !optimizationFacts.containsKey(slug)).toList();
                     var retainedFacts = apiClient.getProjectsBatch(missingFacts);
@@ -3494,6 +3513,7 @@ public class ChatController {
                 presentation = new BuildPresentation.Report(presentation.schemaVersion(), presentation.total(), presentation.categories(), presentation.issues(), portfolio);
             }
             cleanReply += "\n<build_report>" + MessageJson.write(presentation) + "</build_report>";
+            yagen.waitmydawn.maa.runtime.BuildProgress.stage("核对逐项目标与用途证据");
             coverageReviews = OptimizationPortfolio.filterReviews(structured == null ? List.of() : structured.requirements(), rawOptimizationReviews, optimizationFacts);
             var requirementCoverage = structured == null ? null : RequirementCoverage.assess(structured.requirements(),
                     coverageReviews, resolvedGraph, finalPerfectMods, canonicalIdentities, addonMetadata, coverageRepairStatus, coverageRepaired, coverageChecks, coverageProofFacts);
@@ -3534,6 +3554,7 @@ public class ChatController {
             // ==========================================
             // 🧾 过程指标（<trace>）：让评测的"过程层/成本层"可自动断言，而不是只能翻日志
             // ==========================================
+            yagen.waitmydawn.maa.runtime.BuildProgress.stage("汇总构建来源与诊断");
             TraceData trace = new TraceData();
             trace.plannerFailures = state.getPlannerFailures();
             trace.requiredMods = state.getRequiredMods();
@@ -3657,6 +3678,7 @@ public class ChatController {
                 for (String diagnostic : execution.diagnostics(initialMods, finalPerfectMods, rootsKnown, canonicalIdentities))
                     cleanReply += "\n\n⚠️ " + diagnostic;
             }
+            yagen.waitmydawn.maa.runtime.BuildProgress.stage("序列化构建结果");
             cleanReply = cleanReply + "\n<trace>" + buildTrace(trace) + "</trace>";
 
             System.out.println("📦 草案装配完成，待发布文件数：" + finalPerfectMods.size());
@@ -3754,6 +3776,7 @@ public class ChatController {
         Map<String, Integer> retrieval = Map.of();
         AiAgentService.AgentCallResult architect;
         AiAgentService.AgentCallResult critic;
+        /** 从初次依赖解析至最终准入的墙钟区间，包含可选定向复核及补缺，不等于纯解析CPU时间。 */
         long dependencyMs;
         int inputRoots, finalCount, targetCount, candidatePool, toolCalls;
         double countRatio, expansionFactor;
@@ -4097,18 +4120,20 @@ public class ChatController {
     private Map<String, List<WorldGenerationPolicy.Finding>> generationAdmission(Collection<String> slugs, String request,
             Map<String, String> facts) {
         var missing = slugs.stream().filter(s -> !facts.containsKey(s)).distinct().toList();
-        if (!missing.isEmpty()) try {
-            apiClient.getProjectsBatch(missing).forEach((ref, info) -> {
-                String text = info.path("description").asText() + "\n" + info.path("body").asText();
-                text = text.substring(0, Math.min(text.length(), 16000));
-                if (!text.isBlank()) {
-                    facts.put(ref, text);
-                    facts.put(info.path("slug").asText(ref), text);
-                    if (!info.path("id").asText().isBlank()) facts.put(info.path("id").asText(), text);
-                }
-            });
-        } catch (java.util.concurrent.CancellationException canceled) { throw canceled; }
+        Map<String, JsonNode> available = Map.of();
+        if (!missing.isEmpty()) try { available = apiClient.getProjectsBatch(missing); }
+        catch (ModrinthApiClient.PartialProjectBatchException partial) { available = partial.projects(); }
+        catch (java.util.concurrent.CancellationException canceled) { throw canceled; }
         catch (RuntimeException unavailable) { MaaLog.user("生成准入：部分项目介绍未取得，不能据此认定无极端生成行为"); }
+        available.forEach((ref, info) -> {
+            String text = info.path("description").asText() + "\n" + info.path("body").asText();
+            text = text.substring(0, Math.min(text.length(), 16000));
+            if (!text.isBlank()) {
+                facts.put(ref, text);
+                facts.put(info.path("slug").asText(ref), text);
+                if (!info.path("id").asText().isBlank()) facts.put(info.path("id").asText(), text);
+            }
+        });
         long unknown = slugs.stream().filter(s -> !facts.containsKey(s)).count();
         if (unknown > 0) MaaLog.user("生成准入：" + unknown + " 项未取得可核对介绍，未授予无极端改造的验证结论");
         var blocked = new LinkedHashMap<String, List<WorldGenerationPolicy.Finding>>();
@@ -4359,9 +4384,17 @@ public class ChatController {
         var queries = RequirementRetrieval.queries(requirements, Set.copyOf(execution.intent().excludedCategories()), generationTargets);
         var queryCounts = queries.stream().collect(Collectors.groupingBy(RequirementRetrieval.Query::requirementId, Collectors.counting()));
         try {
-            if (readExistingFacts) apiClient.prefetchProjects(existing);
-            for (String id : readExistingFacts ? existing : Set.<String>of()) {
-                var info = apiClient.getProjectInfo(id);
+            Map<String, JsonNode> metadata = Map.of();
+            if (readExistingFacts) {
+                try { metadata = apiClient.getProjectsBatch(existing); }
+                catch (ModrinthApiClient.PartialProjectBatchException incomplete) {
+                    resources.unknown();
+                    metadata = incomplete.projects();
+                }
+            }
+            for (var entry : metadata.entrySet()) {
+                String id = entry.getKey();
+                var info = entry.getValue();
                 if (info != null && !info.path("slug").asText().isBlank()) {
                     var c = new CandidateMod(info.path("slug").asText(), info.path("title").asText(), info.path("description").asText(), info.path("downloads").asLong());
                     existingFacts.add(c);

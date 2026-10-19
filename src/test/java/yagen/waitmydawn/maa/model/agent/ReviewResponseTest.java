@@ -6,6 +6,24 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ReviewResponseTest {
+    @Test void reportOnlyRepairCannotChangeAnySelectionPermission() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        String original = """
+                {"schemaVersion":1,"approved":["chosen","blocked"],"rejected":[{"slug":"blocked","reason":"OFF_TOPIC","explanation":"无关"}],
+                 "allowBackfill":false,"requirements":[{"malformed":"report"}]}
+                """;
+        var codec = new AgentContractCodec();
+        var repaired = (tools.jackson.databind.node.ObjectNode) json.readTree(original);
+        repaired.putArray("requirements");
+        assertDoesNotThrow(() -> codec.requireSameReviewSelection(original, repaired.toString()));
+        for (String field : List.of("approved", "rejected", "allowBackfill")) {
+            var changed = repaired.deepCopy();
+            if (field.equals("allowBackfill")) changed.put(field, true); else changed.putArray(field);
+            var error = assertThrows(AgentContractCodec.ValidationException.class,
+                    () -> codec.requireSameReviewSelection(original, changed.toString()));
+            assertEquals("repair.selection", error.failure().field());
+        }
+    }
     @org.junit.jupiter.api.Test void selectionCanSurviveInvalidCoverageWithoutAcceptingInvalidOperationsOrJson() {
         var codec = new AgentContractCodec();
         String valid = "{\"schemaVersion\":1,\"approved\":[\"core-mod\"],\"rejected\":[],\"allowBackfill\":false,\"requirements\":\"bad-report\"}";

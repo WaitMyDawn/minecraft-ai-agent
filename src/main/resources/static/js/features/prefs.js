@@ -1,5 +1,6 @@
 import {computed, nextTick, watch} from 'vue';
 import {addingModBySlug, authUser, bindForm, bindMsg, blacklistItems, blacklistJump, blacklistMsg, blacklistPage, blacklistSlugInput, categoryPrefs, currentView, dbRules, dbVoteBusy, editingBuildCountId, editingBuildCountVal, emailAction, emailHintDismissed, enableBlacklist, enableUserFeedbackRules, hasApiKey, keEnv, keLoader, keLoaderEnvs, keModA, keModAError, keModAInfo, keModB, keModBError, keModBInfo, keMsg, keMsgOk, keRelation, keVersion, manualSlugInput, modInfoCache, modPrefJump, modPrefPage, modPrefs, modPrefSearch, modSlugAddMsg, newCatPref, profileApiKey, profileApiKeyMsg, profileUsername, profileWeight, pwCode, pwMsg, pwNew, pwOld, selectedSuggests, showSuggestBoard, suggestedMods, suggestMode} from '../store.js';
+import {createModInfoLoader} from '../utils/mod-info-loader.js';
 import {apiFetch, authHeader} from '../api.js';
 import {startCooldown} from '../utils/code-cooldown.js';
 import {loadLoaderEnvs} from '../utils/loader-envs.js';
@@ -177,7 +178,7 @@ export const filteredModPrefs = computed(() => {
     let arr = modPrefs.value;
     if (modPrefSearch.value) {
         const kw = modPrefSearch.value.toLowerCase();
-        arr = arr.filter(m => m.slug.includes(kw) || (m.category||'').includes(kw) || ((modInfoCache.value[m.slug]||{}).title||'').toLowerCase().includes(kw));
+        arr = arr.filter(m => m.slug.includes(kw) || (m.category||'').includes(kw));
     }
     return arr;
 });
@@ -211,28 +212,46 @@ export const jumpBlacklistPageFn = () => {
 };
 
 // Modrinth 数据缓存 (仅渲染时获取，不存储在导出文件)
-const pendingModInfo = new Map();
-const failedModInfo = new Map();
-export const loadModInfoCache = async (slugs) => {
-    for (const slug of slugs) {
-        if (modInfoCache.value[slug] || (failedModInfo.get(slug) || 0) > Date.now()) continue;
-        if (!pendingModInfo.has(slug)) pendingModInfo.set(slug, (async () => {
-            try {
-                const r = await apiFetch('/api/prefs/mod-info/' + encodeURIComponent(slug));
-                const d = await r.json();
-                if (!d.error) modInfoCache.value[slug] = d;
-                else throw new Error('模组元数据暂不可用');
-            } catch {
-                if (failedModInfo.size >= 500) failedModInfo.delete(failedModInfo.keys().next().value);
-                failedModInfo.set(slug, Date.now() + 60_000);
-            } finally { pendingModInfo.delete(slug); }
-        })());
-        await pendingModInfo.get(slug);
-    }
+const metadataOwner = () => authUser.value?.token;
+const cacheModInfo = (slug, data) => {
+    const cache = {...modInfoCache.value, [slug]: data};
+    const keys = Object.keys(cache);
+    if (keys.length > 500) delete cache[keys[0]];
+    modInfoCache.value = cache;
 };
+const metadataLoader = createModInfoLoader({
+    owner: metadataOwner,
+    cached: slug => Object.hasOwn(modInfoCache.value, slug),
+    store: cacheModInfo,
+    request: async (slug, signal) => {
+        const response = await apiFetch('/api/prefs/mod-info/' + encodeURIComponent(slug), {signal});
+        return response.json();
+    }
+});
+export const loadModInfoCache = (slugs, signal) => metadataLoader.load(slugs, signal);
+let prefsRevision = 0, blacklistRevision = 0;
+watch(metadataOwner, () => {
+    metadataLoader.reset();
+    prefsRevision++; blacklistRevision++;
+    modInfoCache.value = {}; modPrefs.value = []; blacklistItems.value = []; categoryPrefs.value = [];
+    modPrefPage.value = 0; blacklistPage.value = 0; addingModBySlug.value = false;
+}, {flush: 'sync'});
+watch(modPrefSearch, () => { modPrefPage.value = 0; }, {flush: 'sync'});
+watch(modPrefTotalPages, total => { modPrefPage.value = Math.min(modPrefPage.value, total - 1); });
+watch(blacklistTotalPages, total => { blacklistPage.value = Math.min(blacklistPage.value, total - 1); });
+watch(() => JSON.stringify(currentView.value === 'profile' && metadataOwner()
+    ? {owner: metadataOwner(), slugs: [...new Set([...pagedModPrefs.value, ...pagedBlacklist.value].map(m => m.slug))]} : null),
+(value, previous, cleanup) => {
+    const demand = JSON.parse(value);
+    if (!demand) return;
+    const controller = new AbortController();
+    cleanup(() => controller.abort());
+    loadModInfoCache(demand.slugs, controller.signal);
+}, {immediate: true});
 
 // 手动 slug 输入添加
 export const addModBySlug = async () => {
+    const owner = metadataOwner();
     const slug = manualSlugInput.value.trim().toLowerCase();
     if (!slug) return;
     addingModBySlug.value = true; modSlugAddMsg.value = '';
@@ -240,6 +259,7 @@ export const addModBySlug = async () => {
         // 先验证 slug 有效
         const infoR = await apiFetch('/api/prefs/mod-info/' + slug);
         const info = await infoR.json();
+        if (owner !== metadataOwner()) return;
         if (info.error) { modSlugAddMsg.value = '该 slug 不存在于 Modrinth'; return; }
         // 添加到偏好
         const r = await apiFetch('/api/prefs/mods', {
@@ -247,13 +267,14 @@ export const addModBySlug = async () => {
             body: JSON.stringify({slug, source: 'user'})
         });
         const d = await r.json();
-        modInfoCache.value[slug] = info;
+        if (owner !== metadataOwner()) return;
+        cacheModInfo(slug, info);
         modSlugAddMsg.value = '成功添加: ' + slug;
         manualSlugInput.value = '';
         await loadPrefs();
     } catch(e) {
-        if (e.message !== '未登录') modSlugAddMsg.value = '添加失败';
-    } finally { addingModBySlug.value = false; }
+        if (owner === metadataOwner() && e.message !== '未登录') modSlugAddMsg.value = '添加失败';
+    } finally { if (owner === metadataOwner()) addingModBySlug.value = false; }
 };
 
 // 编辑构建次数
@@ -294,14 +315,17 @@ export const toggleModSource = async (mp) => {
 };
 
 export const loadPrefs = async () => {
-    if (!authUser.value) return;
+    const owner = metadataOwner(), revision = ++prefsRevision;
+    if (!owner) return;
     try {
         const cr = await apiFetch('/api/prefs/categories', {headers: authHeader()});
-        categoryPrefs.value = await cr.json();
+        const categories = await cr.json();
+        if (owner !== metadataOwner() || revision !== prefsRevision) return;
         const mr = await apiFetch('/api/prefs/mods', {headers: authHeader()});
-        modPrefs.value = await mr.json();
-        // 异步加载 Modrinth 卡片数据
-        if (currentView.value === 'profile') loadModInfoCache(modPrefs.value.map(m => m.slug));
+        const mods = await mr.json();
+        if (owner !== metadataOwner() || revision !== prefsRevision) return;
+        categoryPrefs.value = categories;
+        modPrefs.value = mods;
     } catch(e) {}
 };
 // 进入设置页时自动加载偏好
@@ -339,14 +363,16 @@ export const clearPrefs = async () => {
 // ========== 黑名单管理 ==========
 
 export const loadBlacklist = async () => {
-    if (!authUser.value) return;
+    const owner = metadataOwner(), revision = ++blacklistRevision;
+    if (!owner) return;
     try {
         const r = await apiFetch('/api/prefs/blacklist', {headers: authHeader()});
-        blacklistItems.value = await r.json();
-        loadModInfoCache(blacklistItems.value.map(b => b.slug).filter(s => !modInfoCache.value[s]));
+        const items = await r.json();
+        if (owner === metadataOwner() && revision === blacklistRevision) blacklistItems.value = items;
     } catch(e) {}
 };
 export const addBlacklistBySlug = async () => {
+    const owner = metadataOwner();
     const slug = blacklistSlugInput.value.trim().toLowerCase();
     if (!slug) return;
     blacklistMsg.value = '';
@@ -354,19 +380,21 @@ export const addBlacklistBySlug = async () => {
         // 先验证 slug 存在于 Modrinth
         const infoR = await apiFetch('/api/prefs/mod-info/' + slug);
         const info = await infoR.json();
+        if (owner !== metadataOwner()) return;
         if (info.error) { blacklistMsg.value = '该 slug 在 Modrinth 不存在'; return; }
-        modInfoCache.value[slug] = info;
+        cacheModInfo(slug, info);
         const r = await apiFetch('/api/prefs/blacklist', {
             method: 'POST', headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({slug, source: 'user'})
         });
         const d = await r.json();
+        if (owner !== metadataOwner()) return;
         if (d.error) { blacklistMsg.value = d.error; return; }
         blacklistSlugInput.value = '';
         blacklistMsg.value = '已添加: ' + slug;
-        setTimeout(() => blacklistMsg.value = '', 3000);
+        setTimeout(() => { if (owner === metadataOwner()) blacklistMsg.value = ''; }, 3000);
         await loadBlacklist();
-    } catch(e) { if (e.message !== '未登录') blacklistMsg.value = '添加失败'; }
+    } catch(e) { if (owner === metadataOwner() && e.message !== '未登录') blacklistMsg.value = '添加失败'; }
 };
 export const removeBlacklistItem = async (id) => {
     await apiFetch('/api/prefs/blacklist/' + id, {method: 'DELETE', headers: authHeader()});

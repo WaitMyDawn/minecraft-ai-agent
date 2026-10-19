@@ -107,6 +107,15 @@ public final class AgentContractCodec {
         object.remove("requirements");
         return read(mapper.writeValueAsString(object), ReviewResponse.class);
     }
+    /** 用途报告修正不重新授权选模；包含顺序和拒绝说明在内的权限字段须保持不变。 */
+    public void requireSameReviewSelection(String original, String repaired) {
+        var before = readReviewSelection(original);
+        var after = readReviewSelection(repaired);
+        if (!before.approved().equals(after.approved()) || !before.rejected().equals(after.rejected())
+                || before.allowBackfill() != after.allowBackfill())
+            throw new ValidationException(new Failure("ReviewResponse", FailureKind.SEMANTIC, "repair.selection", "",
+                    "仅修正requirements时不得改变approved、rejected或allowBackfill；保留原选模权限"));
+    }
     public ToolResult readToolResult(String json) { return read(json, ToolResult.class); }
 
     public String write(Object contract) {

@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import yagen.waitmydawn.maa.runtime.DelegationContext;
 import yagen.waitmydawn.maa.runtime.RequestScope;
+import yagen.waitmydawn.maa.logging.MaaLog;
 
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -208,7 +209,7 @@ public class DelegationTasks {
                 task.result.completeExceptionally(e);
             } finally {
                 var upstream = scope == null ? new RequestScope.Snapshot(0, 0, 0, 0) : scope.snapshotOf();
-                System.out.println("[Modrinth task] taskId=" + task.taskId() + " user=" + task.userKey()
+                String summary = "[Modrinth task] taskId=" + task.taskId() + " user=" + task.userKey()
                         + " browserHttp=" + task.context.browserHttpCount()
                         + " browserFacts=" + task.context.servedCount() + " fallbackFacts=" + task.context.timedOutCount()
                         + " queueTimeout=" + task.context.queueTimeoutCount() + " browserTimeout=" + task.context.browserTimeoutCount()
@@ -216,7 +217,22 @@ public class DelegationTasks {
                         + " serverHttp=" + upstream.http() + " server429=" + upstream.rateLimited()
                         + " serverRetries=" + upstream.retries() + " throttleMs=" + upstream.throttleWaitMs()
                         + " clientVia=" + task.context.clientProviders() + " clientCacheHits=" + task.context.clientCacheHits()
-                        + " clientCoalesced=" + task.context.clientCoalesced() + " clientFailures=" + task.context.clientFailureCounts());
+                        + " clientCoalesced=" + task.context.clientCoalesced() + " clientFailures=" + task.context.clientFailureCounts()
+                        + " taskFactReuses=" + task.context.factReuseCount();
+                // 正常只读取数保留文件证据；构建、写操作及异常仍在控制台可见。
+                if (exclusiveOwner || task.result.isCompletedExceptionally() || task.context.timedOutCount() > 0
+                        || upstream.http() > 0 || upstream.rateLimited() > 0 || upstream.retries() > 0
+                        || upstream.throttleWaitMs() > 0 || !task.context.clientFailureCounts().isEmpty()) {
+                    System.out.println(summary);
+                } else MaaLog.app(summary);
+                if (exclusiveOwner) {
+                    long completedAt = System.currentTimeMillis();
+                    String stages = task.context.progress().snapshot().stream().map(entry -> entry.sequence()
+                            + ":" + entry.title() + "=" + Math.max(0, (entry.endedAt() == null
+                            ? completedAt : entry.endedAt()) - entry.startedAt()) + "ms")
+                            .collect(java.util.stream.Collectors.joining("; "));
+                    MaaLog.app("[Build stages] taskId=" + task.taskId() + " user=" + task.userKey() + " " + stages);
+                }
                 task.context.releaseFacts();
                 if (ownerId != null) owners.remove(ownerId, task.taskId);
             }

@@ -98,6 +98,8 @@ public final class DelegationContext {
     }
 
     private final Map<String, JsonNode> satisfied = new ConcurrentHashMap<>();
+    private final AtomicInteger factReuses = new AtomicInteger();
+    public int factReuseCount() { return factReuses.get(); }
     private final Set<String> absent = ConcurrentHashMap.newKeySet();
     private final Map<String, CompletableFuture<Answer>> waiting = new ConcurrentHashMap<>();
     private final Map<String, Want> waitingMeta = new ConcurrentHashMap<>();
@@ -169,12 +171,14 @@ public final class DelegationContext {
         // 读表不删：同一个键在一次任务里可能被问多次（BFS 下一层又碰到同一个前置、
         // 或两个分支共用一个依赖）。删了就会重新登记 → 再次下发，
         // 而那份回执到达时必然"没人等"、被当成过期丢弃。
-        JsonNode ready = satisfied.get(id);
+        JsonNode ready = reusableFact(kind, key);
         if (ready != null) {
+            factReuses.incrementAndGet();
             served.incrementAndGet();
             return new Answer(Outcome.GOT, ready);
         }
         if (absent.contains(id)) {
+            factReuses.incrementAndGet();
             served.incrementAndGet();
             return new Answer(Outcome.ABSENT, null);
         }
@@ -187,8 +191,9 @@ public final class DelegationContext {
         AtomicInteger consumer;
         synchronized (this) {
             if (cancelled) return new Answer(Outcome.CANCELLED, null);
-            ready = satisfied.get(id);
+            ready = reusableFact(kind, key);
             if (ready != null || absent.contains(id)) {
+                factReuses.incrementAndGet();
                 served.incrementAndGet();
                 return new Answer(ready == null ? Outcome.ABSENT : Outcome.GOT, ready);
             }
@@ -260,10 +265,50 @@ public final class DelegationContext {
             absent.add(id);
         } else {
             satisfied.put(id, data);
+            // 别名只来自已验收的项目事实，且只在当前任务内保存同一个JSON引用。
+            if (kind == Kind.PROJECT && data.isObject()) {
+                String projectId = data.path("id").asText(""), slug = data.path("slug").asText("");
+                if (projectId.matches("[A-Za-z0-9_-]{1,128}") && slug.matches("[A-Za-z0-9_-]{1,128}")
+                        && (key.equals(projectId) || key.equals(slug))) {
+                    if (!absent.contains(id(Kind.PROJECT, projectId))) satisfied.putIfAbsent(id(Kind.PROJECT, projectId), data);
+                    if (!absent.contains(id(Kind.PROJECT, slug))) satisfied.putIfAbsent(id(Kind.PROJECT, slug), data);
+                }
+            }
         }
         if (future != null) {
             future.complete(new Answer(data == null ? Outcome.ABSENT : Outcome.GOT, data));
         }
+    }
+
+    /** 只复用已完成的成功事实，不改在途认领；单版本不能反向补造候选版本列表。 */
+    private JsonNode reusableFact(Kind kind, String key) {
+        JsonNode exact = satisfied.get(id(kind, key));
+        if (exact != null) return exact;
+        if (absent.contains(id(kind, key))) return null;
+        if (kind != Kind.ENV_VERSION && kind != Kind.ENV_VERSIONS) return null;
+        String[] parts = key.split("\\|", 3);
+        if (parts.length != 3) return null;
+        if (kind == Kind.ENV_VERSION) {
+            JsonNode choices = satisfied.get(id(Kind.ENV_VERSIONS, key));
+            if (choices != null && choices.isArray() && !choices.isEmpty()) return choices.get(0);
+        }
+        JsonNode project = satisfied.get(id(Kind.PROJECT, parts[0]));
+        if (project == null) return null;
+        String projectId = project.path("id").asText(""), slug = project.path("slug").asText("");
+        if (projectId.isBlank() || slug.isBlank()) return null;
+        String other = parts[0].equals(projectId) ? slug : parts[0].equals(slug) ? projectId : "";
+        if (other.isBlank()) return null;
+        String otherKey = other + "|" + parts[1] + "|" + parts[2];
+        JsonNode value = satisfied.get(id(kind, otherKey));
+        if (value == null && kind == Kind.ENV_VERSION) {
+            JsonNode choices = satisfied.get(id(Kind.ENV_VERSIONS, otherKey));
+            if (choices != null && choices.isArray() && !choices.isEmpty()) value = choices.get(0);
+        }
+        if (value == null) return null;
+        if (value.isObject()) return projectId.equals(value.path("project_id").asText("")) ? value : null;
+        if (!value.isArray() || value.isEmpty()) return null;
+        for (JsonNode version : value) if (!projectId.equals(version.path("project_id").asText(""))) return null;
+        return value;
     }
 
     /** 当前还没被满足的需求（用于组装下发给浏览器的清单） */

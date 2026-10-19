@@ -57,6 +57,15 @@ public class ModrinthApiClient {
             super(message);
         }
     }
+    /** 批量读取部分失败时，已核实资料与未核实状态分开传递，不把失败当作项目不存在。 */
+    public static final class PartialProjectBatchException extends UnavailableException {
+        private final Map<String, JsonNode> projects;
+        public PartialProjectBatchException(Map<String, JsonNode> projects) {
+            super("部分项目资料未能核实");
+            this.projects = Map.copyOf(projects);
+        }
+        public Map<String, JsonNode> projects() { return projects; }
+    }
 
     // ==========================================
     // 四类事实：委派优先，落空则自己抓
@@ -151,21 +160,33 @@ public class ModrinthApiClient {
     public Map<String, JsonNode> getProjectsBatch(Collection<String> idsOrSlugs) {
         Map<String, JsonNode> out = new LinkedHashMap<>();
         if (idsOrSlugs == null || idsOrSlugs.isEmpty()) return out;
-        if (DelegationContext.current() != null) {
+        var context = DelegationContext.current();
+        if (context != null) context.checkActive();
+        if (context != null && delegationTasks.isEnabled()) {
             // 同时登记需求，使浏览器能使用批量端点；串行等待会产生每项目一次往返。
             var results = new java.util.concurrent.ConcurrentHashMap<String, JsonNode>();
+            boolean incomplete = false;
             try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
                 var futures = idsOrSlugs.stream().distinct().map(key ->
                         yagen.waitmydawn.maa.runtime.ScopedExecutors.runAsync(() -> {
                             JsonNode value = getProjectInfo(key);
                             if (value != null) results.put(key, value);
                         }, executor)).toList();
-                java.util.concurrent.CompletableFuture.allOf(futures.toArray(java.util.concurrent.CompletableFuture[]::new)).join();
+                try { java.util.concurrent.CompletableFuture.allOf(futures.toArray(java.util.concurrent.CompletableFuture[]::new)).join(); }
+                catch (java.util.concurrent.CompletionException unavailable) {
+                    context.checkActive();
+                    if (unavailable.getCause() instanceof Error fatal) throw fatal;
+                    incomplete = true;
+                }
             }
             for (String key : idsOrSlugs) if (results.containsKey(key)) out.put(key, results.get(key));
+            context.checkActive();
+            if (incomplete) throw new PartialProjectBatchException(out);
             return out;
         }
-        return fetcher.getProjectsBatch(idsOrSlugs);
+        var result = fetcher.getProjectsBatch(idsOrSlugs);
+        if (context != null) context.checkActive();
+        return result;
     }
 
     // ==========================================

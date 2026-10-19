@@ -92,15 +92,47 @@ public final class RequirementCoverage {
         }
         return List.copyOf(accepted);
     }
+    public enum AlignmentCode { MISSING_REQUIREMENT, PARENT_EVIDENCE, PARENT_GAP, MISSING_CRITERION, UNKNOWN_CRITERION_SOURCE }
+    /** 路径指向响应；criterionIndex指向规划子目标，-1表示该问题不对应某个规划子目标。 */
+    public record AlignmentIssue(AlignmentCode code, String requirementId, String pointer, int criterionIndex) {}
+    public static final class ReviewAlignmentException extends IllegalArgumentException {
+        private final List<AlignmentIssue> issues;
+        private ReviewAlignmentException(List<AlignmentIssue> issues) {
+            super("审核子目标对应关系不完整，共 " + issues.size() + " 项：" + issues.stream().limit(12)
+                    .map(i -> i.code() + " id=" + i.requirementId() + " path=" + i.pointer()
+                            + (i.criterionIndex() < 0 ? "" : " planningCriterionIndex=" + i.criterionIndex()))
+                    .collect(java.util.stream.Collectors.joining("；")));
+            this.issues = List.copyOf(issues);
+        }
+        public List<AlignmentIssue> issues() { return issues; }
+    }
+
+    /** 仅提供需要逐项对齐的输出形状，不填造证据或把空白审核视为满足。 */
+    public static List<RequirementReview> reviewSkeleton(List<BuildRequirement> requirements) {
+        return requirements.stream().filter(r -> !r.criteria().isEmpty()).map(r -> new RequirementReview(
+                r.id(), List.of(), "", r.criteria().stream().map(c -> new CriterionReview(c.source(), List.of(), "")).toList())).toList();
+    }
+
     public static void validateReviews(List<BuildRequirement> requirements, List<RequirementReview> reviews) {
         var byId = new HashMap<String, RequirementReview>(); reviews.forEach(r -> byId.put(r.id(), r));
+        var issues = new ArrayList<AlignmentIssue>();
         for (var r : requirements) if (!r.criteria().isEmpty()) {
             var review = byId.get(r.id());
-            if (review == null || !review.gap().isBlank() || !review.evidence().isEmpty()
-                    || !r.criteria().stream().map(RequirementCriterion::source).collect(java.util.stream.Collectors.toSet())
-                    .equals(review.criteria().stream().map(CriterionReview::source).collect(java.util.stream.Collectors.toSet())))
-                throw new IllegalArgumentException("requirements.criteria 审核须逐项覆盖规划子目标，父项 evidence/gap 留空");
+            if (review == null) {
+                issues.add(new AlignmentIssue(AlignmentCode.MISSING_REQUIREMENT, r.id(), "/requirements", -1));
+                continue;
+            }
+            String path = "/requirements/" + reviews.indexOf(review);
+            if (!review.evidence().isEmpty()) issues.add(new AlignmentIssue(AlignmentCode.PARENT_EVIDENCE, r.id(), path + "/evidence", -1));
+            if (!review.gap().isBlank()) issues.add(new AlignmentIssue(AlignmentCode.PARENT_GAP, r.id(), path + "/gap", -1));
+            var expected = r.criteria().stream().map(RequirementCriterion::source).toList();
+            var actual = review.criteria().stream().map(CriterionReview::source).toList();
+            for (int i = 0; i < expected.size(); i++) if (!actual.contains(expected.get(i)))
+                issues.add(new AlignmentIssue(AlignmentCode.MISSING_CRITERION, r.id(), path + "/criteria", i));
+            for (int i = 0; i < actual.size(); i++) if (!expected.contains(actual.get(i)))
+                issues.add(new AlignmentIssue(AlignmentCode.UNKNOWN_CRITERION_SOURCE, r.id(), path + "/criteria/" + i + "/source", -1));
         }
+        if (!issues.isEmpty()) throw new ReviewAlignmentException(issues);
     }
 
     public static Report assess(List<BuildRequirement> requirements, List<RequirementReview> reviews,

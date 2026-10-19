@@ -14,6 +14,31 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class GoalRetrievalTest {
+    @Test void partialRetainedMetadataKeepsKnownRequirementHintsAndRecordsUncertainty() {
+        var requirement = new BuildRequirement("r-0000000000000001", "物流", BuildRequirement.Kind.CAPABILITY,
+                List.of(), List.of(), List.of(), List.of(new BuildIntent.SearchIntent("technology", 100, List.of("transport"))));
+        var known = mapper.createObjectNode().put("id", "P1").put("slug", "known").put("description", "transport logistics");
+        when(api.getProjectsBatch(Set.of("P1", "failed"))).thenThrow(new ModrinthApiClient.PartialProjectBatchException(Map.of("P1", known)));
+        var hints = new HashMap<String, Set<String>>();
+        var resources = new RetrievalBudget();
+        ReflectionTestUtils.invokeMethod(controller, "buildRequirementPool", List.of(requirement), Set.of("P1", "failed"),
+                "neoforge", "1.21.1", 2100000000L, plan(Set.of()), resources, "fixture", hints);
+        assertEquals(Set.of(requirement.id()), hints.get("known"));
+        assertTrue(resources.snapshot().get("unverified") > 0);
+        verify(api, never()).getProjectInfo(anyString());
+    }
+    @Test void retainedRequirementFactsUseOneBatchWithoutIndividualProjectLookups() {
+        var requirement = new BuildRequirement("r-0000000000000001", "物流", BuildRequirement.Kind.CAPABILITY,
+                List.of(), List.of(), List.of(), List.of());
+        var known = mapper.createObjectNode().put("id", "P1").put("slug", "logistics-core")
+                .put("description", "logistics transport");
+        when(api.getProjectsBatch(Set.of("P1", "other"))).thenReturn(Map.of("P1", known));
+        var hints = new HashMap<String, Set<String>>();
+        ReflectionTestUtils.invokeMethod(controller, "buildRequirementPool", List.of(requirement), Set.of("P1", "other"),
+                "neoforge", "1.21.1", 2100000000L, plan(Set.of()), new RetrievalBudget(), "fixture", hints);
+        verify(api).getProjectsBatch(Set.of("P1", "other"));
+        verify(api, never()).getProjectInfo(anyString());
+    }
     private final ObjectMapper mapper = new ObjectMapper();
     private final ModrinthApiClient api = mock(ModrinthApiClient.class);
     private final ChatController controller = new ChatController(mock(AiAgentService.class), mock(ModrinthCacheService.class), null,

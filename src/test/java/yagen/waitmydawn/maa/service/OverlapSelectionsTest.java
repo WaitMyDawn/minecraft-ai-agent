@@ -11,6 +11,25 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class OverlapSelectionsTest {
+    @Test void partialMetadataStillOffersConfirmedOverlapInsteadOfDiscardingSuccessfulDescriptions() {
+        var first = json.createObjectNode().put("title", "Animals A").put("description", "Adds real-world animals");
+        var second = json.createObjectNode().put("title", "Animals B").put("description", "Adds real-world animals");
+        when(api.getProjectsBatch(anyCollection())).thenThrow(new ModrinthApiClient.PartialProjectBatchException(
+                Map.of("animals-a", first, "animals-b", second)));
+        String result = new OverlapSelections().prepare(1L, 2L, payload, draft(false), assembly(false), closure(), api);
+        assertTrue(result.contains("<replacement_options>"), result);
+        assertTrue(result.contains("real-animals"), result);
+        assertTrue(result.contains("\"unverifiedDescriptions\":2"), result);
+        verify(api, times(1)).getProjectsBatch(anyCollection());
+        verifyNoMoreInteractions(api);
+    }
+
+    @Test void cancellationOfFinalAuditDoesNotPublishAnUncheckedDraft() {
+        when(api.getProjectsBatch(anyCollection())).thenThrow(new CancellationException());
+        assertThrows(CancellationException.class, () -> new OverlapSelections().prepare(
+                1L, 2L, payload, draft(false), assembly(false), closure(), api));
+    }
+
     @Test void cancellingACoreAlsoRetractsItsProjectMetadataGenerationProof() {
         var selections = new OverlapSelections();
         String original = draft(false);

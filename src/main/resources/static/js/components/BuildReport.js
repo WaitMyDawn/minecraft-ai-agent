@@ -1,31 +1,32 @@
-import {computed, ref, watch} from 'vue';
+import {computed, ref} from 'vue';
 import {readBuildReport, readReplacementChoices, readRequirementReport, requirementStatus, requirementTone, requirementNote, modProjectLink, issueReason, optimizationRole, optimizationSide} from '../utils/build-report.js';
-import {categoryGloss, modInfoCache} from '../store.js';
+import {authUser, categoryGloss, modInfoCache} from '../store.js';
+import {bindVisibleModInfo} from '../utils/visible-mod-info.js';
 import {loadModInfoCache} from '../features/prefs.js';
 
 export default {
+    directives: {
+        visibleMods: {
+            mounted(element, binding) {
+                const state = bindVisibleModInfo(element, loadModInfoCache);
+                element.modInfoBinding = state;
+                state.update(binding.value.slugs, binding.value.owner);
+            },
+            updated(element, binding) { element.modInfoBinding.update(binding.value.slugs, binding.value.owner); },
+            unmounted(element) { element.modInfoBinding.dispose(); }
+        }
+    },
     props: {content: String},
     setup(props) {
         const report = computed(() => readBuildReport(props.content));
         const replacements = computed(() => readReplacementChoices(props.content));
         const coverage = computed(() => readRequirementReport(props.content));
-        const loadRequirementIcons = (event, row) => {
-            if (event.target.open) loadModInfoCache([...new Set([...row.mods.map(m => m.slug), ...row.missing, ...(row.evidenceState?.projects || []),
-                ...row.criteria.flatMap(c => [...c.mods.map(m => m.slug), ...c.missing, ...(c.evidenceState?.projects || [])])])].slice(0, 100));
-        };
-        watch(replacements, rows => {
-            const slugs = [...new Set(rows.flatMap(row => [row.original, ...row.selected]))];
-            if (slugs.length) loadModInfoCache(slugs.slice(0, 100));
-        }, {immediate: true});
+        const requirementSlugs = row => [...row.mods.map(m => m.slug), ...row.missing, ...(row.evidenceState?.projects || []),
+            ...row.criteria.flatMap(c => [...c.mods.map(m => m.slug), ...c.missing, ...(c.evidenceState?.projects || [])])];
+        const replacementSlugs = computed(() => replacements.value.flatMap(row => [row.original, ...row.selected]));
+        const issueSlugs = computed(() => (report.value?.issues || []).flatMap(i => [i.mod, i.dependency]).filter(Boolean));
+        const optimizationSlugs = computed(() => (report.value?.optimization?.entries || []).map(e => e.slug));
         const chart = ref(true);
-        const loadIssueIcons = event => {
-            if (!event.target.open || !report.value) return;
-            const slugs = [...new Set(report.value.issues.flatMap(i => [i.mod, i.dependency]).filter(Boolean))];
-            loadModInfoCache(slugs.slice(0, 100));
-        };
-        const loadOptimizationIcons = event => {
-            if (event.target.open && report.value?.optimization) loadModInfoCache(report.value.optimization.entries.map(e => e.slug).slice(0, 100));
-        };
         const icon = slug => {
             const value = modInfoCache.value[slug]?.icon || '';
             try {
@@ -33,11 +34,11 @@ export default {
                 return url.protocol === 'https:' && url.hostname === 'cdn.modrinth.com' ? value : '';
             } catch { return ''; }
         };
-        return {optimizationRole, optimizationSide, loadOptimizationIcons, report, replacements, coverage, requirementStatus, requirementTone, requirementNote, loadRequirementIcons, chart, categoryGloss, modProjectLink, issueReason, loadIssueIcons, icon};
+        return {authUser, optimizationRole, optimizationSide, optimizationSlugs, report, replacements, coverage, requirementStatus, requirementTone, requirementNote, requirementSlugs, replacementSlugs, chart, categoryGloss, modProjectLink, issueReason, issueSlugs, icon};
     },
     template: `
       <div v-if="report || replacements.length || coverage" class="mt-4 space-y-3">
-        <section v-if="replacements.length" class="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4 space-y-3">
+        <section v-if="replacements.length" v-visible-mods="{slugs: replacementSlugs, owner: authUser?.token}" class="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4 space-y-3">
           <h4 class="text-sm font-semibold text-slate-800">本轮候选选择</h4>
           <div v-for="row in replacements" :key="row.original" class="flex flex-wrap items-center gap-2 text-sm">
             <a :href="modProjectLink(row.original)" target="_blank" rel="noopener noreferrer" class="flex items-center gap-2 text-indigo-700">
@@ -56,7 +57,7 @@ export default {
         </section>
         <section v-if="coverage && coverage.requirements.length" class="rounded-xl border border-slate-200 bg-white overflow-hidden">
           <h4 class="px-4 py-3 bg-slate-50 text-sm font-semibold text-slate-800">逐项构建结果</h4>
-          <details v-for="row in coverage.requirements" :key="row.id" @toggle="loadRequirementIcons($event, row)" class="border-t border-slate-100">
+          <details v-for="row in coverage.requirements" :key="row.id" v-visible-mods="{slugs: requirementSlugs(row), owner: authUser?.token}" class="border-t border-slate-100">
             <summary class="px-4 py-3 cursor-pointer text-sm flex items-start justify-between gap-3">
               <span class="text-slate-700">{{ row.source }}</span>
               <span class="shrink-0 rounded-full px-2 py-0.5 text-xs" :class="requirementTone(row)">{{ requirementStatus(row) }}</span>
@@ -99,7 +100,7 @@ export default {
           <p class="px-4 py-3 text-xs text-slate-500">用途依据来自项目说明及已选版本关系，不等于丰富程度或运行效果已验证。</p>
         </section>
         <template v-if="report">
-        <details v-if="report.optimization" @toggle="loadOptimizationIcons" class="rounded-xl border border-indigo-100 bg-indigo-50/30">
+        <details v-if="report.optimization" v-visible-mods="{slugs: optimizationSlugs, owner: authUser?.token}" class="rounded-xl border border-indigo-100 bg-indigo-50/30">
           <summary class="px-4 py-3 cursor-pointer text-sm font-semibold text-slate-800">优化用途组合 · {{ report.optimization.modCount }} 项 · {{ report.optimization.covered.length }} 种用途</summary>
           <div class="px-4 pb-4 space-y-3">
             <p v-if="report.optimization.referenceActive" class="text-xs text-slate-500">占最终文件 {{ report.optimization.percentage.toFixed(1) }}%；5%～10%仅作宽泛优化需求的参考，不是达标门槛。</p>
@@ -137,7 +138,7 @@ export default {
           </table>
           <p class="px-4 py-3 text-xs text-slate-500">按 {{ report.total }} 个最终文件计算。模组可有多个类别，占比之和可能超过 100%；未分类表示类别信息尚未取得。</p>
         </section>
-        <details v-if="report.issues.length" @toggle="loadIssueIcons" class="rounded-xl border border-amber-200 bg-amber-50/50">
+        <details v-if="report.issues.length" v-visible-mods="{slugs: issueSlugs, owner: authUser?.token}" class="rounded-xl border border-amber-200 bg-amber-50/50">
           <summary class="px-4 py-3 cursor-pointer text-sm font-semibold text-amber-900">模组调整与前置问题 · {{ report.issues.length }} 项</summary>
           <div class="px-4 pb-4 space-y-2">
             <div v-for="(issue, index) in report.issues" :key="index" class="rounded-lg border border-slate-200 bg-white p-3 text-sm">

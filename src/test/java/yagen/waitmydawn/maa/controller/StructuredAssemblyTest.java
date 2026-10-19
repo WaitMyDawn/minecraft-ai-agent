@@ -15,6 +15,87 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class StructuredAssemblyTest {
+    @Test void tailStagesSeparateValidationPresentationAndSerializationWithoutInventingARepair() {
+        var context = new yagen.waitmydawn.maa.runtime.DelegationContext(1000);
+        var plan = intent(BuildIntent.Mode.NEW, List.of("ordinary-core"), List.of(),
+                new BuildIntent.CountTarget(1, BuildIntent.CountScope.ROOT_MODS, BuildIntent.Precision.EXACT));
+        var output = new java.util.concurrent.atomic.AtomicReference<String>();
+        yagen.waitmydawn.maa.runtime.DelegationContext.runWith(context, () -> output.set(assemble(plan, "")));
+        assertTrue(output.get().contains("<mods>ordinary-core</mods>"), output.get());
+        var titles = context.progress().snapshot().stream().map(yagen.waitmydawn.maa.runtime.BuildProgress.Entry::title).toList();
+        var tail = List.of("解析依赖与协调版本", "核对需求覆盖与数量", "复核最终附属与生成准入",
+                "整理类别与依赖问题", "核对逐项目标与用途证据", "汇总构建来源与诊断", "序列化构建结果");
+        assertEquals(tail, titles.subList(titles.indexOf(tail.getFirst()), titles.size()));
+        context.progress().finish();
+        assertTrue(context.progress().snapshot().stream().allMatch(entry -> entry.endedAt() != null));
+        verifyNoInteractions(agents);
+    }
+
+    @Test void partialAdmissionFactsStillBlockAnUnrequestedExtremePresetAndRemainReusable() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        var known = json.createObjectNode().put("id", "Preset01").put("slug", "world-preset")
+                .put("description", "Classic Skyblock with infinite void generation");
+        when(api.getProjectsBatch(anyCollection())).thenThrow(new ModrinthApiClient.PartialProjectBatchException(Map.of("world-preset", known)));
+        Map<String, String> facts = new LinkedHashMap<>();
+        Map<String, ?> blocked = ReflectionTestUtils.invokeMethod(controller, "generationAdmission",
+                List.of("world-preset", "unknown"), "冒险整合包", facts);
+        assertTrue(blocked.containsKey("world-preset"));
+        assertFalse(blocked.containsKey("unknown"), "缺失资料只能视为未核实，不能编造准入依据");
+        assertEquals(facts.get("world-preset"), facts.get("Preset01"));
+        ReflectionTestUtils.invokeMethod(controller, "generationAdmission", List.of("world-preset", "Preset01"), "冒险整合包", facts);
+        verify(api, times(1)).getProjectsBatch(anyCollection());
+    }
+
+    @Test void admissionCancellationCannotBeDowngradedIntoMissingDescriptions() {
+        when(api.getProjectsBatch(anyCollection())).thenThrow(new java.util.concurrent.CancellationException());
+        assertThrows(java.util.concurrent.CancellationException.class, () -> ReflectionTestUtils.invokeMethod(controller,
+                "generationAdmission", List.of("ordinary-core"), "冒险整合包", new LinkedHashMap<String, String>()));
+    }
+
+    @Test void reportAlignmentRepairIsTargetedAndDoesNotReauthorizeSelection() {
+        checkReportAlignmentRepair(false, false);
+    }
+
+    @Test void reportRepairChangingPermissionsKeepsOriginalVetoAndBackfillRestriction() {
+        checkReportAlignmentRepair(true, false);
+    }
+
+    @Test void repeatedAlignmentFailureStillBuildsFromLegalSelectionWithoutAThirdRepair() {
+        checkReportAlignmentRepair(false, true);
+    }
+
+    private void checkReportAlignmentRepair(boolean changePermissions, boolean stillInvalid) {
+        var json = new tools.jackson.databind.ObjectMapper();
+        var criteria = List.of(new RequirementCriterion("物流", BuildRequirement.Kind.CAPABILITY, List.of(), List.of(), List.of()),
+                new RequirementCriterion("仓储", BuildRequirement.Kind.CAPABILITY, List.of(), List.of(), List.of()));
+        var requirement = new BuildRequirement("r-0000000000000001", "物流和仓储", BuildRequirement.Kind.CAPABILITY,
+                List.of(), List.of(), List.of(), List.of(), SelectionPreferences.DEFAULT, criteria);
+        var base = addonIntent();
+        var plan = new BuildIntent(1, base.mode(), base.reply(), base.name(), base.environment(), base.count(), base.mustHave(),
+                base.add(), base.remove(), base.exclude(), base.expandAddons(), base.replacementPolicy(), base.searchIntents(),
+                base.excludedCategories(), base.maxDownloads(), base.constraintChanges(), List.of(requirement));
+        var selection = new ReviewResponse(1, List.of("create-good", "create-vetoed"),
+                List.of(new ReviewDecision.Rejection("create-vetoed", ReviewDecision.Reason.OFF_TOPIC, "不符合主题")), false,
+                List.of(new RequirementReview(requirement.id(), List.of(), "错误的父项缺口",
+                        List.of(new CriterionReview("物流", List.of(), "缺少依据")))));
+        String invalid = json.writeValueAsString(selection);
+        var corrected = (tools.jackson.databind.node.ObjectNode) json.readTree(invalid);
+        corrected.set("requirements", json.valueToTree(List.of(new RequirementReview(requirement.id(), List.of(), "",
+                criteria.stream().map(c -> new CriterionReview(c.source(), List.of(), "缺少可核实依据")).toList()))));
+        if (changePermissions) { corrected.putArray("rejected"); corrected.put("allowBackfill", true); }
+        prepareAddonPool(invalid);
+        when(agents.criticPools(anyString(), anyString(), anySet(), anyInt())).thenReturn(
+                new AiAgentService.AgentCallResult(invalid, 1, 1, 10, 10),
+                new AiAgentService.AgentCallResult(stillInvalid ? invalid : corrected.toString(), 1, 1, 10, 10));
+        String result = assemble(plan, "create");
+        assertTrue(result.contains("<mods>create,create-good</mods>"), result);
+        assertTrue(result.contains("\"allowBackfill\":false"), result);
+        assertTrue(result.contains("\"criticCoverageDegraded\":" + (changePermissions || stillInvalid)), result);
+        verify(agents, times(2)).criticPools(anyString(), anyString(), anySet(), anyInt());
+        verify(agents).criticPools(argThat((String context) -> context.contains("【用途报告定向修正】")
+                && context.contains("MISSING_CRITERION") && context.contains("PARENT_GAP")
+                && context.contains("【审核子目标结构骨架】")), anyString(), anySet(), anyInt());
+    }
     @Test void confirmedProjectFactsReachFinalCoverageEvenWhenNamedOnlyBuildSkipsCritic() {
         var json = new tools.jackson.databind.ObjectMapper();
         var base = intent(BuildIntent.Mode.NEW, List.of("terrain-core"), List.of(),

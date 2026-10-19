@@ -8,6 +8,42 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class CriteriaCoverageTest {
+    @Test void alignmentDiagnosticsIdentifyAllFieldsWithoutRepeatingSourceText() {
+        var r = requirement("原始私有玩法要求", List.of(purpose("物流能力", "technology", "logistics"), purpose("仓储能力", "storage", "storage")));
+        var row = new RequirementReview(r.id(), List.of(quote("core", "logistics")), "父项不应填缺口",
+                List.of(new CriterionReview("物流能力", List.of(), ""), new CriterionReview("改写后的子目标", List.of(), "")));
+        var error = assertThrows(RequirementCoverage.ReviewAlignmentException.class,
+                () -> RequirementCoverage.validateReviews(List.of(r), List.of(row)));
+        assertEquals(List.of(RequirementCoverage.AlignmentCode.PARENT_EVIDENCE, RequirementCoverage.AlignmentCode.PARENT_GAP,
+                RequirementCoverage.AlignmentCode.MISSING_CRITERION, RequirementCoverage.AlignmentCode.UNKNOWN_CRITERION_SOURCE),
+                error.issues().stream().map(RequirementCoverage.AlignmentIssue::code).toList());
+        assertEquals("/requirements/0/criteria/1/source", error.issues().getLast().pointer());
+        assertEquals(1, error.issues().get(2).criterionIndex());
+        assertTrue(error.issues().stream().allMatch(i -> i.requirementId().equals(r.id())));
+        assertFalse(error.getMessage().contains("原始私有"));
+        assertFalse(error.getMessage().contains("改写后的"));
+    }
+
+    @Test void absentParentAndEveryMissingChildHaveDistinctDiagnostics() {
+        var r = requirement("料理和装饰", List.of(purpose("料理", "food", "cooking"), purpose("装饰", "decoration", "decor")));
+        var absent = assertThrows(RequirementCoverage.ReviewAlignmentException.class,
+                () -> RequirementCoverage.validateReviews(List.of(r), List.of()));
+        assertEquals(RequirementCoverage.AlignmentCode.MISSING_REQUIREMENT, absent.issues().getFirst().code());
+        var empty = assertThrows(RequirementCoverage.ReviewAlignmentException.class,
+                () -> RequirementCoverage.validateReviews(List.of(r), List.of(new RequirementReview(r.id(), List.of(), ""))));
+        assertEquals(List.of(0, 1), empty.issues().stream().map(RequirementCoverage.AlignmentIssue::criterionIndex).toList());
+    }
+
+    @Test void reviewSkeletonDoesNotInventEvidenceAndAlignmentAllowsReordering() {
+        var r = requirement("物流和仓储", List.of(purpose("物流", "technology", "logistics"), purpose("仓储", "storage", "storage")));
+        var rows = RequirementCoverage.reviewSkeleton(List.of(r));
+        assertEquals(List.of("物流", "仓储"), rows.getFirst().criteria().stream().map(CriterionReview::source).toList());
+        assertTrue(rows.getFirst().criteria().stream().allMatch(c -> c.evidence().isEmpty()));
+        var reversed = new RequirementReview(r.id(), List.of(), "", List.of(rows.getFirst().criteria().getLast(), rows.getFirst().criteria().getFirst()));
+        assertDoesNotThrow(() -> RequirementCoverage.validateReviews(List.of(r), List.of(reversed)));
+        assertTrue(RequirementCoverage.verify(List.of(r), rows, Map.of(), Set.of()).checks().values().stream()
+                .allMatch(c -> c.accepted() == 0 && c.reason().equals("NO_EVIDENCE")));
+    }
     private RequirementCriterion purpose(String source, String category, String keyword) {
         return new RequirementCriterion(source, BuildRequirement.Kind.CAPABILITY, List.of(), List.of(),
                 List.of(new BuildIntent.SearchIntent(category, 100, List.of(keyword))));

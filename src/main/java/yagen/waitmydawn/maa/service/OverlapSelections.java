@@ -62,6 +62,8 @@ public final class OverlapSelections {
         int unknown = 0;
         Map<String, JsonNode> facts;
         try { facts = api.getProjectsBatch(selected); }
+        catch (ModrinthApiClient.PartialProjectBatchException partial) { facts = partial.projects(); }
+        catch (java.util.concurrent.CancellationException canceled) { throw canceled; }
         catch (RuntimeException unavailable) { facts = Map.of(); }
         if (aborted.getAsBoolean()) return "⛔ 思考已手动终止。";
         for (String slug : selected) {

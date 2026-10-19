@@ -112,7 +112,8 @@ public final class MaaLog {
     public static void app(String text) {
         if (core != null) {
             String key = USER_KEY.get();
-            core.logSystem("[app]" + (key != null ? " [u=" + key + "]" : "") + " " + text);
+            core.logSystem("[" + LocalDateTime.now().format(LINE_TIME) + "] [app]"
+                    + (key != null ? " [u=" + key + "]" : "") + " " + text);
         }
     }
 

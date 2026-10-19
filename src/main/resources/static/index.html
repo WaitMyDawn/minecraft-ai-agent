@@ -1134,7 +1134,7 @@
                 <h3 class="font-bold text-lg mb-2">📦 模组偏好 (按构建次数排序)</h3>
                 <p class="text-xs text-slate-500 mb-3">自动收集的模组需构建 ≥ 3 次才会影响偏好；手动添加的模组始终影响，构建次数自动追踪最高值</p>
                 <div class="flex gap-2 mb-3 flex-wrap">
-                    <input v-model="modPrefSearch" @input="modPrefPage.value=0" placeholder="搜索已有偏好 slug..." class="border rounded px-3 py-1 text-sm flex-1 min-w-[180px] outline-none focus:border-indigo-500">
+                    <input v-model="modPrefSearch" placeholder="搜索偏好 slug 或类别..." class="border rounded px-3 py-1 text-sm flex-1 min-w-[180px] outline-none focus:border-indigo-500">
                     <div class="flex gap-1">
                         <input v-model="manualSlugInput" @keyup.enter="addModBySlug" placeholder="输入 slug 手动添加..." class="border rounded-l px-3 py-1 text-sm w-48 outline-none focus:border-amber-400 font-mono">
                         <button @click="addModBySlug" :disabled="addingModBySlug" class="bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white px-3 py-1 rounded-r text-xs font-bold whitespace-nowrap">{{ addingModBySlug ? '...' : '手动添加' }}</button>

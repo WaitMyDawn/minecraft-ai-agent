@@ -35,6 +35,120 @@ import static org.mockito.Mockito.when;
  * 等超时——任何一种都不允许让流程在那里空等或直接失败。
  */
 class ModrinthApiClientTest {
+    @Test @org.junit.jupiter.api.Timeout(10)
+    void partialBrowserBatchRetainsSuccessfulFactsAndReportsUnavailableInsteadOfAbsent() throws Exception {
+        var fetcher = mock(ModrinthFetcher.class);
+        when(fetcher.getProjectInfo("failed")).thenThrow(new ModrinthApiClient.UnavailableException("fixture failure"));
+        var tasks = new DelegationTasks(true, 2000);
+        var api = new ModrinthApiClient(fetcher, tasks);
+        var ctx = new DelegationContext();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var future = executor.submit(() -> DelegationContext.runWith(ctx, () -> {
+                var error = org.junit.jupiter.api.Assertions.assertThrows(ModrinthApiClient.PartialProjectBatchException.class,
+                        () -> api.getProjectsBatch(java.util.List.of("known", "failed")));
+                assertEquals(java.util.Set.of("known"), error.projects().keySet());
+            }));
+            for (int i = 0; i < 400 && ctx.pendingWants().size() < 2; i++) Thread.sleep(2);
+            assertEquals(2, ctx.pendingWants().size());
+            ctx.deliver(Kind.PROJECT, "known", new ObjectMapper().createObjectNode().put("id", "P1").put("slug", "known"));
+            ctx.handBack(Kind.PROJECT, "failed", "NETWORK_ERROR");
+            future.get(2, TimeUnit.SECONDS);
+            assertEquals(1, ctx.handBackCount());
+            verify(fetcher).getProjectInfo("failed");
+            verify(fetcher, never()).getProjectInfo("known");
+        } finally { tasks.close(); }
+    }
+    @Test void disabledDelegationDoesNotAllowACancelledTaskToStartAServerBatch() {
+        var fetcher = mock(ModrinthFetcher.class);
+        var tasks = new DelegationTasks(false, 2000);
+        var context = new DelegationContext(); context.cancelAll();
+        try {
+            var api = new ModrinthApiClient(fetcher, tasks);
+            org.junit.jupiter.api.Assertions.assertThrows(java.util.concurrent.CancellationException.class,
+                    () -> DelegationContext.runWith(context, () -> api.getProjectsBatch(java.util.List.of("one", "two"))));
+            org.mockito.Mockito.verifyNoInteractions(fetcher);
+        } finally { tasks.close(); }
+    }
+    @Test @org.junit.jupiter.api.Timeout(10)
+    void twelveProjectPipelineReusesIdVersionsWithoutAnotherDispatchWave() throws Exception {
+        var fetcher = mock(ModrinthFetcher.class);
+        var tasks = new DelegationTasks(true, 2000);
+        var api = new ModrinthApiClient(fetcher, tasks);
+        var ctx = new DelegationContext();
+        var json = new ObjectMapper();
+        var slugs = java.util.stream.IntStream.range(0, 12).mapToObj(i -> "mod-" + i).toList();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var future = executor.submit(() -> DelegationContext.runWith(ctx, () -> {
+                var checks = slugs.stream().map(slug -> yagen.waitmydawn.maa.runtime.ScopedExecutors.runAsync(
+                        () -> api.getLatestCompatibleVersionBySlug(slug, "1.21.1", "neoforge"), executor)).toList();
+                java.util.concurrent.CompletableFuture.allOf(checks.toArray(java.util.concurrent.CompletableFuture[]::new)).join();
+                assertEquals(12, api.getProjectsBatch(slugs).size());
+                for (int i = 0; i < 12; i++) assertEquals("V" + i,
+                        api.getLatestVersion("P" + i, "1.21.1", "[\"neoforge\"]").path("id").asText());
+            }));
+            for (int wave = 0; wave < 2; wave++) {
+                for (int i = 0; i < 400 && ctx.pendingWants().size() < (wave == 0 ? 12 : 6); i++) Thread.sleep(2);
+                var wants = ctx.dispatchWants();
+                assertEquals(6, wants.size());
+                for (var want : wants) {
+                    String index = want.key().substring(4, want.key().indexOf('|'));
+                    ctx.deliver(want.kind(), want.key(), json.createObjectNode().put("id", "V" + index).put("project_id", "P" + index));
+                }
+            }
+            for (int i = 0; i < 400 && ctx.pendingWants().size() < 12; i++) Thread.sleep(2);
+            var projects = ctx.dispatchWants();
+            assertEquals(12, projects.size());
+            for (var want : projects) {
+                assertEquals(Kind.PROJECT, want.kind());
+                String index = want.key().substring(4);
+                ctx.deliver(want.kind(), want.key(), json.createObjectNode().put("id", "P" + index).put("slug", want.key()));
+            }
+            future.get(2, TimeUnit.SECONDS);
+            assertTrue(ctx.pendingWants().isEmpty());
+            assertEquals(12, ctx.factReuseCount());
+            org.mockito.Mockito.verifyNoInteractions(fetcher);
+        } finally { tasks.close(); }
+    }
+    @Test void disabledDelegationKeepsNativeProjectBatchEvenInsideATask() {
+        var fetcher = mock(ModrinthFetcher.class);
+        var refs = java.util.List.of("one", "two");
+        var data = java.util.Map.of("one", new ObjectMapper().createObjectNode().put("slug", "one"));
+        when(fetcher.getProjectsBatch(refs)).thenReturn(java.util.Map.copyOf(data));
+        var tasks = new DelegationTasks(false, 2000);
+        try {
+            var api = new ModrinthApiClient(fetcher, tasks);
+            DelegationContext.runWith(new DelegationContext(), () -> assertEquals(data, api.getProjectsBatch(refs)));
+            verify(fetcher).getProjectsBatch(refs);
+            verify(fetcher, never()).getProjectInfo(anyString());
+        } finally { tasks.close(); }
+    }
+
+    @Test void slugCompatibilityThenIdResolutionUsesOnlyTwoBrowserFactsAndNoServerFetch() throws Exception {
+        var fetcher = mock(ModrinthFetcher.class);
+        var tasks = new DelegationTasks(true, 2000);
+        var ctx = new DelegationContext();
+        var api = new ModrinthApiClient(fetcher, tasks);
+        var json = new ObjectMapper();
+        var version = json.createObjectNode().put("id", "V1").put("project_id", "P1");
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var future = executor.submit(() -> DelegationContext.runWith(ctx, () -> {
+                assertEquals(version, api.getLatestCompatibleVersionBySlug("test-mod", "1.21.1", "neoforge"));
+                assertEquals("P1", api.getProjectInfo("test-mod").path("id").asText());
+                assertEquals(version, api.getLatestVersion("P1", "1.21.1", "[\"neoforge\"]"));
+                assertEquals("test-mod", api.getProjectInfo("P1").path("slug").asText());
+            }));
+            for (var kind : java.util.List.of(Kind.ENV_VERSION, Kind.PROJECT)) {
+                String key = kind == Kind.PROJECT ? "test-mod" : "test-mod|1.21.1|[\"neoforge\"]";
+                for (int i = 0; i < 400 && !ctx.isPending(kind, key); i++) Thread.sleep(2);
+                assertTrue(ctx.isPending(kind, key));
+                ctx.deliver(kind, key, kind == Kind.PROJECT ? json.createObjectNode().put("id", "P1").put("slug", "test-mod") : version);
+            }
+            future.get(2, TimeUnit.SECONDS);
+            assertEquals(2, ctx.factReuseCount());
+            assertTrue(ctx.pendingWants().isEmpty());
+            org.mockito.Mockito.verifyNoInteractions(fetcher);
+        } finally { tasks.close(); }
+    }
     @Test void compatibleVersionListUsesTaskFactsWithoutServerFetchOrSharedCache() throws Exception {
         var fetcher = mock(ModrinthFetcher.class);
         var ctx = new DelegationContext();
