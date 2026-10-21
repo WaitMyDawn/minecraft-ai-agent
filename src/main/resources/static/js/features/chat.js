@@ -35,9 +35,9 @@ export const confirmReplacement = () => {
     for (const group of replacementPrompt.value.groups) {
         const choice = group.choice;
         const manualSlug = choice.manualSlug.trim();
-        if (['OVERLAP', 'GENERATION'].includes(replacementPrompt.value.kind)) {
-            if (!choice.slugs.length || group.candidates.some(c => c.protectedSelection && !choice.slugs.includes(c.slug))) {
-                replacementPrompt.value.error = '每组至少保留一个项目，并保留点名核心、锁定版本及必要前置。';
+        if (['OVERLAP', 'GENERATION', 'ADDONS'].includes(replacementPrompt.value.kind)) {
+            if ((replacementPrompt.value.kind !== 'ADDONS' && !choice.slugs.length) || group.candidates.some(c => c.protectedSelection && !choice.slugs.includes(c.slug))) {
+                replacementPrompt.value.error = replacementPrompt.value.kind === 'ADDONS' ? '请保留点名附属、必要联动和固定内容需要的前置。' : '每组至少保留一个项目，并保留点名核心、锁定版本及必要前置。';
                 return;
             }
             choices[group.original] = {slugs: [...choice.slugs], drop: false, manualSlug: ''};
@@ -61,7 +61,8 @@ export const sameSelectionWorkspace = (request) => request.currentMods === (pack
     && request.constraints === (packData.constraints ? JSON.stringify(packData.constraints) : '')
     && request.excludedSlugs === (packData.excludedSlugs || []).join(',');
 export const syncReplacementSelection = (slug, checked) => {
-    if (!['OVERLAP', 'GENERATION'].includes(replacementPrompt.value?.kind)) return;
+    if (!['OVERLAP', 'GENERATION', 'ADDONS'].includes(replacementPrompt.value?.kind)) return;
+    if (!checked && replacementPrompt.value.groups.some(g => g.candidates.some(c => c.slug === slug && c.protectedSelection))) return;
     for (const group of replacementPrompt.value.groups) if (group.candidates.some(c => c.slug === slug)) {
         group.choice.slugs = checked ? [...new Set([...group.choice.slugs, slug])] : group.choice.slugs.filter(s => s !== slug);
     }
@@ -70,9 +71,10 @@ export const chooseReplacements = (options, signal, previous = null, message = '
     signal.throwIfAborted();
     replacementPrompt.value = {...options, error: message, groups: options.groups.map(group => ({...group,
         choice: previous?.[group.original] ? {...previous[group.original], slugs: [...previous[group.original].slugs]}
-            : {slugs: ['OVERLAP', 'GENERATION'].includes(options.kind) ? group.candidates.filter(c => c.recommended || c.protectedSelection).map(c => c.slug)
+            : options.recommendedChoices?.[group.original] ? {...options.recommendedChoices[group.original], slugs: [...options.recommendedChoices[group.original].slugs]}
+            : {slugs: ['OVERLAP', 'GENERATION', 'ADDONS'].includes(options.kind) ? group.candidates.filter(c => c.recommended || c.protectedSelection).map(c => c.slug)
                 : group.candidates.length ? [group.candidates[0].slug] : [], drop: false, manualSlug: ''}}))};
-    if (['OVERLAP', 'GENERATION'].includes(options.kind)) {
+    if (['OVERLAP', 'GENERATION', 'ADDONS'].includes(options.kind)) {
         const selected = new Set(replacementPrompt.value.groups.flatMap(group => group.choice.slugs));
         for (const group of replacementPrompt.value.groups)
             group.choice.slugs = group.candidates.filter(c => selected.has(c.slug)).map(c => c.slug);
@@ -126,7 +128,7 @@ const stopThinking = () => {
 window.addEventListener('pagehide', () => {
     if (!isLoading.value) return;
     if (replacementPrompt.value?.ticket) {
-        apiFetch(`/api/chat/${replacementPrompt.value.kind === 'OVERLAP' ? 'overlaps' : 'replacements'}/${encodeURIComponent(replacementPrompt.value.ticket)}/cancel`,
+        apiFetch(`/api/chat/${replacementPrompt.value.kind === 'ADDONS' ? 'addons' : replacementPrompt.value.kind === 'OVERLAP' ? 'overlaps' : 'replacements'}/${encodeURIComponent(replacementPrompt.value.ticket)}/cancel`,
             {method: 'POST', keepalive: true}).catch(() => {});
         return;
     }
@@ -312,14 +314,14 @@ export const sendMessage = async () => {
             for (let selectionRound = 0; ; selectionRound++) {
                 const options = aiReply.match(/<replacement_options>(.*?)<\/replacement_options>/s);
                 if (!options) break;
-                if (selectionRound >= 5) throw new Error('候选确认次数过多，请核对目标环境和模组 slug 后重新提交');
+                if (selectionRound >= 6) throw new Error('候选确认次数过多，请核对目标环境和模组 slug 后重新提交');
                 clearInterval(timerInterval);
                 timerInterval = null;
                 currentThought.value = '等待确认候选组合，原清单保持不变';
                 const selection = JSON.parse(options[1]);
                 let previousSelection = null, selectionError = '';
                 for (;;) {
-                    const releaseSelection = () => apiFetch(`/api/chat/${selection.kind === 'OVERLAP' ? 'overlaps' : 'replacements'}/${encodeURIComponent(selection.ticket)}/cancel`,
+                    const releaseSelection = () => apiFetch(`/api/chat/${selection.kind === 'ADDONS' ? 'addons' : selection.kind === 'OVERLAP' ? 'overlaps' : 'replacements'}/${encodeURIComponent(selection.ticket)}/cancel`,
                         {method: 'POST'}).catch(() => {});
                     request.signal.addEventListener('abort', releaseSelection, {once: true});
                     let choices;
@@ -344,12 +346,14 @@ export const sendMessage = async () => {
                                 replacementChoices: JSON.stringify(choices)})});
                         break;
                     } catch (error) {
-                        if (request.signal.aborted || ![409, 429].includes(error.status)) throw error;
+                        const correctableAddonChoice = selection.kind === 'ADDONS' && error.status === 400
+                            && !/过期|工作区/.test(error.message);
+                        if (request.signal.aborted || (!correctableAddonChoice && ![409, 429].includes(error.status))) throw error;
                         clearInterval(timerInterval);
                         timerInterval = null;
                         previousSelection = choices;
-                        selectionError = '服务繁忙，当前选择已保留。请稍后点击“确认并继续”重试，或取消构建。';
-                        currentThought.value = '等待重试续建，当前选择已保留';
+                        selectionError = correctableAddonChoice ? error.message : '服务繁忙，当前选择已保留。请稍后点击“确认并继续”重试，或取消构建。';
+                        currentThought.value = correctableAddonChoice ? '等待调整附属选择，原清单保持不变' : '等待重试续建，当前选择已保留';
                     }
                 }
                 if (aiReply.startsWith('已暂停构建')) break;

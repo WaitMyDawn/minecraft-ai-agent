@@ -1,6 +1,7 @@
 package yagen.waitmydawn.maa.model;
 
 import tools.jackson.databind.JsonNode;
+import yagen.waitmydawn.maa.service.ModrinthIdentifiers;
 import java.util.*;
 
 /** 可持久化的导入锁定信息；文件须在每次预览中按精确版本重新核对。 */
@@ -8,7 +9,7 @@ public record ImportedPack(String loader, String mcVersion, String loaderVersion
     public record File(String slug, String projectId, String versionId, String filename, String url,
                        String sha1, String sha512, long size, Map<String, String> env) {
         public File {
-            if (!identifier(slug) || !identifier(projectId) || !identifier(versionId)
+            if (!ModrinthIdentifiers.isProjectReference(slug) || !identifier(projectId) || !identifier(versionId)
                     || filename == null || filename.isBlank() || filename.length() > 255
                     || filename.chars().anyMatch(Character::isISOControl)
                     || filename.contains("..") || filename.matches(".*[/\\\\:].*")

@@ -6,7 +6,14 @@ import java.util.Map;
 /** 原始要求及规划映射；记录目标，不授予模型声明兼容或满足的权限。 */
 public record BuildRequirement(String id, String source, Kind kind, List<String> projects,
                                List<Capability> capabilities, List<String> addonCores, List<BuildIntent.SearchIntent> searches,
-                               SelectionPreferences preferences, List<RequirementCriterion> criteria) {
+                               SelectionPreferences preferences, List<RequirementCriterion> criteria, RequirementQuantity quantity) {
+    public BuildRequirement(String id, String source, Kind kind, List<String> projects, List<Capability> capabilities,
+                            List<String> addonCores, List<BuildIntent.SearchIntent> searches, SelectionPreferences preferences,
+                            List<RequirementCriterion> criteria) {
+        this(id, source, kind, projects, capabilities, addonCores, searches, preferences, criteria,
+                criteria.isEmpty() && kind != Kind.CHANGE && (kind != Kind.GENERAL || !searches.isEmpty())
+                        ? RequirementQuantity.fromSource(source) : null);
+    }
     public BuildRequirement(String id, String source, Kind kind, List<String> projects,
                             List<Capability> capabilities, List<String> addonCores, List<BuildIntent.SearchIntent> searches,
                             SelectionPreferences preferences) {
@@ -49,7 +56,7 @@ public record BuildRequirement(String id, String source, Kind kind, List<String>
                 criteria.stream().filter(c -> c.kind() != Kind.PROJECTS || c.projects().isEmpty()
                                 || c.projects().stream().anyMatch(p -> !replacements.getOrDefault(p, List.of(p)).isEmpty()))
                         .filter(c -> c.addonCores().isEmpty() || c.addonCores().stream().anyMatch(p -> !replacements.getOrDefault(p, List.of(p)).isEmpty()))
-                        .map(c -> c.replace(replacements)).toList());
+                        .map(c -> c.replace(replacements)).toList(), quantity);
     }
     public static List<BuildRequirement> validate(List<BuildRequirement> entries) {
         var result = ContractRules.list(entries, "requirements", 64);

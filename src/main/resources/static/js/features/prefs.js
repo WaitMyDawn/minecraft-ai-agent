@@ -1,5 +1,5 @@
 import {computed, nextTick, watch} from 'vue';
-import {addingModBySlug, authUser, bindForm, bindMsg, blacklistItems, blacklistJump, blacklistMsg, blacklistPage, blacklistSlugInput, categoryPrefs, currentView, dbRules, dbVoteBusy, editingBuildCountId, editingBuildCountVal, emailAction, emailHintDismissed, enableBlacklist, enableUserFeedbackRules, hasApiKey, keEnv, keLoader, keLoaderEnvs, keModA, keModAError, keModAInfo, keModB, keModBError, keModBInfo, keMsg, keMsgOk, keRelation, keVersion, manualSlugInput, modInfoCache, modPrefJump, modPrefPage, modPrefs, modPrefSearch, modSlugAddMsg, newCatPref, profileApiKey, profileApiKeyMsg, profileUsername, profileWeight, pwCode, pwMsg, pwNew, pwOld, selectedSuggests, showSuggestBoard, suggestedMods, suggestMode} from '../store.js';
+import {selectionPreferences, selectionPrefsBusy, selectionPrefsMsg, addingModBySlug, authUser, bindForm, bindMsg, blacklistItems, blacklistJump, blacklistMsg, blacklistPage, blacklistSlugInput, categoryPrefs, currentView, dbRules, dbVoteBusy, editingBuildCountId, editingBuildCountVal, emailAction, emailHintDismissed, enableBlacklist, enableUserFeedbackRules, hasApiKey, keEnv, keLoader, keLoaderEnvs, keModA, keModAError, keModAInfo, keModB, keModBError, keModBInfo, keMsg, keMsgOk, keRelation, keVersion, manualSlugInput, modInfoCache, modPrefJump, modPrefPage, modPrefs, modPrefSearch, modSlugAddMsg, newCatPref, profileApiKey, profileApiKeyMsg, profileUsername, profileWeight, pwCode, pwMsg, pwNew, pwOld, selectedSuggests, showSuggestBoard, suggestedMods, suggestMode} from '../store.js';
 import {createModInfoLoader} from '../utils/mod-info-loader.js';
 import {apiFetch, authHeader} from '../api.js';
 import {startCooldown} from '../utils/code-cooldown.js';
@@ -328,9 +328,19 @@ export const loadPrefs = async () => {
         modPrefs.value = mods;
     } catch(e) {}
 };
+const restoreSelectionPreferences = () => {
+    selectionPreferences.value = Object.fromEntries(['addons', 'replacements', 'overlap', 'generation']
+        .map(key => [key, authUser.value?.selectionPreferences?.[key] !== false]));
+};
+watch(() => [authUser.value?.token, authUser.value?.selectionPreferences], () => {
+    restoreSelectionPreferences();
+    selectionPrefsMsg.value = '';
+}, {immediate: true, flush: 'sync'});
 // 进入设置页时自动加载偏好
 watch(currentView, (v) => {
     if (v === 'profile') {
+        restoreSelectionPreferences();
+        selectionPrefsMsg.value = '';
         loadPrefs();
         loadBlacklist();
         profileWeight.value = authUser.value ? authUser.value.preferenceWeight : 0.3;
@@ -542,4 +552,29 @@ export const importPrefs = async (e) => {
         method: 'POST', headers: {...authHeader(), 'Content-Type': 'application/json'}, body: text
     });
     loadPrefs(); e.target.value = '';
+};
+
+export const saveSelectionPreferences = async () => {
+    if (!authUser.value || selectionPrefsBusy.value) return;
+    const owner = authUser.value.token;
+    const wanted = {...selectionPreferences.value};
+    selectionPrefsBusy.value = true;
+    selectionPrefsMsg.value = '';
+    try {
+        const response = await apiFetch('/api/user/profile', {
+            method: 'PUT', headers: {...authHeader(), 'Content-Type': 'application/json'},
+            body: JSON.stringify(Object.fromEntries(Object.entries(wanted).map(([key, value]) => ['popup.' + key, String(value)])))
+        });
+        const data = await response.json();
+        if (authUser.value?.token !== owner) return;
+        if (!response.ok || !data.selectionPreferences) throw new Error('保存失败，请重试');
+        authUser.value.selectionPreferences = data.selectionPreferences;
+        selectionPreferences.value = {...data.selectionPreferences};
+        localStorage.setItem('maa-auth', JSON.stringify(authUser.value));
+        selectionPrefsMsg.value = '已保存，下次构建生效';
+    } catch (error) {
+        if (authUser.value?.token !== owner) return;
+        restoreSelectionPreferences();
+        selectionPrefsMsg.value = error.message || '保存失败，请重试';
+    } finally { selectionPrefsBusy.value = false; }
 };

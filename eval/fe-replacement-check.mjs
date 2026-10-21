@@ -198,6 +198,26 @@ for (const expired of [false, true]) {
     assert.equal(calls.length, 2);
     assert.equal(calls.at(-1).endsWith('/cancel'), !expired);
 }
+resetWorkspace();
+const dependentAddons = {kind:'ADDONS',ticket:'dependent-addon-ticket',groups:[{original:'addons:core',candidates:[
+    {slug:'a',recommended:true},{slug:'b',recommended:true}]}]};
+let addonSubmissions=0;
+globalThis.apiFetch = async (url,opts) => {
+    addonSubmissions++;
+    if (addonSubmissions === 1) return new Response('<replacement_options>'+JSON.stringify(dependentAddons)+'</replacement_options>');
+    if (addonSubmissions === 2) throw Object.assign(new Error('保留项目需要已取消的附属前置，请同时调整相关选择'),{status:400});
+    return new Response('已完成<mods>core,a,b</mods>');
+};
+building=sendMessage();
+await waitFor(()=>replacementPrompt.value);
+syncReplacementSelection('a',false);confirmReplacement();
+await waitFor(()=>replacementPrompt.value?.error.includes('附属前置'));
+assert.deepEqual(replacementPrompt.value.groups[0].choice.slugs,['b']);
+assert.deepEqual(globalThis.packData.modSlugs,['original']);
+syncReplacementSelection('a',true);confirmReplacement();await building;
+assert.equal(addonSubmissions,3);
+assert.deepEqual(globalThis.packData.modSlugs,['core','a','b']);
+console.log('附属校验纠正检查通过：选择有依赖缺口时保留弹窗及勾选，调整后继续原快照。');
 console.log('确认续建检查通过：等待不提交、429保留选择、重复点击、取消和过期均不误发布草案。');
 resetWorkspace();
 globalThis.authUser.value = {token:'fixture-old-account'};
@@ -218,3 +238,60 @@ assert.equal(globalThis.chatHistory.value.length, 0);
 assert.equal(oldSaves, 0, '切换账号后旧对话不得更新工作区或写入新账号历史');
 assert.equal(globalThis.isLoading.value, false);
 console.log('旧对话恢复隔离检查通过：迟到响应不改新账号清单、不追加消息、不写入历史。');
+
+pending = chooseReplacements({...options, recommendedChoices: {'alexs-mobs': {slugs: ['alexs-mobs-continued'], drop: false, manualSlug: ''}}}, new AbortController().signal);
+assert.deepEqual(replacementPrompt.value.groups[0].choice.slugs, ['alexs-mobs-continued']);
+confirmReplacement();
+assert.deepEqual((await pending)['alexs-mobs'].slugs, ['alexs-mobs-continued']);
+console.log('服务端推荐与弹窗默认值一致检查通过。');
+
+const prefsSource = await readFile(new URL('../src/main/resources/static/js/features/prefs.js', import.meta.url), 'utf8');
+const saveSource = prefsSource.slice(prefsSource.indexOf('export const saveSelectionPreferences =')).replace('export const ', 'const ');
+const account = {value: {token: 'owner-a', selectionPreferences: {addons:true,replacements:true,overlap:true,generation:true}}};
+const settings = {value: {addons:false,replacements:false,overlap:false,generation:false}};
+const busy = {value:false}, message = {value:''};
+const stored = [];
+let respond, sent;
+const saveSettings = new Function('authUser','selectionPreferences','selectionPrefsBusy','selectionPrefsMsg','apiFetch','authHeader','localStorage','restoreSelectionPreferences',
+    saveSource + '; return saveSelectionPreferences;')(account,settings,busy,message,
+    async (url,options) => {sent = JSON.parse(options.body); return new Promise(resolve => {respond = resolve;});},
+    () => ({}), {setItem: (...args) => stored.push(args)}, () => {settings.value = {...account.value.selectionPreferences};});
+let saving = saveSettings();
+assert.equal(busy.value,true);
+assert.deepEqual(sent,{'popup.addons':'false','popup.replacements':'false','popup.overlap':'false','popup.generation':'false'});
+respond({ok:true,json:async()=>({selectionPreferences:{...settings.value}})});
+await saving;
+assert.equal(account.value.selectionPreferences.overlap,false);
+assert.equal(stored.length,1);
+assert.equal(busy.value,false);
+settings.value = {addons:true,replacements:true,overlap:true,generation:true};
+saving = saveSettings();
+respond({ok:false,json:async()=>({})});
+await saving;
+assert.equal(settings.value.overlap,false);
+assert.match(message.value,/保存失败/);
+saving = saveSettings();
+account.value = {token:'owner-b',selectionPreferences:{overlap:true}};
+respond({ok:true,json:async()=>({selectionPreferences:{overlap:false}})});
+await saving;
+assert.equal(account.value.selectionPreferences.overlap,true);
+assert.equal(stored.length,1);
+console.log('弹窗设置检查通过：服务端持久化响应、保存失败回滚、切换账号后丢弃过期响应。');
+
+const addons = {kind:'ADDONS',ticket:'addon-ticket',groups:[
+    {original:'addons:core-a',candidates:[{slug:'shared',recommended:true},{slug:'optional',recommended:false}]},
+    {original:'addons:core-b',candidates:[{slug:'shared',recommended:true},{slug:'required',protectedSelection:true}]}
+]};
+pending = chooseReplacements(addons,new AbortController().signal);
+syncReplacementSelection('shared',false);
+assert.deepEqual(replacementPrompt.value.groups[0].choice.slugs,[]);
+syncReplacementSelection('required',false);
+assert.deepEqual(replacementPrompt.value.groups[1].choice.slugs,['required']);
+confirmReplacement();
+const addonChoices = await pending;
+assert.deepEqual(addonChoices['addons:core-a'],{slugs:[],drop:false,manualSlug:''});
+assert.deepEqual(addonChoices['addons:core-b'].slugs,['required']);
+pending = chooseReplacements({...addons,groups:[{original:'addons:core-a',candidates:[{slug:'optional',recommended:false}]}]},new AbortController().signal);
+confirmReplacement();
+assert.deepEqual((await pending)['addons:core-a'].slugs,[]);
+console.log('附属卡片检查通过：默认推荐与可选池分离、可空选、跨核心同步、保护项不被批量取消。');

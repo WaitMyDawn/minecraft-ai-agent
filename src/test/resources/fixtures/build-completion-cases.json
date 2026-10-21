@@ -1,0 +1,1574 @@
+[
+  {
+    "name": "local-met-does-not-hide-global-30-of-40-70",
+    "coverage": {
+      "schemaVersion": 1,
+      "repairStatus": "NONE",
+      "repaired": [],
+      "requirements": [
+        {
+          "id": "r-0000000000000004",
+          "source": "新建40～70个模组的包，包含两个点名核心",
+          "status": "VERIFIED_PROJECTS",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "点名项目已保留",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000001",
+          "source": "用途目标1",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000002",
+          "source": "用途目标2",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000003",
+          "source": "用途目标3",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "ledger": []
+    },
+    "trace": {
+      "contract": {
+        "quantity": {
+          "scope": "TOTAL_FILES",
+          "precision": "APPROXIMATE",
+          "target": 55,
+          "min": 40,
+          "max": 70,
+          "actual": 30,
+          "met": false
+        }
+      }
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "outcome": "PARTIAL",
+      "label": "尚未完全满足构建要求",
+      "note": "全局数量尚未达标，局部目标满足不能代替总量要求",
+      "quantity": {
+        "status": "NOT_MET",
+        "label": "数量未达标",
+        "scope": "TOTAL_FILES",
+        "precision": "APPROXIMATE",
+        "target": 55,
+        "min": 40,
+        "max": 70,
+        "actual": 30,
+        "acceptedMin": 40,
+        "acceptedMax": 70,
+        "display": "文件总数（含前置）：30 / 40～70 个"
+      },
+      "targets": {
+        "met": 4,
+        "partial": 0,
+        "notMet": 0,
+        "unknown": 0,
+        "waiting": 0,
+        "context": 0,
+        "parentIssues": 0
+      }
+    }
+  },
+  {
+    "name": "global-131-in-explicit-100-200",
+    "coverage": {
+      "schemaVersion": 1,
+      "repairStatus": "NONE",
+      "repaired": [],
+      "requirements": [
+        {
+          "id": "r-0000000000000001",
+          "source": "用途目标1",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000002",
+          "source": "用途目标2",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000003",
+          "source": "用途目标3",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "ledger": []
+    },
+    "trace": {
+      "contract": {
+        "quantity": {
+          "scope": "TOTAL_FILES",
+          "precision": "APPROXIMATE",
+          "target": 150,
+          "min": 100,
+          "max": 200,
+          "actual": 131,
+          "met": true
+        }
+      }
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "outcome": "MET",
+      "label": "已核对的构建要求均满足",
+      "note": "",
+      "quantity": {
+        "status": "MET",
+        "label": "数量已达标",
+        "scope": "TOTAL_FILES",
+        "precision": "APPROXIMATE",
+        "target": 150,
+        "min": 100,
+        "max": 200,
+        "actual": 131,
+        "acceptedMin": 100,
+        "acceptedMax": 200,
+        "display": "文件总数（含前置）：131 / 100～200 个"
+      },
+      "targets": {
+        "met": 3,
+        "partial": 0,
+        "notMet": 0,
+        "unknown": 0,
+        "waiting": 0,
+        "context": 0,
+        "parentIssues": 0
+      }
+    }
+  },
+  {
+    "name": "global-met-with-local-gap",
+    "coverage": {
+      "schemaVersion": 1,
+      "repairStatus": "NONE",
+      "repaired": [],
+      "requirements": [
+        {
+          "id": "r-0000000000000001",
+          "source": "用途目标1",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000002",
+          "source": "用途目标2",
+          "status": "PARTIAL",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "PARTIAL",
+            "label": "部分满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000003",
+          "source": "用途目标3",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "ledger": []
+    },
+    "trace": {
+      "contract": {
+        "quantity": {
+          "scope": "TOTAL_FILES",
+          "precision": "APPROXIMATE",
+          "target": 55,
+          "min": 40,
+          "max": 70,
+          "actual": 50,
+          "met": true
+        }
+      }
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "outcome": "PARTIAL",
+      "label": "尚未完全满足构建要求",
+      "note": "部分内容目标仍有缺口",
+      "quantity": {
+        "status": "MET",
+        "label": "数量已达标",
+        "scope": "TOTAL_FILES",
+        "precision": "APPROXIMATE",
+        "target": 55,
+        "min": 40,
+        "max": 70,
+        "actual": 50,
+        "acceptedMin": 40,
+        "acceptedMax": 70,
+        "display": "文件总数（含前置）：50 / 40～70 个"
+      },
+      "targets": {
+        "met": 2,
+        "partial": 1,
+        "notMet": 0,
+        "unknown": 0,
+        "waiting": 0,
+        "context": 0,
+        "parentIssues": 0
+      }
+    }
+  },
+  {
+    "name": "unknown-root-count-stays-unknown",
+    "coverage": {
+      "schemaVersion": 1,
+      "repairStatus": "NONE",
+      "repaired": [],
+      "requirements": [
+        {
+          "id": "r-0000000000000001",
+          "source": "用途目标1",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000002",
+          "source": "用途目标2",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000003",
+          "source": "用途目标3",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "ledger": []
+    },
+    "trace": {
+      "contract": {
+        "quantity": {
+          "scope": "ROOT_MODS",
+          "precision": "EXACT",
+          "target": 60,
+          "min": 60,
+          "max": 60,
+          "actual": null,
+          "met": null
+        }
+      }
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "outcome": "UNKNOWN",
+      "label": "整体结果仍待核实",
+      "note": "全局计数缺少可靠核对依据",
+      "quantity": {
+        "status": "UNVERIFIED",
+        "label": "数量待核实",
+        "scope": "ROOT_MODS",
+        "precision": "EXACT",
+        "target": 60,
+        "min": 60,
+        "max": 60,
+        "actual": null,
+        "acceptedMin": 60,
+        "acceptedMax": 60,
+        "display": "根模组数（不含自动前置）：待核实 / 60 个"
+      },
+      "targets": {
+        "met": 3,
+        "partial": 0,
+        "notMet": 0,
+        "unknown": 0,
+        "waiting": 0,
+        "context": 0,
+        "parentIssues": 0
+      }
+    }
+  },
+  {
+    "name": "draft-selection-not-final",
+    "coverage": {
+      "schemaVersion": 1,
+      "repairStatus": "NONE",
+      "repaired": [],
+      "requirements": [
+        {
+          "id": "r-0000000000000001",
+          "source": "用途目标1",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000002",
+          "source": "用途目标2",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000003",
+          "source": "用途目标3",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "ledger": []
+    },
+    "trace": {
+      "contract": {
+        "quantity": {
+          "scope": "TOTAL_FILES",
+          "precision": "APPROXIMATE",
+          "target": 55,
+          "min": 40,
+          "max": 70,
+          "actual": 50,
+          "met": true
+        }
+      },
+      "awaitingInput": true
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "outcome": "WAITING",
+      "label": "等待确认，尚非最终结果",
+      "note": "",
+      "quantity": {
+        "status": "MET",
+        "label": "数量已达标",
+        "scope": "TOTAL_FILES",
+        "precision": "APPROXIMATE",
+        "target": 55,
+        "min": 40,
+        "max": 70,
+        "actual": 50,
+        "acceptedMin": 40,
+        "acceptedMax": 70,
+        "display": "文件总数（含前置）：50 / 40～70 个"
+      },
+      "targets": {
+        "met": 3,
+        "partial": 0,
+        "notMet": 0,
+        "unknown": 0,
+        "waiting": 0,
+        "context": 0,
+        "parentIssues": 0
+      }
+    }
+  },
+  {
+    "name": "missing-canonical-local-assessment",
+    "coverage": {
+      "schemaVersion": 1,
+      "repairStatus": "NONE",
+      "repaired": [],
+      "requirements": [
+        {
+          "id": "r-0000000000000001",
+          "source": "用途目标1",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000002",
+          "source": "用途目标2",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          }
+        },
+        {
+          "id": "r-0000000000000003",
+          "source": "用途目标3",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "ledger": []
+    },
+    "trace": {
+      "contract": {
+        "quantity": {
+          "scope": "TOTAL_FILES",
+          "precision": "APPROXIMATE",
+          "target": 55,
+          "min": 40,
+          "max": 70,
+          "actual": 50,
+          "met": true
+        }
+      }
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "outcome": "UNKNOWN",
+      "label": "整体结果仍待核实",
+      "note": "部分要求仍待核对",
+      "quantity": {
+        "status": "MET",
+        "label": "数量已达标",
+        "scope": "TOTAL_FILES",
+        "precision": "APPROXIMATE",
+        "target": 55,
+        "min": 40,
+        "max": 70,
+        "actual": 50,
+        "acceptedMin": 40,
+        "acceptedMax": 70,
+        "display": "文件总数（含前置）：50 / 40～70 个"
+      },
+      "targets": {
+        "met": 2,
+        "partial": 0,
+        "notMet": 0,
+        "unknown": 1,
+        "waiting": 0,
+        "context": 0,
+        "parentIssues": 0
+      }
+    }
+  },
+  {
+    "name": "only-context-does-not-prove-theme",
+    "coverage": {
+      "schemaVersion": 1,
+      "repairStatus": "NONE",
+      "repaired": [],
+      "requirements": [
+        {
+          "id": "r-0000000000000001",
+          "source": "用途目标1",
+          "status": "CONTEXT",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "CONTEXT",
+            "label": "上下文",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000002",
+          "source": "用途目标2",
+          "status": "CONTEXT",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "CONTEXT",
+            "label": "上下文",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "ledger": []
+    },
+    "trace": {
+      "contract": {
+        "quantity": {
+          "scope": "TOTAL_FILES",
+          "precision": "APPROXIMATE",
+          "target": 55,
+          "min": 40,
+          "max": 70,
+          "actual": 50,
+          "met": true
+        }
+      }
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "outcome": "CONTEXT",
+      "label": "仅完成基础信息核对",
+      "note": "未记录可逐项核对的内容目标",
+      "quantity": {
+        "status": "MET",
+        "label": "数量已达标",
+        "scope": "TOTAL_FILES",
+        "precision": "APPROXIMATE",
+        "target": 55,
+        "min": 40,
+        "max": 70,
+        "actual": 50,
+        "acceptedMin": 40,
+        "acceptedMax": 70,
+        "display": "文件总数（含前置）：50 / 40～70 个"
+      },
+      "targets": {
+        "met": 0,
+        "partial": 0,
+        "notMet": 0,
+        "unknown": 0,
+        "waiting": 0,
+        "context": 2,
+        "parentIssues": 0
+      }
+    }
+  },
+  {
+    "name": "explicit-no-global-count",
+    "coverage": {
+      "schemaVersion": 1,
+      "repairStatus": "NONE",
+      "repaired": [],
+      "requirements": [
+        {
+          "id": "r-0000000000000001",
+          "source": "用途目标1",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000002",
+          "source": "用途目标2",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000003",
+          "source": "用途目标3",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "ledger": []
+    },
+    "trace": {
+      "contract": {
+        "quantity": null
+      }
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "outcome": "MET",
+      "label": "已核对的构建要求均满足",
+      "note": "",
+      "quantity": {
+        "status": "NO_TARGET",
+        "label": "无额外数量要求",
+        "scope": "",
+        "precision": "",
+        "target": null,
+        "min": null,
+        "max": null,
+        "actual": null,
+        "acceptedMin": null,
+        "acceptedMax": null,
+        "display": "本轮未设额外全局数量要求"
+      },
+      "targets": {
+        "met": 3,
+        "partial": 0,
+        "notMet": 0,
+        "unknown": 0,
+        "waiting": 0,
+        "context": 0,
+        "parentIssues": 0
+      }
+    }
+  },
+  {
+    "name": "missing-count-metadata-not-no-target",
+    "coverage": {
+      "schemaVersion": 1,
+      "repairStatus": "NONE",
+      "repaired": [],
+      "requirements": [
+        {
+          "id": "r-0000000000000001",
+          "source": "用途目标1",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000002",
+          "source": "用途目标2",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000003",
+          "source": "用途目标3",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "ledger": []
+    },
+    "trace": {
+      "contract": {}
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "outcome": "UNKNOWN",
+      "label": "整体结果仍待核实",
+      "note": "全局计数缺少可靠核对依据",
+      "quantity": {
+        "status": "UNVERIFIED",
+        "label": "数量待核实",
+        "scope": "",
+        "precision": "",
+        "target": null,
+        "min": null,
+        "max": null,
+        "actual": null,
+        "acceptedMin": null,
+        "acceptedMax": null,
+        "display": "历史或当前记录缺少可靠的全局数量核对数据"
+      },
+      "targets": {
+        "met": 3,
+        "partial": 0,
+        "notMet": 0,
+        "unknown": 0,
+        "waiting": 0,
+        "context": 0,
+        "parentIssues": 0
+      }
+    }
+  },
+  {
+    "name": "parent-identity-gap-not-hidden-by-child-success",
+    "coverage": {
+      "schemaVersion": 1,
+      "repairStatus": "NONE",
+      "repaired": [],
+      "requirements": [
+        {
+          "id": "r-0000000000000005",
+          "source": "用途目标5",
+          "status": "PARTIAL",
+          "mods": [],
+          "modCount": 1,
+          "missing": [
+            "required-core"
+          ],
+          "missingCount": 1,
+          "note": "",
+          "criteria": [
+            {
+              "id": "r-0000000000000001",
+              "source": "用途目标1",
+              "status": "SUPPORTING_EVIDENCE",
+              "mods": [],
+              "modCount": 1,
+              "missing": [],
+              "missingCount": 0,
+              "note": "",
+              "criteria": [],
+              "evidenceState": {
+                "code": "VERIFIED",
+                "projects": [],
+                "countsComplete": true,
+                "generation": []
+              },
+              "assessment": {
+                "schemaVersion": 1,
+                "outcome": "MET",
+                "label": "已满足",
+                "evidenceCode": "VERIFIED",
+                "evidenceLabel": "已有核对依据",
+                "userRemoved": [],
+                "cleanupRemoved": [],
+                "automaticRemoved": []
+              }
+            },
+            {
+              "id": "r-0000000000000002",
+              "source": "用途目标2",
+              "status": "SUPPORTING_EVIDENCE",
+              "mods": [],
+              "modCount": 1,
+              "missing": [],
+              "missingCount": 0,
+              "note": "",
+              "criteria": [],
+              "evidenceState": {
+                "code": "VERIFIED",
+                "projects": [],
+                "countsComplete": true,
+                "generation": []
+              },
+              "assessment": {
+                "schemaVersion": 1,
+                "outcome": "MET",
+                "label": "已满足",
+                "evidenceCode": "VERIFIED",
+                "evidenceLabel": "已有核对依据",
+                "userRemoved": [],
+                "cleanupRemoved": [],
+                "automaticRemoved": []
+              }
+            }
+          ],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "PARTIAL",
+            "label": "部分满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "ledger": []
+    },
+    "trace": {
+      "contract": {
+        "quantity": {
+          "scope": "TOTAL_FILES",
+          "precision": "APPROXIMATE",
+          "target": 55,
+          "min": 40,
+          "max": 70,
+          "actual": 50,
+          "met": true
+        }
+      }
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "outcome": "PARTIAL",
+      "label": "尚未完全满足构建要求",
+      "note": "部分内容目标仍有缺口",
+      "quantity": {
+        "status": "MET",
+        "label": "数量已达标",
+        "scope": "TOTAL_FILES",
+        "precision": "APPROXIMATE",
+        "target": 55,
+        "min": 40,
+        "max": 70,
+        "actual": 50,
+        "acceptedMin": 40,
+        "acceptedMax": 70,
+        "display": "文件总数（含前置）：50 / 40～70 个"
+      },
+      "targets": {
+        "met": 2,
+        "partial": 0,
+        "notMet": 0,
+        "unknown": 0,
+        "waiting": 0,
+        "context": 0,
+        "parentIssues": 1
+      }
+    }
+  },
+  {
+    "name": "single-approximate-target-keeps-existing-policy",
+    "coverage": {
+      "schemaVersion": 1,
+      "repairStatus": "NONE",
+      "repaired": [],
+      "requirements": [
+        {
+          "id": "r-0000000000000001",
+          "source": "用途目标1",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000002",
+          "source": "用途目标2",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000003",
+          "source": "用途目标3",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "ledger": []
+    },
+    "trace": {
+      "contract": {
+        "quantity": {
+          "scope": "TOTAL_FILES",
+          "precision": "APPROXIMATE",
+          "target": 60,
+          "min": 60,
+          "max": 60,
+          "actual": 80,
+          "met": true
+        }
+      }
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "outcome": "MET",
+      "label": "已核对的构建要求均满足",
+      "note": "",
+      "quantity": {
+        "status": "MET",
+        "label": "数量已达标",
+        "scope": "TOTAL_FILES",
+        "precision": "APPROXIMATE",
+        "target": 60,
+        "min": 60,
+        "max": 60,
+        "actual": 80,
+        "acceptedMin": 48,
+        "acceptedMax": 90,
+        "display": "文件总数（含前置）：80 / 约 60 个；当前数量策略范围 48～90 个"
+      },
+      "targets": {
+        "met": 3,
+        "partial": 0,
+        "notMet": 0,
+        "unknown": 0,
+        "waiting": 0,
+        "context": 0,
+        "parentIssues": 0
+      }
+    }
+  },
+  {
+    "name": "explicit-range-does-not-get-approximate-slack",
+    "coverage": {
+      "schemaVersion": 1,
+      "repairStatus": "NONE",
+      "repaired": [],
+      "requirements": [
+        {
+          "id": "r-0000000000000001",
+          "source": "用途目标1",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000002",
+          "source": "用途目标2",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000003",
+          "source": "用途目标3",
+          "status": "SUPPORTING_EVIDENCE",
+          "mods": [],
+          "modCount": 1,
+          "missing": [],
+          "missingCount": 0,
+          "note": "",
+          "criteria": [],
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true,
+            "generation": []
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "ledger": []
+    },
+    "trace": {
+      "contract": {
+        "quantity": {
+          "scope": "TOTAL_FILES",
+          "precision": "APPROXIMATE",
+          "target": 65,
+          "min": 60,
+          "max": 70,
+          "actual": 80,
+          "met": false
+        }
+      }
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "outcome": "PARTIAL",
+      "label": "尚未完全满足构建要求",
+      "note": "全局数量尚未达标，局部目标满足不能代替总量要求",
+      "quantity": {
+        "status": "NOT_MET",
+        "label": "数量未达标",
+        "scope": "TOTAL_FILES",
+        "precision": "APPROXIMATE",
+        "target": 65,
+        "min": 60,
+        "max": 70,
+        "actual": 80,
+        "acceptedMin": 60,
+        "acceptedMax": 70,
+        "display": "文件总数（含前置）：80 / 60～70 个"
+      },
+      "targets": {
+        "met": 3,
+        "partial": 0,
+        "notMet": 0,
+        "unknown": 0,
+        "waiting": 0,
+        "context": 0,
+        "parentIssues": 0
+      }
+    }
+  }
+]

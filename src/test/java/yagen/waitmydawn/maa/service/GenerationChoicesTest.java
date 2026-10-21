@@ -10,6 +10,16 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class GenerationChoicesTest {
+    @org.junit.jupiter.api.Test void laterCandidatesAreDeferredButExplicitRejectionsRemainBinding() {
+        var selected = Map.of("generation:nether", List.of("chosen-nether"));
+        var offered = Map.of("generation:nether", List.of("chosen-nether", "rejected-nether", "local-option"));
+        String facts = "Overhauls the Overworld and Nether terrain with new biomes";
+        assertTrue(GenerationChoices.allows(selected, offered, "later-cross-biomes", facts));
+        assertFalse(GenerationChoices.allows(selected, offered, "rejected-nether", facts));
+        assertFalse(GenerationChoices.allows(selected, offered, "local-option", "Adds a few local structures"));
+        assertTrue(GenerationChoices.allows(selected, offered, "chosen-nether", facts));
+        assertFalse(GenerationChoices.allows(selected, "later-cross-biomes", facts));
+    }
     private final ObjectMapper json = new ObjectMapper();
     private BuildIntent intent(String source) {
         var requirement = new BuildRequirement("r-0000000000000001", source, BuildRequirement.Kind.CAPABILITY,

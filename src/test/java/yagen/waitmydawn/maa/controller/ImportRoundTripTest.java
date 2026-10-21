@@ -13,6 +13,17 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class ImportRoundTripTest {
+    @Test void importConsumesVerifiedBatchVersionsWithoutSequentialLookups() {
+        var version = api.getVersionById("V1");
+        when(api.getVersionsBatch(org.mockito.ArgumentMatchers.anyCollection())).thenReturn(Map.of("V1", version));
+        clearInvocations(api);
+        var imported = parser.parse(index);
+        assertEquals(1, imported.count());
+        assertEquals("V1", imported.importedPack().files().getFirst().versionId());
+        verify(api).getVersionsBatch(Set.of("V1"));
+        verify(api, never()).getVersionById(anyString());
+    }
+
     ObjectMapper mapper = new ObjectMapper();
     ModrinthApiClient api;
     MrpackParser parser;
@@ -45,12 +56,36 @@ class ImportRoundTripTest {
         return out.toByteArray();
     }
     @Test void importPreviewAndExportKeepSecondaryFileHashesEnvironmentAndLoaderVersion() throws Exception {
+        assertImportPreviewExportRoundTrip();
+    }
+    @Test void canonicalArchiveWith130FilesAndDottedSlugsRoundTripsAgainstCapturedMetadata() throws Exception {
+        try (var input = getClass().getResourceAsStream("/fixtures/import-canonical-130.json")) {
+            assertNotNull(input);
+            var fixture = mapper.readTree(input);
+            index = (ObjectNode) fixture.path("index");
+            for (var project : fixture.path("projects")) {
+                when(api.getProjectInfo(project.path("id").asText())).thenReturn(project);
+                when(api.getProjectInfo(project.path("slug").asText())).thenReturn(project);
+            }
+            for (var version : fixture.path("versions"))
+                when(api.getVersionById(version.path("id").asText())).thenReturn(version);
+        }
+        assertEquals(130, index.path("files").size());
+        assertImportPreviewExportRoundTrip();
+    }
+    private void assertImportPreviewExportRoundTrip() throws Exception {
         var imported = parser.parse(parser.readIndex(new MockMultipartFile("file", "other-name.mrpack", "application/zip", zip(index, "maa-diagnostics.json"))));
-        assertEquals("索引包名", imported.name());
-        var graph = new DependencyGraph(); graph.allSlugs.add("fixture"); graph.selectedVersions.put("fixture", api.getVersionById("V1"));
+        assertEquals(index.path("name").asText(), imported.name());
+        var graph = new DependencyGraph();
+        var pins = new LinkedHashSet<String>();
+        for (var file : imported.importedPack().files()) {
+            graph.allSlugs.add(file.slug());
+            graph.selectedVersions.put(file.slug(), api.getVersionById(file.versionId()));
+            pins.add("vid:" + file.versionId());
+        }
         var engine = mock(DependencyEngine.class);
-        when(engine.resolveCachedResult(eq(Set.of("vid:V1")), eq("neoforge"), eq("1.21.1"), isNull()))
-                .thenReturn(new ResolutionResult(graph, ResolutionResult.Status.COMPLETE, Set.of("fixture"), List.of(), List.of(), 500, false));
+        when(engine.resolveCachedResult(eq(pins), eq("neoforge"), eq("1.21.1"), isNull()))
+                .thenReturn(new ResolutionResult(graph, ResolutionResult.Status.COMPLETE, new LinkedHashSet<>(imported.slugs()), List.of(), List.of(), 500, false));
         var users = mock(UserController.class); when(users.validateToken("one")).thenReturn(1L);
         var loaders = mock(LoaderVersionService.class);
         when(loaders.supports("neoforge", "1.21.1")).thenReturn(true);
@@ -61,15 +96,21 @@ class ImportRoundTripTest {
         request.loader = "neoforge"; request.modSlugs = imported.slugs(); request.importedPack = imported.importedPack();
         var preview = controller.previewPack("one", request);
         assertEquals(200, preview.getStatusCode().value());
-        assertEquals("V1", preview.getBody().path("nodes").get(0).path("versionId").asText());
+        assertEquals(imported.count(), preview.getBody().path("nodes").size());
+        assertEquals(pins, java.util.stream.StreamSupport.stream(preview.getBody().path("nodes").spliterator(), false)
+                .map(node -> "vid:" + node.path("versionId").asText()).collect(java.util.stream.Collectors.toSet()));
         var build = new ModpackController.BuildRequest(); build.name = imported.name(); build.loader = request.loader; build.mcVersion = request.mcVersion;
-        build.manifestId = preview.getBody().path("manifestId").asText(); build.selectedIds = List.of("P1");
+        build.manifestId = preview.getBody().path("manifestId").asText();
+        build.selectedIds = imported.importedPack().files().stream().map(ImportedPack.File::projectId).toList();
         var exported = controller.buildPack(build, "one"); assertEquals(200, exported.getStatusCode().value());
         try (var archive = new ZipInputStream(new ByteArrayInputStream(exported.getBody()))) {
             archive.getNextEntry(); var actual = mapper.readTree(archive.readAllBytes());
             assertEquals(index.path("name"), actual.path("name"));
             assertEquals(index.path("dependencies"), actual.path("dependencies"));
-            assertEquals(index.path("files"), actual.path("files"));
+            var expectedFiles = new HashSet<JsonNode>(); index.path("files").forEach(expectedFiles::add);
+            var actualFiles = new HashSet<JsonNode>(); actual.path("files").forEach(actualFiles::add);
+            assertEquals(expectedFiles, actualFiles);
+            assertEquals(index.path("files").size(), actual.path("files").size());
         }
         verify(api, never()).getLatestVersion(anyString(), anyString(), anyString());
         verify(loaders, never()).resolve(anyString(), anyString());
@@ -79,6 +120,23 @@ class ImportRoundTripTest {
         assertThrows(IllegalArgumentException.class, () -> parser.parse(index));
         setup(); ((ObjectNode) index.path("dependencies")).put("minecraft", "1.20.1");
         assertThrows(IllegalArgumentException.class, () -> parser.parse(index));
+    }
+    @Test void legalSlugPunctuationDoesNotRelaxIdsPathsHashesOrDownloadOrigins() {
+        for (String slug : List.of("alexs-mobs-1.21.1", "citadel-1.21.1-port", "fixture+addon", "fixture's-addon")) {
+            var file = importedFile(slug, "P1", "V1", "fixture.jar", metadata.path("url").asText(), "a".repeat(40));
+            var restored = mapper.readValue(mapper.writeValueAsString(file), ImportedPack.File.class);
+            assertEquals(file, restored);
+        }
+        for (String slug : List.of("../fixture", "fixture/query", "fixture?query", "fixture\nslug"))
+            assertThrows(IllegalArgumentException.class, () -> importedFile(slug, "P1", "V1", "fixture.jar", metadata.path("url").asText(), "a".repeat(40)));
+        assertThrows(IllegalArgumentException.class, () -> importedFile("fixture", "P.1", "V1", "fixture.jar", metadata.path("url").asText(), "a".repeat(40)));
+        assertThrows(IllegalArgumentException.class, () -> importedFile("fixture", "P1", "V.1", "fixture.jar", metadata.path("url").asText(), "a".repeat(40)));
+        assertThrows(IllegalArgumentException.class, () -> importedFile("fixture", "P1", "V1", "../fixture.jar", metadata.path("url").asText(), "a".repeat(40)));
+        assertThrows(IllegalArgumentException.class, () -> importedFile("fixture", "P1", "V1", "fixture.jar", "https://example.org/fixture.jar", "a".repeat(40)));
+        assertThrows(IllegalArgumentException.class, () -> importedFile("fixture", "P1", "V1", "fixture.jar", metadata.path("url").asText(), "invalid"));
+    }
+    private ImportedPack.File importedFile(String slug, String project, String version, String filename, String url, String sha1) {
+        return new ImportedPack.File(slug, project, version, filename, url, sha1, "b".repeat(128), 123, Map.of("client", "required"));
     }
     @Test void externalFilesAndOverridesAfterIndexCannotBeSilentlyDropped() throws Exception {
         assertThrows(IOException.class, () -> parser.readIndex(new MockMultipartFile("file", zip(mapper.createArrayNode(), null))));

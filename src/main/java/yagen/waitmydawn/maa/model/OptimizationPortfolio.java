@@ -117,7 +117,7 @@ public final class OptimizationPortfolio {
         if (info == null) return new Fact(slug, Side.UNKNOWN, Map.of(), false);
         var categories = new HashSet<String>(); info.path("categories").forEach(c -> categories.add(c.asText()));
         String description = info.path("description").asText() + "\n" + info.path("body").asText();
-        return new Fact(slug, side(info), classify(description), PackAddonPolicy.infrastructure(slug, info.path("title").asText(), categories));
+        return new Fact(slug, side(info), classify(description), PackAddonPolicy.infrastructure(slug, info.path("title").asText(), categories, info.path("description").asText()));
     }
     private static Side side(JsonNode info) {
         boolean client = Set.of("required", "optional").contains(info.path("client_side").asText());

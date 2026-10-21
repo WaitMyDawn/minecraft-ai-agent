@@ -19,6 +19,36 @@ session_spec.loader.exec_module(session)
 
 
 class BrowserSessionCaptureTest(unittest.TestCase):
+    def test_empty_account_log_does_not_hide_process_business_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            (work / "logs").mkdir()
+            (work / "logs/user-4.log").write_text("", encoding="utf-8")
+            (work / "logs/stdout.log").write_text("dependency resolution completed\n[Modrinth task] taskId=sample serverHttp=0\n", encoding="utf-8")
+            business, removed = report.filtered_logs(work)
+            self.assertIn("dependency resolution completed", business)
+            self.assertNotIn("[Modrinth task]", business)
+            self.assertEqual(1, removed)
+
+    def test_visible_login_session_is_used_for_followup_and_redacted(self):
+        previous = session.STATE
+        session.STATE = {"token": "earlier-session", "key": "", "secrets": []}
+        try:
+            session.remember_auth_response("/api/user/login", b'{"token":"unit-issued-session"}')
+            self.assertEqual("unit-issued-session", session.STATE["token"])
+            self.assertEqual("[REDACTED]", session.clean("unit-issued-session"))
+            session.remember_auth_response("/api/user/check-token", b'{"token":"ignored"}')
+            self.assertEqual("unit-issued-session", session.STATE["token"])
+        finally:
+            session.STATE = previous
+
+    def test_network_summary_ignores_other_runs_in_shared_process_log(self):
+        events = [{"event": "response", "path": "/api/chat/task/current/facts"}]
+        stdout = ('[Modrinth task] taskId=previous serverHttp=99\n'
+                  '[Modrinth task] taskId=current serverHttp=0\n')
+        self.assertEqual({"current"}, set(report.task_summaries(events, stdout)))
+        self.assertEqual({}, report.task_summaries([], stdout))
+
     def test_production_page_preserves_ui_and_adds_only_http_telemetry(self):
         page = session.production_page('<head></head><main>production chat</main>')
         self.assertIn('<main>production chat</main>', page)
@@ -40,6 +70,12 @@ class BrowserSessionCaptureTest(unittest.TestCase):
 
 
 class CaptureRedactionTest(unittest.TestCase):
+    def test_model_token_counts_are_not_authentication_tokens(self):
+        value = '输出token=1568，输出上限=8192，耗时ms=5583，输入token=7641 token=fixture-secret'
+        clean = capture.redact(value, [])
+        self.assertIn('输出token=1568，输出上限=8192，耗时ms=5583，输入token=7641', clean)
+        self.assertNotIn('fixture-secret', clean)
+
     def test_credentials_are_removed_before_archiving(self):
         value = 'password=fixture-secret token="fixture-token" apiKey=sk-fixtureSecret123 Bearer fixtureBearerToken '
         clean = capture.redact(value, ['fixture-secret'])
@@ -78,13 +114,13 @@ class FinalBuildReportTest(unittest.TestCase):
 
     def fixture(self):
         pack = self.work / "result/朝花夕拾.mrpack"
-        files = [{"path": f"mods/{i}.jar", "downloads": [f"https://example.invalid/{i}.jar"], "hashes": {"sha1": str(i)}} for i in range(100)]
+        files = [{"path": f"mods/{i}.jar", "downloads": [f"https://example.invalid/{i}.jar"], "hashes": {"sha1": f"{i:040x}"}} for i in range(100)]
         with zipfile.ZipFile(pack, "w") as archive:
             archive.writestr("modrinth.index.json", json.dumps({"name": "朝花夕拾", "files": files, "dependencies": {"minecraft": "1.21.1", "neoforge": "21.1.256"}}))
             archive.writestr("maa-diagnostics.json", json.dumps({"closure": {"status": "INCOMPLETE", "issues": [{"reason": "VERSION_CONFLICT"}]}}))
         result = {"reply": '<mods>jei</mods><trace>{"architect":{"ms":50,"calls":1}}</trace>',
                   "preview": {"nodes": [
-                      {"slug": "jei", "title": "JEI", "versionNumber": "1", "fileInfo": {"hashes": {"sha1": "0"}}},
+                      {"slug": "jei", "title": "JEI", "versionNumber": "1", "fileInfo": {"hashes": {"sha1": f"{0:040x}"}}},
                       {"slug": "appleskin", "title": "AppleSkin", "fileInfo": {"hashes": {"sha1": "not-exported"}}}]},
                   "download": {"sha256": hashlib.sha256(pack.read_bytes()).hexdigest(), "bytes": pack.stat().st_size}}
         (self.work / "result/browser-result.json").write_text(json.dumps(result), encoding="utf-8")
@@ -110,10 +146,92 @@ class FinalBuildReportTest(unittest.TestCase):
             self.assertNotIn(noise, log)
         for evidence in ("required-core-missing", "key-timing-error-preserved", "alexs-mobs-continued", "VERSION_CONFLICT", "429"):
             self.assertIn(evidence, log)
-        self.assertIn("未取得示例证据：appleskin", evaluation)
-        self.assertIn("海灵物语", evaluation)
+        self.assertIn("未采集最终结构化需求报告", evaluation)
+        self.assertNotIn("海灵物语", evaluation)
         self.assertIn("# 人工评估", evaluation)
         self.assertNotIn("可启动：是", evaluation)
+
+    def test_shared_production_assessments_are_consumed_without_slug_inference(self):
+        cases = json.loads((Path(__file__).resolve().parents[1] / "src/test/resources/fixtures/requirement-assessment-cases.json").read_text(encoding="utf-8"))
+        for case in cases:
+            row = case["row"]
+            rendered = report.assess({"requirements": [row]}, {"status": "VERIFIED"})
+            self.assertEqual(row["assessment"]["label"], rendered[0][1], case["name"])
+            self.assertEqual(row["assessment"]["evidenceLabel"], rendered[0][2])
+
+    def test_global_and_local_summary_uses_shared_java_payload(self):
+        cases = json.loads((Path(__file__).resolve().parents[1] / 'src/test/resources/fixtures/build-completion-cases.json').read_text(encoding='utf-8'))
+        for case in cases:
+            payload = case['expected']
+            self.assertEqual(payload, report.read_completion(payload), case['name'])
+            text = '\n'.join(report.completion_lines(dict(case['coverage'], completion=payload)))
+            self.assertIn(payload['label'], text)
+            self.assertIn(payload['quantity']['display'], text)
+        identity = cases[0]['coverage']['requirements'][0]
+        self.assertEqual('点名项目已保留', report.assess({'requirements':[identity]}, {'status':'VERIFIED'})[0][1])
+        identity['assessment']['label'] = '已满足'
+        self.assertEqual('点名项目已保留', report.assess({'requirements':[identity]}, {'status':'VERIFIED'})[0][1])
+
+    def test_missing_or_invalid_completion_does_not_infer_overall_pass(self):
+        self.assertIn('缺少统一整体结论', '\n'.join(report.completion_lines({'requirements':[]})))
+        self.assertIsNone(report.read_completion({'schemaVersion':1,'outcome':'MET','label':'全部通过'}))
+
+    def test_file_hashes_snapshot_versions_and_environment_are_independent_checks(self):
+        hashed = "a" * 40
+        index = {"files": [{"path": "mods/content.jar", "hashes": {"sha1": hashed}, "fileSize": 10}],
+                 "dependencies": {"minecraft": "1.21.1", "neoforge": "21.1"}}
+        preview = {"nodes": [{"slug": "arbitrary-content", "versionId": "exact-version", "fileInfo": {"hashes": {"sha1": hashed}, "size": 10}}]}
+        trace = {"assembly": {"versions": {"arbitrary-content": "exact-version"}, "loader": "neoforge", "mcVersion": "1.21.1"}}
+        reply = '<mods>arbitrary-content</mods>'
+        self.assertEqual("VERIFIED", report.artifact_check(index, preview, trace, reply, True)["status"])
+        preview['nodes'][0]['versionId'] = 'other-version'
+        self.assertEqual("MISMATCH", report.artifact_check(index, preview, trace, reply, True)["status"])
+        preview['nodes'][0]['versionId'] = 'exact-version'
+        index['files'][0]['hashes']['sha1'] = 'b' * 40
+        # Identical download URLs cannot override contradictory content hashes.
+        index['files'][0]['downloads'] = ['https://example.invalid/same.jar']
+        preview['nodes'][0]['fileInfo']['url'] = 'https://example.invalid/same.jar'
+        self.assertEqual("MISMATCH", report.artifact_check(index, preview, trace, reply, True)["status"])
+        index['files'][0]['hashes']['sha1'] = hashed
+        index['files'][0]['fileSize'] = 11
+        self.assertEqual("MISMATCH", report.artifact_check(index, preview, trace, reply, True)["status"])
+        index['files'][0]['fileSize'] = 10
+        trace['assembly']['mcVersion'] = '1.20.1'
+        self.assertEqual("MISMATCH", report.artifact_check(index, preview, trace, reply, True)["status"])
+        self.assertEqual("UNVERIFIED", report.artifact_check(index, preview, {}, reply, True)["status"])
+
+    def test_duplicate_file_mapping_and_pending_selection_do_not_pass_acceptance(self):
+        hashed = 'c' * 40
+        index = {'files': [{'path':'mods/one.jar', 'hashes':{'sha1':hashed}}, {'path':'mods/two.jar', 'hashes':{'sha1':hashed}}]}
+        preview = {'nodes': [{'slug':'one', 'fileInfo':{'hashes':{'sha1':hashed}}}]}
+        self.assertEqual('MISMATCH', report.artifact_check(index, preview, {}, '', True)['status'])
+        row = {'source':'任意用途', 'status':'SUPPORTING_EVIDENCE', 'assessment':{'schemaVersion':1,'outcome':'MET','label':'已满足','evidenceCode':'VERIFIED','evidenceLabel':'已有核对依据','userRemoved':[],'cleanupRemoved':[]}}
+        result = report.assess({'requirements':[row]}, {'status':'VERIFIED'}, pending=True)
+        self.assertEqual('待选择', result[0][1]);self.assertIn('尚无最终验收结论', result[0][-1])
+
+    def test_publication_uses_arbitrary_requirements_and_rejects_stale_evidence(self):
+        pack = self.work / 'result/物流试验.mrpack'
+        hashed = 'd' * 40
+        row = {'id':'r-0000000000000001','source':'任意物流需求','status':'SUPPORTING_EVIDENCE', 'mods':[{'slug':'transport-content','purpose':'传送物品','quote':'Moves items','evidenceType':'REVIEW_QUOTE'}],
+               'assessment':{'schemaVersion':1,'outcome':'MET','label':'已满足','evidenceCode':'VERIFIED','evidenceLabel':'已有核对依据','userRemoved':[],'cleanupRemoved':[]},'note':'','criteria':[]}
+        coverage = {'schemaVersion':1,'requirements':[row],'ledger':[{'targetId':row['id'],'slug':'transport-content','versionId':'V1','purpose':'传送物品','quote':'Moves items','evidenceType':'REVIEW_QUOTE','status':'VERIFIED'}]}
+        trace = {'assembly':{'versions':{'transport-content':'V1'},'roots':['transport-content'],'loader':'neoforge','mcVersion':'1.21.1'},'requirementCoverage':coverage}
+        with zipfile.ZipFile(pack, 'w') as archive:
+            archive.writestr('modrinth.index.json',json.dumps({'name':'物流试验','files':[{'path':'mods/transport.jar','hashes':{'sha1':hashed}}],'dependencies':{'minecraft':'1.21.1','neoforge':'21.1'}}))
+        result = {'reply':'<mods>transport-content</mods><requirement_report>'+json.dumps(coverage)+'</requirement_report><trace>'+json.dumps(trace)+'</trace>',
+                  'preview':{'nodes':[{'slug':'transport-content','versionId':'V1','fileInfo':{'hashes':{'sha1':hashed}}}]},
+                  'download':{'sha256':hashlib.sha256(pack.read_bytes()).hexdigest(),'bytes':pack.stat().st_size}}
+        capture_path = self.work / 'result/browser-result.json';capture_path.write_text(json.dumps(result),encoding='utf-8')
+        self.assertEqual('VERIFIED',report.publish(self.work,self.output)['artifactStatus'])
+        text=(self.output/'eval.md').read_text(encoding='utf-8')
+        for expected in ['任意物流需求','已满足','Moves items','V1','已有核对依据']:
+            self.assertIn(expected,text)
+        self.assertNotIn('100～200',text);self.assertNotIn('海灵物语',text)
+        coverage['ledger'][0]['versionId']='stale-version'
+        result['reply']='<mods>transport-content</mods><requirement_report>'+json.dumps(coverage)+'</requirement_report><trace>'+json.dumps(trace)+'</trace>'
+        capture_path.write_text(json.dumps(result),encoding='utf-8')
+        self.assertEqual('MISMATCH',report.publish(self.work,self.base/'stale')['artifactStatus'])
+        self.assertIn('导出验收未通过',(self.base/'stale/eval.md').read_text(encoding='utf-8'))
 
     def test_human_evaluation_is_never_overwritten(self):
         self.fixture()
@@ -139,14 +257,15 @@ class FinalBuildReportTest(unittest.TestCase):
             self.assertIn(expected, rows)
         self.assertIn("不能与各阶段重复相加", rows)
 
-    def test_captured_visible_text_and_screenshot_are_published(self):
+    def test_visible_text_is_embedded_without_publishing_extra_artifacts(self):
         self.fixture()
         (self.work / "result/chat-output.md").write_text("实际渲染的结果表格\nsk-SYNTHETIC_FIXTURE_ONLY", encoding="utf-8")
         png = b"\x89PNG\r\n\x1a\nfixture"
         (self.work / "result/chat-output.png").write_bytes(png)
         report.publish(self.work, self.output)
-        self.assertEqual(png, (self.output / "chat-output.png").read_bytes())
-        self.assertNotIn("sk-SYNTHETIC", (self.output / "chat-output.md").read_text(encoding="utf-8"))
+        self.assertEqual({"log.md", "eval.md", "朝花夕拾.mrpack"}, {p.name for p in self.output.iterdir()})
+        self.assertIn("实际渲染的结果表格", (self.output / "log.md").read_text(encoding="utf-8"))
+        self.assertNotIn("sk-SYNTHETIC", (self.output / "log.md").read_text(encoding="utf-8"))
         self.assertIn("## 阶段耗时", (self.output / "eval.md").read_text(encoding="utf-8"))
 
     def test_failure_does_not_fabricate_pack_or_success(self):
@@ -157,7 +276,7 @@ class FinalBuildReportTest(unittest.TestCase):
         evaluation = (self.output / "eval.md").read_text(encoding="utf-8")
         self.assertIn("未导出", evaluation)
         self.assertIn("未采集", evaluation)
-        self.assertEqual(evaluation.count("未评估（未导出）"), 8)
+        self.assertEqual(evaluation.count("未评估（未导出）"), 1)
         self.assertNotIn("部分证据，关系待核实", evaluation)
 
     def test_missing_browser_hash_does_not_claim_download_verified(self):

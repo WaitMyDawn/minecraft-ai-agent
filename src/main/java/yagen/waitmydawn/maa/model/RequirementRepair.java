@@ -12,7 +12,7 @@ public final class RequirementRepair {
                                  Set<String> blocked, BuildIntent.CountTarget target, Set<String> priorRoots,
                                  Function<Set<String>, ResolutionResult> resolve) {
         if (proposed.isEmpty()) return new Result(original, roots, "NO_QUALIFIED_CANDIDATE", List.of());
-        if (!original.isComplete()) return new Result(original, roots, "STATIC_CHECK_INCOMPLETE", List.of());
+        if (!SelectionRecovery.complete(original, roots)) return new Result(original, roots, "STATIC_CHECK_INCOMPLETE", List.of());
         var added = proposed.stream().distinct().filter(s -> !blocked.contains(s))
                 .filter(s -> !original.graph().allSlugs.contains(s)).limit(3).toList();
         if (added.isEmpty()) return new Result(original, roots, "NO_QUALIFIED_CANDIDATE", List.of());
@@ -22,7 +22,7 @@ public final class RequirementRepair {
         catch (java.util.concurrent.CancellationException canceled) { throw canceled; }
         catch (RuntimeException unavailable) { return new Result(original, roots, "TRIAL_UNVERIFIED", List.of()); }
         String rejection = "";
-        if (!trial.isComplete() || !trial.graph().allSlugs.containsAll(original.graph().allSlugs)
+        if (!SelectionRecovery.complete(trial, next) || !trial.graph().allSlugs.containsAll(original.graph().allSlugs)
                 || !trial.graph().allSlugs.containsAll(added)) rejection = "DEPENDENCY_OR_RETENTION_REJECTED";
         if (original.graph().selectedVersions.entrySet().stream().anyMatch(e -> {
             var version = trial.graph().selectedVersions.get(e.getKey());

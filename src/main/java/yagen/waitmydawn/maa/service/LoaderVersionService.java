@@ -64,6 +64,8 @@ public class LoaderVersionService {
      */
     private static final String NEOFORGE_LEGACY_METADATA_URL =
             "https://maven.neoforged.net/releases/net/neoforged/forge/maven-metadata.xml";
+    /** 独立域名的仓库镜像用于主站连接故障；只读取版本目录，不作为模组下载来源。 */
+    private static final String NEOFORGE_MIRROR_BASE = "https://neoforged.forgecdn.net/";
     private static final String FORGE_PROMOS_URL =
             "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json";
     private static final String FABRIC_LOADER_URL =
@@ -460,18 +462,33 @@ public class LoaderVersionService {
      * 而这两个是静态文件站（maven 元数据 / promotions / fabric meta），接上去只会白白排队。
      */
     private String fetchWithRetry(String url) throws Exception {
+        return fetchWithRetry(url, null);
+    }
+
+    /** 主站失败后立即切换镜像，镜像重试共用三次尝试额度，避免先耗尽同域名重试。 */
+    private String fetchWithRetry(String url, String mirror) throws Exception {
         Exception last = null;
         for (int attempt = 1; attempt <= FETCH_ATTEMPTS; attempt++) {
+            String endpoint = attempt == 1 || mirror == null ? url : mirror;
             try {
-                return fetch(url);
+                String body = fetch(endpoint);
+                if (mirror != null && parseMavenVersions(body).isEmpty())
+                    throw new IllegalArgumentException("上游未返回有效的 Maven 版本目录");
+                if (!endpoint.equals(url)) log.info("加载器版本目录已通过镜像获取: {}", endpoint);
+                return body;
             } catch (Exception e) {
                 last = e;
-                if (!retryable(e) || attempt == FETCH_ATTEMPTS) break;
+                boolean switchingSource = attempt == 1 && mirror != null;
+                if ((!switchingSource && !retryable(e)) || attempt == FETCH_ATTEMPTS) break;
+                if (switchingSource) {
+                    log.debug("加载器主站访问失败，切换镜像: {} —— {}", url, describe(e));
+                    continue;
+                }
                 long waitMs = (long) Math.pow(2, attempt - 1) * Math.max(0, retryBackoffBaseMs)
                         + (retryBackoffBaseMs > 0
                             ? java.util.concurrent.ThreadLocalRandom.current().nextLong(250) : 0);
-                log.info("拉取失败将重试（第 {}/{} 次，等 {}ms）: {} —— {}",
-                        attempt, FETCH_ATTEMPTS, waitMs, url, describe(e));
+                log.debug("拉取失败将重试（第 {}/{} 次，等 {}ms）: {} —— {}",
+                        attempt, FETCH_ATTEMPTS, waitMs, endpoint, describe(e));
                 Thread.sleep(waitMs);
             }
         }
@@ -496,7 +513,9 @@ public class LoaderVersionService {
     /** 拉一个 maven 源并解析版本号；失败记进 results 并返回空集（调用方"能拿多少算多少"）。 */
     private Set<String> fetchMavenVersions(String url, String label, List<SourceResult> results) {
         try {
-            Set<String> versions = parseMavenVersions(fetchWithRetry(url));
+            String mirror = url.startsWith("https://maven.neoforged.net/")
+                    ? NEOFORGE_MIRROR_BASE + url.substring("https://maven.neoforged.net/".length()) : null;
+            Set<String> versions = parseMavenVersions(fetchWithRetry(url, mirror));
             results.add(new SourceResult(label, true, versions.size() + " 个版本"));
             return versions;
         } catch (Exception e) {

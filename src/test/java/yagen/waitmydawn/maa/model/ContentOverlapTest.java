@@ -5,6 +5,55 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ContentOverlapTest {
+    @Test void publishedAddonAndKitchenDescriptionsDoNotBecomeGeneralRecipeViewers() throws Exception {
+        var json = new tools.jackson.databind.ObjectMapper();
+        try (var input = getClass().getResourceAsStream("/fixtures/overlap-recipe-attribution.json")) {
+            assertNotNull(input);
+            var projects = new ArrayList<ContentOverlap.Project>();
+            for (var info : json.readTree(input)) projects.add(new ContentOverlap.Project(info.path("slug").asText(),
+                    info.path("title").asText(), info.path("description").asText(), info.path("body").asText(), "", info.path("downloads").asLong()));
+            assertEquals(2, projects.size());
+            projects.add(project("general-viewer", "Browse crafting recipes", 1));
+            assertTrue(ContentOverlap.detectByDimension(projects, Set.of(), Map.of()).stream().noneMatch(g -> g.original().equals("recipe-viewer")));
+        }
+    }
+    @Test void integrationSectionsAndExternalLinkSubjectsDoNotSupplyOwnFeatureEvidence() {
+        var viewer = project("viewer", "Browse crafting recipes", 10);
+        for (String body : List.of(
+                "- [External Index](https://example.org/tools/index) - Displays recipes for the new machines.",
+                "## Integrations\nDisplays recipes in an external interface\n### More details\nShows item recipes",
+                "<h2>Compatibility</h2>\nDisplays item recipes",
+                "**Recommended mods**\nBrowse crafting recipes",
+                "Compatibility:\nShows crafting recipes",
+                "JEI: Displays crafting recipes")) {
+            var addon = new ContentOverlap.Project("arbitrary-addon", "Addon", "Adds new machines", body, "", 200);
+            assertTrue(ContentOverlap.detect(List.of(viewer, addon), Set.of()).isEmpty(), body);
+        }
+        var own = new ContentOverlap.Project("own", "Own", "Recipe interface", "## Integrations\nCompatible with external tools\n## Features\nBrowses item recipes", "", 20);
+        assertEquals(2, ContentOverlap.detect(List.of(viewer, own), Set.of()).getFirst().candidates().size());
+    }
+    @Test void specializedRecipeInterfacesAreComplementaryToGeneralViewers() {
+        var viewer = project("viewer", "Browse crafting recipes", 10);
+        for (String description : List.of("Adds a multiblock kitchen that shows recipes you can make with available ingredients",
+                "Browse food recipes", "Adds a cooking recipe browser", "Shows brewing recipes", "食材配方查询与厨房烹饪"))
+            assertTrue(ContentOverlap.detect(List.of(viewer, project("specialist", description, 100)), Set.of()).isEmpty(), description);
+        var groups = ContentOverlap.detect(List.of(viewer, project("other-viewer", "Search item recipes", 100)), Set.of());
+        assertEquals("recipe-viewer", groups.getFirst().original());
+        assertTrue(groups.getFirst().candidates().stream().allMatch(c -> !c.evidence().contains("https://")));
+    }
+    @Test void partiallyOverlappingWorldgenStillRecommendsUncoveredRealms() {
+        var projects = List.of(project("protected-nether", "Overhauls Nether terrain", 500),
+                project("protected-end", "Overhauls End terrain", 400),
+                project("multi", "Adds 50 unique biomes to the Overworld, Nether and End", 300),
+                project("unknown", "Explore 100 new biomes", 1000));
+        var groups = ContentOverlap.detectByDimension(projects, Set.of("protected-nether", "protected-end"), Map.of());
+        var selected = groups.getFirst().candidates().stream().filter(ContentOverlap.Candidate::recommended)
+                .map(ContentOverlap.Candidate::slug).collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("protected-nether", "protected-end", "multi"), selected);
+        var unknownProtected = ContentOverlap.detectByDimension(List.of(project("unknown", "Explore 100 new biomes", 1000),
+                project("overworld", "Overhauls Overworld terrain", 100)), Set.of("unknown"), Map.of()).getFirst();
+        assertTrue(unknownProtected.candidates().stream().allMatch(ContentOverlap.Candidate::recommended));
+    }
     @Test void dimensionConfirmationSeparatesKnownRealmsAndDoesNotRepeatConfirmedChoices() {
         var projects = List.of(project("nether-a", "Nether expansion with custom terrain", 100),
                 project("nether-b", "Overhauls the Nether terrain", 200),

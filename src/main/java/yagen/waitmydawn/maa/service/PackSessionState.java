@@ -18,12 +18,36 @@ import java.util.Set;
  * 模型漏说一次，用户就会以为什么都没发生。
  */
 public class PackSessionState {
+    private Map<String,Integer> familiarity = Map.of();
+    private double preferenceInfluence;
+    private final Map<String,yagen.waitmydawn.maa.model.RemainingBudgetRanking.Report> remainingRanking = new LinkedHashMap<>();
+    public Map<String,Integer> getFamiliarity() { return familiarity; }
+    public void setFamiliarity(Map<String,Integer> value) { familiarity = Map.copyOf(value); }
+    public double getPreferenceInfluence() { return preferenceInfluence; }
+    public void setPreferenceInfluence(double value) { preferenceInfluence = value; }
+    public Map<String,yagen.waitmydawn.maa.model.RemainingBudgetRanking.Report> getRemainingRanking() { return remainingRanking; }
+    private yagen.waitmydawn.maa.model.SelectionCoverage selectionCoverage;
+    public yagen.waitmydawn.maa.model.SelectionCoverage getSelectionCoverage() { return selectionCoverage; }
+    public void setSelectionCoverage(yagen.waitmydawn.maa.model.SelectionCoverage value) { selectionCoverage = value; }
+    private boolean addonSelectionEnabled;
+    private Set<String> recommendedAddonRoots = Set.of();
+    public boolean isAddonSelectionEnabled() { return addonSelectionEnabled; }
+    public void setAddonSelectionEnabled(boolean value) { addonSelectionEnabled = value; }
+    public Set<String> getRecommendedAddonRoots() { return recommendedAddonRoots; }
+    public void setRecommendedAddonRoots(Set<String> value) { recommendedAddonRoots = Set.copyOf(value); }
     private yagen.waitmydawn.maa.model.RetrievalBudget retrievalBudget;
     private Map<String, java.util.List<String>> confirmedGeneration = Map.of();
     private Map<String, String> generationFacts = Map.of();
     public yagen.waitmydawn.maa.model.RetrievalBudget getRetrievalBudget() { return retrievalBudget; }
     public void setRetrievalBudget(yagen.waitmydawn.maa.model.RetrievalBudget value) { retrievalBudget = value; }
     public Map<String, java.util.List<String>> getConfirmedGeneration() { return confirmedGeneration; }
+    private Map<String, java.util.List<String>> offeredGeneration = Map.of();
+    public Map<String, java.util.List<String>> getOfferedGeneration() { return offeredGeneration; }
+    public void setOfferedGeneration(java.util.List<yagen.waitmydawn.maa.model.ContentOverlap.Group> groups) {
+        var offered = new java.util.LinkedHashMap<String, java.util.List<String>>();
+        groups.forEach(g -> offered.put(g.original(), g.candidates().stream().map(yagen.waitmydawn.maa.model.ContentOverlap.Candidate::slug).toList()));
+        offeredGeneration = Map.copyOf(offered);
+    }
     public void setConfirmedGeneration(Map<String, java.util.List<String>> value) { confirmedGeneration = Map.copyOf(value); }
     public Map<String, String> getGenerationFacts() { return generationFacts; }
     public void setGenerationFacts(Map<String, String> value) { generationFacts = Map.copyOf(value); }

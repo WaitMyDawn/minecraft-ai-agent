@@ -7,13 +7,21 @@ import java.util.*;
 public final class PackAddonPolicy {
     private PackAddonPolicy() {}
     private static final java.util.regex.Pattern INFRASTRUCTURE = java.util.regex.Pattern.compile("(?i)\\b(?:api|library|lib)\\b");
+    private static final java.util.regex.Pattern DEVELOPER_API = java.util.regex.Pattern.compile(
+            "(?iu)^(?:(?:this (?:mod|project) is|it is)\\s+)?(?:an?\\s+)?(?:(?:util(?:ity)?|shared|common|lightweight)\\s+)?"
+                    + "(?:api|library)\\s+(?:for\\s+(?:making|creating|developing|building)\\b|(?:made|designed|intended)\\s+for\\s+(?:mod\\s+)?develop(?:ers|ment)\\b)");
     public static boolean infrastructure(String slug, String title, Set<String> categories) {
         return categories.contains("library") || INFRASTRUCTURE.matcher(slug + " " + title).find();
+    }
+    public static boolean infrastructure(String slug, String title, Set<String> categories, String description) {
+        // 只有项目自身明确声明的开发工具用途可补足缺失的库标签，依赖或兼容说明不授予该身份。
+        return infrastructure(slug, title, categories) || description != null && DEVELOPER_API.matcher(description.strip()).find();
     }
     public record Project(String id, String slug, Long downloads, Set<String> categories, String title, String versionId, String description) {
         public Project(String id, String slug, Long downloads, Set<String> categories, String title) { this(id, slug, downloads, categories, title, "", ""); }
         public Project(String id, String slug, Long downloads, Set<String> categories, String title, String versionId) { this(id, slug, downloads, categories, title, versionId, ""); }
         public Project withVersion(String versionId) { return new Project(id, slug, downloads, categories, title, versionId, description); }
+        public boolean infrastructure() { return PackAddonPolicy.infrastructure(slug, title, categories, description); }
         public static Project from(JsonNode info) {
             var categories = new HashSet<String>();
             info.path("categories").forEach(c -> categories.add(c.asText()));
@@ -23,7 +31,7 @@ public final class PackAddonPolicy {
             return new Project(info.path("id").asText(), info.path("slug").asText(), downloads, Set.copyOf(categories), info.path("title").asText(), "", text.substring(0, Math.min(600, text.length())));
         }
         public boolean content() {
-            return !id.isBlank() && !slug.isBlank() && !infrastructure(slug, title, categories)
+            return !id.isBlank() && !slug.isBlank() && !infrastructure()
                     && !categories.isEmpty();
         }
     }
@@ -76,7 +84,7 @@ public final class PackAddonPolicy {
         var byId = new HashMap<String, Project>();
         retained.stream().filter(p -> !p.id().isBlank()).forEach(p -> byId.put(p.id(), p));
         var own = retained.stream().filter(p -> p.slug().equals(candidate)).findFirst().orElse(null);
-        if (infrastructure(candidate, own == null ? "" : own.title(), own == null ? Set.of() : own.categories())) return new Assessment(List.of(), false, false);
+        if (own != null ? own.infrastructure() : infrastructure(candidate, "", Set.of())) return new Assessment(List.of(), false, false);
         boolean conflict = false;
         for (var dep : version.path("dependencies")) if (dep.path("dependency_type").asText().equals("incompatible")) {
             String id = dep.path("project_id").asText("");

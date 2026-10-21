@@ -11,6 +11,135 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class OverlapSelectionsTest {
+    @Test void confirmingFewerProjectsRefreshesGlobalQuantityAndTraceTogether() {
+        String original = draft(false);
+        var before = java.util.regex.Pattern.compile("(?s)<trace>(.*?)</trace>").matcher(original);
+        assertTrue(before.find());
+        var trace = (tools.jackson.databind.node.ObjectNode) json.readTree(before.group(1));
+        trace.withObject("/contract/quantity").put("target", 4).put("min", 4).put("max", 4).put("precision", "EXACT");
+        original = original.replace(before.group(), "<trace>" + MessageJson.write(trace) + "</trace>");
+        var selections = new OverlapSelections();
+        String ticket = prepare(selections, false, BuildCompletion.enrich(original));
+        clearInvocations(api);
+        String result = selections.admit(ticket, 1L, 2L, choices("animals-a"), OverlapSelections.Confirmed::complete);
+        var reportMatch = java.util.regex.Pattern.compile("(?s)<requirement_report>(.*?)</requirement_report>").matcher(result);
+        var traceMatch = java.util.regex.Pattern.compile("(?s)<trace>(.*?)</trace>").matcher(result);
+        assertTrue(reportMatch.find()); assertTrue(traceMatch.find());
+        var report = json.readTree(reportMatch.group(1));
+        assertEquals("PARTIAL", report.path("completion").path("outcome").asText());
+        assertEquals("NOT_MET", report.path("completion").path("quantity").path("status").asText());
+        assertEquals(2, report.path("completion").path("quantity").path("actual").asInt());
+        assertEquals(report, json.readTree(traceMatch.group(1)).path("requirementCoverage"));
+        verifyNoInteractions(api);
+    }
+
+    @org.junit.jupiter.api.Test void laterCrossDimensionCandidateRequiresAnotherCombinationChoice() {
+        var versions = Map.of("earlier", "v1", "later", "v2");
+        var assembly = new AssemblySnapshot("neoforge", "1.21.1", List.of("earlier", "later"), versions, Map.of());
+        var closure = new DependencyClosure(versions, List.of(), List.of());
+        Map<String,tools.jackson.databind.JsonNode> facts = Map.of(
+                "earlier", json.createObjectNode().put("description", "Overhauls the Nether terrain with many new biomes").put("downloads",100),
+                "later", json.createObjectNode().put("description", "Overhauls both Overworld and Nether terrain with many new biomes").put("downloads",50));
+        String reply = new OverlapSelections().prepareFromFacts(1L,2L,Map.of(),
+                "<mods>earlier,later</mods><trace>{}</trace>",assembly,closure,api,()->false,
+                Map.of("generation:nether",List.of("earlier")),PopupPreferences.defaults(),facts);
+        assertTrue(reply.contains("<replacement_options>"), reply);
+        assertTrue(reply.contains("earlier") && reply.contains("later"), reply);
+        assertFalse(reply.contains("<mods>"), reply);
+        verifyNoInteractions(api);
+    }
+    @Test void confirmationUpdatesAdmissionAndProvenanceToThePublishedSnapshotWithoutRefetching() {
+        var assembled=assembly(false);var graph=new DependencyGraph();graph.allSlugs.addAll(assembled.versions().keySet());
+        assembled.versions().forEach((slug,version) -> graph.selectedVersions.put(slug,json.createObjectNode().put("id",version)));
+        closure().requirements().forEach(r -> graph.addEdge(r.dependent(),r.dependency()));
+        var journal=new CandidateProvenance();journal.offer(graph.allSlugs,CandidateProvenance.Source.RETRIEVAL);
+        journal.checkpoint("ASSEMBLED",graph.allSlugs,graph.selectedVersions);
+        var before=journal.report(graph,graph.allSlugs,new HashSet<>(assembled.roots()),Map.of(),Map.of());
+        var admission=new CandidateAdmission.Report(graph.allSlugs.stream().sorted().map(slug -> new CandidateAdmission.Row(slug,Set.of("ROOT"),"ALLOWED",List.of(),
+                new PackAddonPolicy.Assessment(List.of(),false,false))).toList());
+        String draft=draft(false);var matcher=java.util.regex.Pattern.compile("<trace>(.*?)</trace>",java.util.regex.Pattern.DOTALL).matcher(draft);assertTrue(matcher.find());
+        var trace=(tools.jackson.databind.node.ObjectNode)json.readTree(matcher.group(1));
+        trace.set("candidateAdmission",json.valueToTree(admission));trace.set("candidateProvenance",json.valueToTree(before));
+        draft=draft.replace(matcher.group(),"<trace>"+MessageJson.write(trace)+"</trace>");
+        var selections=new OverlapSelections();String ticket=prepare(selections,false,draft);clearInvocations(api);
+        String reply=selections.admit(ticket,1L,2L,choices("animals-a"),OverlapSelections.Confirmed::complete);
+        var afterMatcher=java.util.regex.Pattern.compile("<trace>(.*?)</trace>",java.util.regex.Pattern.DOTALL).matcher(reply);assertTrue(afterMatcher.find());
+        var after=json.readTree(afterMatcher.group(1));
+        for(var row : after.path("candidateProvenance").path("projects"))
+            assertEquals(Set.of("animals-a","other").contains(row.path("slug").asText()),row.path("retained").asBoolean());
+        assertTrue(after.path("candidateProvenance").path("changes").valueStream().anyMatch(c -> c.path("stage").asText().equals("USER_SELECTION")));
+        assertTrue(after.path("candidateAdmission").path("projects").valueStream().anyMatch(r -> r.path("slug").asText().equals("animals-b") && r.path("status").asText().equals("NOT_RETAINED")));
+        verifyNoInteractions(api);
+    }
+    @Test void independentAutomaticGroupsAreResolvedWithTheManualSnapshotAndCannotBeOverridden() {
+        var fixture = new OverlapSelections(); prepare(fixture, false);
+        var old = assembly(false);
+        var versions = new LinkedHashMap<>(old.versions()); versions.put("nether-a","N1");versions.put("nether-b","N2");
+        var roots = new ArrayList<>(old.roots()); roots.addAll(List.of("nether-a","nether-b"));
+        var combined = new AssemblySnapshot(old.loader(),old.mcVersion(),roots,versions,old.origins());
+        var facts = new LinkedHashMap<String,tools.jackson.databind.JsonNode>();
+        for (String slug : List.of("animals-a","animals-b")) facts.put(slug,json.createObjectNode().put("description","Adds real-world animals").put("downloads",slug.endsWith("a") ? 100 : 10));
+        for (String slug : List.of("nether-a","nether-b")) facts.put(slug,json.createObjectNode().put("description","Overhauls Nether terrain with many new biomes").put("downloads",slug.endsWith("a") ? 100 : 10));
+        when(api.getProjectsBatch(anyCollection())).thenReturn(facts);
+        String reply = draft(false).replace("<mods>animals-a,animals-b,library,other</mods>","<mods>animals-a,animals-b,library,other,nether-a,nether-b</mods>");
+        var selections = new OverlapSelections();
+        String offered = selections.prepare(1L,2L,payload,reply,combined,new DependencyClosure(versions,closure().requirements(),List.of()),api,
+                () -> false,Map.of(),new PopupPreferences(true,true,true,false));
+        var matcher = java.util.regex.Pattern.compile("<replacement_options>(.*?)</replacement_options>",java.util.regex.Pattern.DOTALL).matcher(offered);
+        assertTrue(matcher.find(),offered); var options = json.readTree(matcher.group(1));
+        assertEquals(1,options.path("groups").size());
+        assertEquals("real-animals",options.path("groups").get(0).path("original").asText());
+        String ticket = options.path("ticket").asText();
+        var forged = new HashMap<>(payload);
+        forged.put("replacementChoices",MessageJson.write(Map.of("generation:nether",new ReplacementSelections.Selection(List.of("nether-b"),false,""))));
+        assertThrows(IllegalArgumentException.class,() -> selections.admit(ticket,1L,2L,forged,OverlapSelections.Confirmed::complete));
+        String result = selections.admit(ticket,1L,2L,choices("animals-a"),OverlapSelections.Confirmed::complete);
+        assertTrue(result.contains("<mods>animals-a,nether-a,other</mods>"),result);
+        assertTrue(result.contains("automaticGroups"),result);
+    }
+
+    @Test void disabledOverlapUsesCardDefaultsAndPrunesOrphansWithoutAnotherFetch() {
+        var fixture = new OverlapSelections(); prepare(fixture, false);
+        clearInvocations(api);
+        var result = new OverlapSelections().prepare(1L, 2L, payload, draft(false), assembly(false), closure(), api,
+                () -> false, Map.of(), new PopupPreferences(true, true, false, true));
+        assertTrue(result.contains("<mods>animals-a,other</mods>"), result);
+        assertFalse(result.contains("replacement_options"));
+        assertTrue(result.contains("已按设置采用推荐组合"));
+        assertTrue(result.contains("\"exclude\":[\"animals-b\"]"));
+        verify(api, times(1)).getProjectsBatch(anyCollection()); verifyNoMoreInteractions(api);
+    }
+    @Test void overlapSwitchDoesNotDisableGenerationConfirmation() {
+        var fixture = new OverlapSelections(); prepare(fixture, false);
+        when(api.getProjectsBatch(anyCollection())).thenReturn(Map.of(
+                "animals-a", json.readTree("{\"title\":\"A\",\"description\":\"Overhauls Nether terrain with many new biomes\",\"downloads\":100}"),
+                "animals-b", json.readTree("{\"title\":\"B\",\"description\":\"Overhauls Nether terrain with many new biomes\",\"downloads\":10}")));
+        String reply = new OverlapSelections().prepare(1L,2L,payload,draft(false),assembly(false),closure(),api,
+                () -> false, Map.of(), new PopupPreferences(true,true,false,true));
+        assertTrue(reply.contains("replacement_options"),reply);
+        assertTrue(reply.contains("generation:nether"),reply);
+    }
+
+    @Test void quantityIsRecountedAfterRemovingAnOptionalRoot() {
+        String original = draft(false);
+        var pattern = java.util.regex.Pattern.compile("<requirement_report>(.*?)</requirement_report>", java.util.regex.Pattern.DOTALL);
+        var match = pattern.matcher(original); assertTrue(match.find());
+        var report = json.readTree(match.group(1));
+        var row = (tools.jackson.databind.node.ObjectNode)report.path("requirements").get(0);
+        ((tools.jackson.databind.node.ArrayNode)row.path("mods")).addObject().put("slug","animals-a").put("purpose","生态").put("quote","Adds real-world animals");
+        row.put("modCount",2);
+        row.putObject("quantity").put("min",2).put("max",3).put("scope","RETAINED_ROOTS").put("actual",2).put("complete",true)
+                .putArray("projects").add("animals-a").add("animals-b");
+        original = original.replace(match.group(),"<requirement_report>"+MessageJson.write(report)+"</requirement_report>");
+        var selections = new OverlapSelections(); String ticket = prepare(selections,false,original);
+        String result = selections.admit(ticket,1L,2L,choices("animals-a"),OverlapSelections.Confirmed::complete);
+        var after = pattern.matcher(result);assertTrue(after.find());
+        var updated = json.readTree(after.group(1)).path("requirements").get(0);
+        assertEquals(1,updated.path("quantity").path("actual").asInt());
+        assertEquals("PARTIAL",updated.path("status").asText());
+        assertEquals("animals-a",updated.path("quantity").path("projects").get(0).asText());
+    }
+
     @Test void partialMetadataStillOffersConfirmedOverlapInsteadOfDiscardingSuccessfulDescriptions() {
         var first = json.createObjectNode().put("title", "Animals A").put("description", "Adds real-world animals");
         var second = json.createObjectNode().put("title", "Animals B").put("description", "Adds real-world animals");
@@ -97,6 +226,28 @@ class OverlapSelectionsTest {
                 + "</trace><build_report>" + MessageJson.write(new BuildPresentation.Report(1, 4, Map.of("mobs", 2), List.of()))
                 + "</build_report><requirement_report>" + MessageJson.write(coverage) + "</requirement_report><constraints>"
                 + new AgentContractCodec().write(BuildConstraints.empty()) + "</constraints>";
+    }
+    @Test void verifiedGoalUsesSameDefaultsInCardsAndAutomaticSelectionButRemainsOptional() {
+        prepare(new OverlapSelections(), false);
+        String original = draft(false);
+        var matcher = java.util.regex.Pattern.compile("<requirement_report>(.*?)</requirement_report>", java.util.regex.Pattern.DOTALL).matcher(original);
+        assertTrue(matcher.find());
+        var coverage = (tools.jackson.databind.node.ObjectNode) json.readTree(matcher.group(1));
+        coverage.putArray("ledger").addObject().put("targetId", "r-0000000000000001").put("slug", "animals-b")
+                .put("versionId", "V2").put("status", "VERIFIED");
+        original = original.replace(matcher.group(), "<requirement_report>" + MessageJson.write(coverage) + "</requirement_report>");
+        var selections = new OverlapSelections();
+        String pending = selections.prepare(1L, 2L, payload, original, assembly(false), closure(), api);
+        var optionsMatcher = java.util.regex.Pattern.compile("<replacement_options>(.*?)</replacement_options>", java.util.regex.Pattern.DOTALL).matcher(pending);
+        assertTrue(optionsMatcher.find()); var options = json.readTree(optionsMatcher.group(1));
+        assertEquals(2, options.path("recommendedChoices").path("real-animals").path("slugs").size());
+        assertTrue(options.path("groups").get(0).path("candidates").valueStream().allMatch(c -> c.path("recommended").asBoolean()));
+        String automatic = new OverlapSelections().prepare(1L, 2L, payload, original, assembly(false), closure(), api,
+                () -> false, Map.of(), new PopupPreferences(true, true, false, true));
+        assertTrue(automatic.contains("<mods>animals-a,animals-b,library,other</mods>"));
+        assertFalse(automatic.contains("replacement_options"));
+        String manual = selections.admit(options.path("ticket").asText(), 1L, 2L, choices("animals-a"), OverlapSelections.Confirmed::complete);
+        assertTrue(manual.contains("<mods>animals-a,other</mods>"));
     }
     private String prepare(OverlapSelections selections, boolean core) {
         return prepare(selections, core, draft(core));

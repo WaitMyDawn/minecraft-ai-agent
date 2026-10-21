@@ -79,6 +79,25 @@ class EmailAuthFlowTest {
                 new MailService(provider(null), false, "", "MAA"));      // 默认：邮件未配置
     }
 
+    @Test void popupSettingsAreOwnerBoundStrictAndReturnedByTokenRefresh() {
+        User user = new User("1003", "fixture", new PasswordHasher(1).hash(PW));
+        user.setEmail(EMAIL);
+        org.springframework.test.util.ReflectionTestUtils.setField(user, "id", 41L);
+        byEmail.put(EMAIL, user);
+        when(userRepo.findById(41L)).thenReturn(Optional.of(user));
+        var login = controller.login(Map.of("account","1003","password",PW));
+        String token = (String) login.getBody().get("token");
+        assertNotNull(token);
+        assertEquals(yagen.waitmydawn.maa.model.PopupPreferences.defaults(),login.getBody().get("selectionPreferences"));
+        assertEquals(401,controller.updateProfile("wrong",Map.of("popup.overlap","false")).getStatusCode().value());
+        assertEquals(400,controller.updateProfile(token,Map.of("popup.overlap","no")).getStatusCode().value());
+        assertTrue(user.getSelectionPreferences().overlap());
+        var saved = controller.updateProfile(token,Map.of("popup.overlap","false","popup.generation","false"));
+        assertEquals(200,saved.getStatusCode().value());
+        assertEquals(new yagen.waitmydawn.maa.model.PopupPreferences(true,true,false,false),saved.getBody().get("selectionPreferences"));
+        assertEquals(saved.getBody().get("selectionPreferences"),controller.checkToken(token).getBody().get("selectionPreferences"));
+    }
+
     private static ObjectProvider<JavaMailSender> provider(JavaMailSender sender) {
         return new ObjectProvider<>() {
             @Override public JavaMailSender getObject() {

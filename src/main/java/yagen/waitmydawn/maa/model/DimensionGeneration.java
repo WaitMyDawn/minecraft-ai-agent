@@ -98,20 +98,24 @@ public final class DimensionGeneration {
     }
     public static String evidence(Goal goal, String quote) {
         if (quote == null || !WorldGenerationPolicy.findings(quote).isEmpty()) return "";
-        for (String sentence : quote.split("[.!?。！？;；\\n]+|[,，](?=\\s*(?i:add|introduc|overhaul|revamp|reshape|transform|新增|添加|增加|重塑))|\\s+(?i:and|while|but|whereas)\\s+(?=(?i:add|introduc|overhaul|revamp|reshape|transform|featur|includ))|并且|但是|并(?=新增|添加|增加|提供|改造|重塑)|同时")) {
-            if (!richSentence(sentence) || !realmMention(goal.dimension(), sentence)) continue;
-            String primary = sentence.split("(?i)\\b(?:featuring|including|with)\\b", 2)[0];
-            if (!realms(primary).isEmpty() && !realmMention(goal.dimension(), primary)) continue;
-            // 群系数量不能分摊为每个被提及维度的大规模改造；局部建筑重制也不是维度生成。
-            if (realms(sentence).size() > 1 && !pattern("(?:overhaul|revamp|reshape|transform)\\w*|(?:each|both|every)\\b|分别|各个|每个").matcher(sentence).find()) continue;
-            return sentence.trim();
+        for (var statement : ProjectBehavior.statements(quote)) {
+            if (statement.scope() != ProjectBehavior.Scope.OWN) continue;
+            for (String sentence : statement.quote().split("[,，](?=\\s*(?i:add|introduc|overhaul|revamp|reshape|transform|新增|添加|增加|重塑))|\\s+(?i:and|while|but|whereas)\\s+(?=(?i:add|introduc|overhaul|revamp|reshape|transform|featur|includ))|并且|但是|并(?=新增|添加|增加|提供|改造|重塑)|同时")) {
+                if (!richSentence(sentence) || !realmMention(goal.dimension(), sentence)) continue;
+                String primary = sentence.split("(?i)\\b(?:featuring|including|with)\\b", 2)[0];
+                if (!realms(primary).isEmpty() && !realmMention(goal.dimension(), primary)) continue;
+                // 群系数量不能分摊为每个被提及维度的大规模改造；局部建筑重制也不是维度生成。
+                if (realms(sentence).size() > 1 && !pattern("(?:overhaul|revamp|reshape|transform)\\w*|(?:each|both|every)\\b|分别|各个|每个").matcher(sentence).find()) continue;
+                return sentence.trim();
+            }
         }
         return "";
     }
     /** 总体丰富度用于候选准入；跨维度总数仍不能证明各维度分别达到核心覆盖。 */
     public static String richEvidence(String facts) {
         if (facts == null || !WorldGenerationPolicy.findings(facts).isEmpty()) return "";
-        for (String sentence : facts.split("[.!?。！？;；\\n]+")) if (richSentence(sentence)) return sentence.trim();
+        for (var statement : ProjectBehavior.statements(facts))
+            if (statement.scope() == ProjectBehavior.Scope.OWN && richSentence(statement.quote())) return statement.quote();
         return "";
     }
     private static boolean richSentence(String sentence) {

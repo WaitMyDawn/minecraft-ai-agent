@@ -1,0 +1,33 @@
+{
+  "source": "eval/results/final/20261020-q01-closed-retry-fixed/log.md",
+  "recordedVersion": 1,
+  "approvedCount": 41,
+  "rejectedCount": 109,
+  "allowBackfill": false,
+  "reasonCounts": {
+    "OFF_TOPIC": 103,
+    "INSUFFICIENT_EVIDENCE": 3,
+    "DUPLICATE_FUNCTION": 2,
+    "CONSTRAINT": 1
+  },
+  "samples": [
+    {
+      "slug": "dark-doppelganger",
+      "reason": "OFF_TOPIC",
+      "explanation": "仅增加一个Boss，未提供法术、装备或学派扩展。",
+      "fact": "Dark Doppelganger - Irons Spells And Spellbooks Addon Summon a boss that looks just like you"
+    },
+    {
+      "slug": "spells-gone-wrong",
+      "reason": "OFF_TOPIC",
+      "explanation": "仅让自身法术造成伤害，属惩罚性调整而非内容扩展。",
+      "fact": "Spells Gone Wrong (Iron's Spells N Spellbooks) This mod allows you to take damage from your own casted spells and configure new spell features. Only works on spells added by Iron's Spells N Spellbooks [Configurable]"
+    },
+    {
+      "slug": "shoulder-surfing-iron-spells-integration",
+      "reason": "OFF_TOPIC",
+      "explanation": "纯客户端镜头联动，不补充铁魔法内容。",
+      "fact": "Shoulder Surfing: Iron's Spells Integration A simple client-side mod that integrates Shoulder Surfing Reloaded and Iron's Spells 'n Spellbooks, making the camera automatically follow your crosshair whenever you cast a spell—via spellbooks, normal spells, or quick cast."
+    }
+  ]
+}

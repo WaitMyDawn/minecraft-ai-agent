@@ -15,6 +15,300 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class StructuredAssemblyTest {
+    @Test void addonVersionReferencesAreBatchedAndUnresolvedConflictsRemainBlocked() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        var first = new ChatController.CandidateMod("first-addon", "First Addon", "An addon", 1000);
+        var second = new ChatController.CandidateMod("second-addon", "Second Addon", "An addon", 900);
+        var v1 = json.createObjectNode();
+        v1.putArray("dependencies").addObject().put("version_id", "core-v1").put("dependency_type", "required");
+        var v2 = json.createObjectNode();
+        var deps = v2.putArray("dependencies");
+        deps.addObject().put("version_id", "core-v2").put("dependency_type", "required");
+        deps.addObject().put("version_id", "unknown-conflict").put("dependency_type", "incompatible");
+        when(api.getLatestCompatibleVersionBySlug(eq(first.slug), anyString(), anyString())).thenReturn(v1);
+        when(api.getLatestCompatibleVersionBySlug(eq(second.slug), anyString(), anyString())).thenReturn(v2);
+        when(api.getVersionsBatch(anyCollection())).thenReturn(Map.of(
+                "core-v1", json.createObjectNode().put("project_id", "Core1234"),
+                "core-v2", json.createObjectNode().put("project_id", "Core1234")));
+        List<ChatController.CandidateMod> found = ReflectionTestUtils.invokeMethod(controller, "verifyAddonRelations",
+                "core", "Core1234", List.of(first, second), "neoforge", "1.21.1", new RetrievalBudget());
+        assertEquals(List.of(first), found);
+        assertEquals("REQUIRED_CORE", first.addonEvidence);
+        verify(api).getVersionsBatch(Set.of("core-v1", "core-v2", "unknown-conflict"));
+        verify(api, never()).getVersionById(anyString());
+        verify(api, never()).prefetchVersions(anyCollection());
+    }
+
+    @Test void addonReferenceBatchCancellationPropagates() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        var addon = new ChatController.CandidateMod("extra", "Extra", "An addon", 1000);
+        var version = json.createObjectNode();
+        version.putArray("dependencies").addObject().put("version_id", "core-v1").put("dependency_type", "required");
+        when(api.getLatestCompatibleVersionBySlug(anyString(), anyString(), anyString())).thenReturn(version);
+        when(api.getVersionsBatch(anyCollection())).thenThrow(new java.util.concurrent.CancellationException());
+        assertThrows(java.util.concurrent.CancellationException.class, () -> ReflectionTestUtils.invokeMethod(controller,
+                "verifyAddonRelations", "core", "Core1234", List.of(addon), "neoforge", "1.21.1", new RetrievalBudget()));
+    }
+
+    @Test void applicabilityBatchRespectsTheExistingReferenceBudgetAndKeepsMissingFactsUnverified() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        var version = json.createObjectNode().put("id", "addon-version").put("project_id", "Addon123");
+        var deps = version.putArray("dependencies");
+        for (int i = 0; i < 30; i++) deps.addObject().put("version_id", "ref-%02d".formatted(i)).put("dependency_type", "required");
+        var project = new PackAddonPolicy.Project("Addon123", "extra", 1000L, Set.of("food"), "Extra", "", "An addon for cooking-core");
+        when(api.getVersionsBatch(anyCollection())).thenReturn(Map.of());
+        Map<String, AddonApplicability.Check> checks = ReflectionTestUtils.invokeMethod(controller, "auditAddonApplicability",
+                Set.of("extra"), Set.of("extra"), Map.of(), Map.of("extra", version),
+                new LinkedHashMap<>(Map.of("extra", project)), new RetrievalBudget(), "neoforge", "1.21.1");
+        assertEquals("DEPENDENCIES_UNVERIFIED", checks.get("extra").status());
+        verify(api).getVersionsBatch(argThat(ids -> ids.size() == 24 && ids.contains("ref-00") && !ids.contains("ref-24")));
+        verify(api, never()).getVersionById(anyString());
+        verify(api, never()).prefetchVersions(anyCollection());
+    }
+
+    @Test void applicabilityRemovalAlsoPrunesAnOptionalCompatibilityRootThatWouldReintroduceIt() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        prepareAddonPool(json.writeValueAsString(new ReviewResponse(1, List.of("create-good", "create-vetoed"), List.of(), false)));
+        var metadata = new HashMap<String, tools.jackson.databind.JsonNode>();
+        var versions = new HashMap<String, tools.jackson.databind.JsonNode>();
+        var dependencies = Map.of("create-good", List.of("create", "extra-content"), "create-vetoed", List.of("create", "create-good"));
+        for (String slug : List.of("create", "create-good", "create-vetoed", "extra-content")) {
+            String description = slug.equals("create-good") ? "An addon for create" : slug.equals("create-vetoed")
+                    ? "Compatibility for create-good" : "Adds ordinary content";
+            var info = json.createObjectNode().put("id", "p-" + slug).put("slug", slug).put("title", slug).put("description", description);
+            info.putArray("categories").add("technology"); metadata.put(slug, info);
+            var version = json.createObjectNode().put("id", "v-" + slug).put("project_id", "p-" + slug);
+            var required = version.putArray("dependencies");
+            dependencies.getOrDefault(slug, List.of()).forEach(dep -> required.addObject().put("project_id", "p-" + dep).put("dependency_type", "required"));
+            versions.put(slug, version);
+        }
+        when(api.getProjectInfo(anyString())).thenAnswer(call -> metadata.get(call.getArgument(0)));
+        when(api.getProjectsBatch(anyCollection())).thenAnswer(call -> {
+            var found = new LinkedHashMap<String, tools.jackson.databind.JsonNode>();
+            for (String ref : (Collection<String>) call.getArgument(0)) {
+                String slug = ref.startsWith("p-") ? ref.substring(2) : ref;
+                if (metadata.containsKey(slug)) found.put(ref, metadata.get(slug));
+            }
+            return found;
+        });
+        when(api.getLatestCompatibleVersionBySlug(anyString(), anyString(), anyString())).thenAnswer(call -> versions.get(call.getArgument(0)));
+        java.util.function.Function<Set<String>, ResolutionResult> resolve = roots -> {
+            var graph = new DependencyGraph(); var pending = new ArrayDeque<>(roots);
+            while (!pending.isEmpty()) {
+                String slug = pending.removeFirst(); if (!graph.allSlugs.add(slug)) continue;
+                graph.selectedVersions.put(slug, versions.get(slug)); graph.projectAliases.put("p-" + slug, slug);
+                for (String dep : dependencies.getOrDefault(slug, List.of())) { graph.addEdge(slug, dep); pending.add(dep); }
+            }
+            return new ResolutionResult(graph, ResolutionResult.Status.COMPLETE, roots, List.of(), List.of(), 500, false);
+        };
+        when(engine.resolveCachedResult(anySet(), anyString(), anyString(), any())).thenAnswer(call -> resolve.apply(call.getArgument(0)));
+        when(engine.resolveUsingFacts(anySet(), anyString(), anyString(), any(), anyMap())).thenAnswer(call -> resolve.apply(call.getArgument(0)));
+        String result = assemble(addonIntent(), "create");
+        assertTrue(result.contains("<mods>create</mods>"), result);
+        assertFalse(result.contains("ADMISSION_BLOCKED"), result);
+        assertTrue(result.contains("OPTIONAL_DEPENDENCY_CONFLICT"), result);
+    }
+
+    @Test void finalQuantityTrialHonorsVetoesAndUsesRetainedVersionFacts() {
+        var json=new tools.jackson.databind.ObjectMapper(); var metadata=new LinkedHashMap<String,PackAddonPolicy.Project>();
+        var versions=new LinkedHashMap<String,tools.jackson.databind.JsonNode>();var generationFacts=new LinkedHashMap<String,String>();
+        for(String slug : List.of("core","allowed","vetoed")) {
+            metadata.put(slug,new PackAddonPolicy.Project("id-"+slug,slug,1000L,Set.of("utility"),slug,"","Content"));
+            var v=json.createObjectNode().put("id","version-"+slug).put("project_id","id-"+slug);v.putArray("dependencies");versions.put(slug,v);generationFacts.put(slug,"Content");
+        }
+        var graph=new DependencyGraph();graph.allSlugs.add("core");graph.selectedVersions.put("core",versions.get("core"));
+        var baseline=new ResolutionResult(graph,ResolutionResult.Status.COMPLETE,Set.of("core"),List.of(),List.of(),500,false);
+        var plan=intent(BuildIntent.Mode.NEW,List.of("core"),List.of(),new BuildIntent.CountTarget(2,BuildIntent.CountScope.ROOT_MODS,BuildIntent.Precision.EXACT));
+        when(engine.resolveUsingFacts(anySet(),anyString(),anyString(),any(),anyMap())).thenAnswer(call -> {
+            Set<String> roots=call.getArgument(0);assertEquals(Set.of("core","allowed"),roots);
+            Map<String,tools.jackson.databind.JsonNode> held=call.getArgument(4);assertEquals("version-core",held.get("core").path("id").asText());
+            var trial=new DependencyGraph();trial.allSlugs.addAll(roots);roots.forEach(s -> trial.selectedVersions.put(s,versions.get(s)));
+            return new ResolutionResult(trial,ResolutionResult.Status.COMPLETE,roots,List.of(),List.of(),500,false);
+        });
+        FinalQuantityCoordinator.Result result=ReflectionTestUtils.invokeMethod(controller,"coordinateFinalQuantities",plan,baseline,Set.of("core"),Set.of("core"),Set.of(),Set.of("vetoed"),
+                Set.of(),new PackSessionState(),Map.of(),metadata,Map.of(),List.of(),Map.of(),Map.of(),Map.of(),List.of("vetoed","allowed"),Map.of(),generationFacts,Set.of(),"",Set.of(),
+                Map.of(),List.of(),Map.of(),new RetrievalBudget(),KnowledgeRule.SourceType.ADMIN,"fixture-session",false,0);
+        assertEquals(Set.of("core","allowed"),result.roots());assertEquals("WITHIN_POLICY",result.report().status());
+        verify(engine,times(1)).resolveUsingFacts(anySet(),anyString(),anyString(),any(),anyMap());verifyNoInteractions(api);
+    }
+    @Test void inactiveRelationStageCannotExpandThePermittedSubjectScope() {
+        var json=new tools.jackson.databind.ObjectMapper();var graph=new DependencyGraph();graph.allSlugs.add("core");
+        graph.selectedVersions.put("core",json.createObjectNode().put("id","V1").put("project_id","Core1234"));
+        var baseline=new ResolutionResult(graph,ResolutionResult.Status.COMPLETE,Set.of("core"),List.of(),List.of(),500,false);
+        var plan=intent(BuildIntent.Mode.NEW,List.of("core"),List.of(),new BuildIntent.CountTarget(1,BuildIntent.CountScope.ROOT_MODS,BuildIntent.Precision.EXACT));
+        Object result=ReflectionTestUtils.invokeMethod(controller,"completePackRelations",new RequirementExecution(List.of()),plan,baseline,Set.of("core"),
+                new LinkedHashMap<String,ChatController.CandidateMod>(),new LinkedHashMap<String,PackAddonPolicy.Project>(),Set.of(),null,
+                new RetrievalBudget(),new CandidateProvenance(),KnowledgeRule.SourceType.ADMIN,"fixture-session");
+        RequirementExecution.Report report=ReflectionTestUtils.invokeMethod(result,"report");
+        assertTrue(report.evaluatedVersions().isEmpty());assertEquals("NOT_REQUESTED",report.status());
+        verifyNoInteractions(api,engine);
+    }
+    @Test void relationStageDoesNotLegitimizeContentImplicitlyIntroducedByAnEarlierAddon() {
+        var json=new tools.jackson.databind.ObjectMapper();var graph=new DependencyGraph();
+        var metadata=new LinkedHashMap<String,PackAddonPolicy.Project>();
+        for(String slug : List.of("cooking-core","addon","introduced-content")) {
+            graph.allSlugs.add(slug);var version=json.createObjectNode().put("id","version-"+slug).put("project_id","id-"+slug);
+            version.putArray("dependencies");graph.selectedVersions.put(slug,version);
+            metadata.put(slug,new PackAddonPolicy.Project("id-"+slug,slug,1L,Set.of("food"),slug,"",slug.equals("addon") ? "An addon for cooking-core" : "Content"));
+        }
+        ((tools.jackson.databind.node.ObjectNode)graph.selectedVersions.get("addon")).putArray("dependencies").addObject()
+                .put("project_id","id-introduced-content").put("dependency_type","required");
+        graph.addEdge("addon","introduced-content");
+        var requirement=new BuildRequirement("r-0000000000000001","扩展包内联动",BuildRequirement.Kind.PACK_INTEGRATIONS,List.of(),List.of(),List.of("cooking-core"));
+        var roots=Set.of("cooking-core","addon");var baseline=new ResolutionResult(graph,ResolutionResult.Status.COMPLETE,roots,List.of(),List.of(),500,false);
+        Object result=ReflectionTestUtils.invokeMethod(controller,"completePackRelations",new RequirementExecution(List.of(requirement)),
+                intent(BuildIntent.Mode.NEW,List.of("cooking-core","addon"),List.of(),new BuildIntent.CountTarget(2,BuildIntent.CountScope.ROOT_MODS,BuildIntent.Precision.EXACT)),baseline,roots,
+                new LinkedHashMap<String,ChatController.CandidateMod>(),metadata,Set.of(),null,new RetrievalBudget(),new CandidateProvenance(),KnowledgeRule.SourceType.ADMIN,"fixture-session");
+        RequirementExecution.Report report=ReflectionTestUtils.invokeMethod(result,"report");
+        assertEquals("SUBJECT_ADMISSION_REJECTED",report.status());
+        assertFalse(((String)ReflectionTestUtils.invokeMethod(result,"pause")).isEmpty());
+        verifyNoInteractions(engine);verify(api,never()).search(anyString(),anyInt(),anyString());
+    }
+    @Test void nonDedicatedAddonReceivesFinalEvidenceAndTheSameSelectionCard() {
+        var json=new tools.jackson.databind.ObjectMapper();
+        var core=json.createObjectNode().put("slug","cooking-core").put("id","Core1234").put("title","Cooking Core").put("description","Adds cooking");
+        core.putArray("categories").add("food");
+        var addon=json.createObjectNode().put("slug","cooking-extra").put("id","Extra123").put("title","Cooking Extra").put("description","An addon for cooking-core");
+        addon.putArray("categories").add("food");
+        var infos=Map.of("cooking-core",core,"Core1234",core,"cooking-extra",addon,"Extra123",addon);
+        when(api.getProjectsBatch(anyCollection())).thenAnswer(call -> {
+            var facts=new LinkedHashMap<String,tools.jackson.databind.JsonNode>();
+            for(String ref : (Collection<String>)call.getArgument(0))if(infos.containsKey(ref))facts.put(ref,infos.get(ref));return facts;
+        });
+        var graph=new DependencyGraph();graph.allSlugs.addAll(Set.of("cooking-core","cooking-extra"));graph.addEdge("cooking-extra","cooking-core");
+        var coreVersion=json.createObjectNode().put("id","Vcore001").put("project_id","Core1234");coreVersion.putArray("dependencies");
+        var addonVersion=json.createObjectNode().put("id","Vextra01").put("project_id","Extra123");
+        addonVersion.putArray("dependencies").addObject().put("project_id","Core1234").put("dependency_type","required");
+        graph.selectedVersions.put("cooking-core",coreVersion);graph.selectedVersions.put("cooking-extra",addonVersion);
+        when(api.getLatestCompatibleVersionBySlug(anyString(),anyString(),anyString())).thenAnswer(call -> graph.selectedVersions.get(call.getArgument(0)));
+        when(engine.resolveCachedResult(anySet(),anyString(),anyString(),any())).thenReturn(new ResolutionResult(graph,ResolutionResult.Status.COMPLETE,
+                graph.allSlugs,List.of(),List.of(),500,false));
+        var state=new PackSessionState();
+        var plan=intent(BuildIntent.Mode.NEW,List.of("cooking-core","cooking-extra"),List.of(),new BuildIntent.CountTarget(2,BuildIntent.CountScope.ROOT_MODS,BuildIntent.Precision.EXACT));
+        String reply=ReflectionTestUtils.invokeMethod(controller,"processAndAssembleBlueprint",new AgentContractCodec().write(plan),"","只加入点名模组",
+                "fixture-key","fixture-session",state,Set.<String>of(),KnowledgeRule.SourceType.ADMIN,new AiAgentService.AgentCallResult("",1,1,10,10),"1.21.1","neoforge",null);
+        assertTrue(reply.contains("<mods>cooking-core,cooking-extra</mods>"),reply);
+        assertTrue(reply.contains("UNIFIED_ADMISSION"),reply);assertTrue(reply.contains("ADDON_RELATION"),reply);
+        assertTrue(state.getFinishedAssembly().origins().get("cooking-extra").contains("ADDON"));
+        var selections=new AddonSelections(new OverlapSelections());
+        String offered=selections.prepare(1L,2L,Map.of("uuid","fixture-session","prompt","只加入点名模组"),reply,state.getFinishedAssembly(),
+                state.getFinishedClosure(),api,()->false,Map.of(),PopupPreferences.defaults(),state.getRecommendedAddonRoots(),state.getSelectionCoverage());
+        assertTrue(offered.contains("\"kind\":\"ADDONS\""),offered);assertTrue(offered.contains("addons:cooking-core"),offered);
+        clearInvocations(api);
+        Map<String,AddonApplicability.Check> checks=ReflectionTestUtils.invokeMethod(controller,"auditAddonApplicability",Set.of("cooking-core"),graph.allSlugs,
+                Map.of(),graph.selectedVersions,new LinkedHashMap<String,PackAddonPolicy.Project>(),new RetrievalBudget(10),"neoforge","1.21.1");
+        assertTrue(checks.containsKey("cooking-extra"));
+        verify(api,never()).getLatestCompatibleVersionBySlug(anyString(),anyString(),anyString());
+    }
+    @Test void evidenceOnlyReviewUsesHeldFactsAndCannotAddOrRemoveProjects() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        String id = "r-0000000000000099";
+        var criterion = new RequirementCriterion("物流", BuildRequirement.Kind.CAPABILITY,List.of(),List.of(),List.of());
+        var requirement = new BuildRequirement(id,"物流",BuildRequirement.Kind.CAPABILITY,List.of(),List.of(),List.of(),List.of(),
+                SelectionPreferences.DEFAULT,List.of(criterion));
+        var graph = new DependencyGraph();graph.allSlugs.add("pipes");graph.selectedVersions.put("pipes",json.createObjectNode().put("id","version-pipes"));
+        var facts=Map.of("pipes","Moves items through pipes");
+        var report=RequirementCoverage.assess(List.of(requirement),List.of(),graph,Set.of("pipes"),Map.of(),Map.of(),"NONE",List.of());
+        var review=new RequirementReview(id,List.of(),"",List.of(new CriterionReview("物流",
+                List.of(new RequirementReview.Contribution("pipes","Moves items through pipes","物流")),"")));
+        // 越界选择不获得执行权限；独立可核对的已有项目引用仍可提供用途依据。
+        String response=json.writeValueAsString(new ReviewResponse(1,List.of("foreign"),List.of(),true,List.of(review)));
+        when(agents.criticPools(anyString(),anyString(),anySet(),anyInt())).thenReturn(new AiAgentService.AgentCallResult(response,1,1,10,10));
+        Object followup=ReflectionTestUtils.invokeMethod(controller,"reviewMissingEvidence",List.of(requirement),report,facts,
+                Set.of("previously-approved"),Set.of("pipes"),Set.of(),"proof-fixture","fixture-key");
+        List<RequirementReview> updates=ReflectionTestUtils.invokeMethod(followup,"updates");
+        Set<String> eligible=ReflectionTestUtils.invokeMethod(followup,"eligible");
+        assertEquals(Set.of("previously-approved"),eligible);
+        assertEquals("pipes",updates.getFirst().criteria().getFirst().evidence().getFirst().slug());
+        verify(agents,times(1)).criticPools(argThat(s -> s.contains("approved=[]") && s.contains("Moves items through pipes")),
+                eq("fixture-key"),eq(Set.of()),eq(0));
+        verifyNoInteractions(api,engine);
+    }
+    @Test void remainingRankingReservesExplicitOpportunitiesThenUsesDiversityWithoutNetworkOrAgents() {
+        var core=new ChatController.CandidateMod("core","Core","",1);core.category="magic";core.hitTerms.add("spells");
+        var required=new ChatController.CandidateMod("required","Required","",1);required.category="magic";required.hitTerms.add("spells");required.finalScore=1;
+        var same=new ChatController.CandidateMod("same","Same","",1000);same.category="magic";same.hitTerms.add("spells");same.finalScore=100;
+        var fresh=new ChatController.CandidateMod("fresh","Fresh","",100);fresh.category="adventure";fresh.hitTerms.add("ruins");fresh.finalScore=95;
+        var state=new PackSessionState();
+        List<String> order=ReflectionTestUtils.invokeMethod(controller,"rankRemaining",List.of("same","required","fresh"),List.of(core,required,same,fresh),
+                Set.of("core"),Map.of("required",Set.of("r-0000000000000001")),Map.of(),state,false,List.of());
+        assertEquals(List.of("required","fresh","same"),order);
+        assertEquals(List.of("required"),state.getRemainingRanking().get("approved").priorities());
+        verifyNoInteractions(api,agents,engine);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0, 1, 2})
+    void explicitAddonRangeCanExceedTheFivePerCoreDefaultWithoutExceedingItsUpperBound(int selectionMode) {
+        boolean popup = selectionMode > 0;
+        var json = new tools.jackson.databind.ObjectMapper();
+        var slugs = java.util.stream.IntStream.range(0,12).mapToObj(i -> "create-extra-"+i).toList();
+        prepareAddonPool(json.writeValueAsString(new ReviewResponse(1,slugs,List.of(),false)));
+        var hits = json.createObjectNode(); var array = hits.putArray("hits");
+        slugs.forEach(slug -> array.addObject().put("slug",slug).put("title",slug).put("description","An addon for create").put("downloads",1000));
+        when(api.search(anyString(),anyInt(),anyString())).thenReturn(hits);
+        when(api.getProjectInfo(anyString())).thenAnswer(call -> {
+            String slug = call.getArgument(0);
+            var info = json.createObjectNode().put("id","p-"+slug).put("slug",slug).put("title",slug).put("description","An addon for create");
+            info.putArray("categories").add("technology"); return info;
+        });
+        when(api.getLatestCompatibleVersionBySlug(anyString(),anyString(),anyString())).thenAnswer(call -> {
+            String slug = call.getArgument(0);
+            var v = json.createObjectNode().put("id","v-"+slug).put("project_id","p-"+slug);
+            var deps = v.putArray("dependencies");
+            if (!slug.equals("create")) deps.addObject().put("project_id","p-create").put("dependency_type","required");
+            return v;
+        });
+        when(engine.resolveCachedResult(anySet(),anyString(),anyString(),any())).thenAnswer(call -> {
+            Set<String> roots = call.getArgument(0); var graph = new DependencyGraph();graph.allSlugs.addAll(roots);
+            for (String slug : roots) graph.selectedVersions.put(slug,api.getLatestCompatibleVersionBySlug(slug,"neoforge","1.21.1"));
+            return new ResolutionResult(graph,ResolutionResult.Status.COMPLETE,roots,List.of(),List.of(),500,false);
+        });
+        var base = addonIntent();
+        var r = new BuildRequirement("r-0000000000000001","补充create附属6-8个",BuildRequirement.Kind.ADDONS,List.of(),List.of(),List.of("create"));
+        var plan = new BuildIntent(1,base.mode(),base.reply(),base.name(),base.environment(),base.count(),base.mustHave(),base.add(),base.remove(),base.exclude(),
+                base.expandAddons(),base.replacementPolicy(),base.searchIntents(),base.excludedCategories(),base.maxDownloads(),base.constraintChanges(),List.of(r));
+        var state = new PackSessionState(); state.setAddonSelectionEnabled(popup);
+        when(engine.resolveUsingFacts(anySet(),anyString(),anyString(),any(),anyMap())).thenAnswer(call -> {
+            Set<String> roots=call.getArgument(0); var graph=new DependencyGraph();graph.allSlugs.addAll(roots);
+            roots.forEach(slug -> graph.selectedVersions.put(slug,api.getLatestCompatibleVersionBySlug(slug,"1.21.1","neoforge")));
+            if (selectionMode == 2) graph.selectedVersions.put("create",json.createObjectNode().put("id","changed-version").put("project_id","p-create"));
+            return new ResolutionResult(graph,ResolutionResult.Status.COMPLETE,roots,List.of(),List.of(),500,false);
+        });
+        String output = ReflectionTestUtils.invokeMethod(controller,"processAndAssembleBlueprint",new AgentContractCodec().write(plan),"create","需求",
+                "fixture-key","fixture-session",state,Set.<String>of(),KnowledgeRule.SourceType.ADMIN,
+                new AiAgentService.AgentCallResult("",1,1,10,10),"1.21.1","neoforge",null);
+        if (popup) {
+            var selection=new AddonSelections(new OverlapSelections());var payload=Map.of("uuid","fixture-session","prompt","需求");
+            output += "<constraints>"+new AgentContractCodec().write(BuildConstraints.empty())+"</constraints>";
+            String offered=selection.prepare(1L,2L,payload,output,state.getFinishedAssembly(),state.getFinishedClosure(),api,()->false,Map.of(),
+                    PopupPreferences.defaults(),state.getRecommendedAddonRoots(),state.getSelectionCoverage());
+            var matcher=java.util.regex.Pattern.compile("<replacement_options>(.*?)</replacement_options>",java.util.regex.Pattern.DOTALL).matcher(offered);
+            assertTrue(matcher.find(),offered);var options=json.readTree(matcher.group(1));
+            assertEquals(selectionMode == 1 ? 12 : 8,options.path("groups").get(0).path("candidates").size(),offered);
+            var chosen=new HashMap<>(payload);chosen.put("replacementChoices",json.writeValueAsString(options.path("recommendedChoices")));
+            output=selection.admit(options.path("ticket").asText(),1L,2L,chosen,api,()->false,AddonSelections.Confirmed::complete);
+        }
+        var match = java.util.regex.Pattern.compile("<requirement_report>(.*?)</requirement_report>",java.util.regex.Pattern.DOTALL).matcher(output);
+        assertTrue(match.find(),output);
+        assertEquals(8,json.readTree(match.group(1)).path("requirements").get(0).path("quantity").path("actual").asInt());
+        assertTrue(output.contains("<mods>"),output);
+        verify(agents,times(1)).criticPools(anyString(),anyString(),anySet(),anyInt());
+    }
+
+    @Test void duplicateApprovalsDoNotTriggerAnotherModelCallOrRestoreVetoedCandidates() {
+        prepareAddonPool("""
+                {"schemaVersion":1,"approved":["create-good","create-vetoed","create-good","create-vetoed"],
+                 "rejected":[{"slug":"create-vetoed","reason":"OFF_TOPIC","explanation":"unrelated"}],
+                 "allowBackfill":false,"requirements":[]}
+                """);
+        String result = assemble(addonIntent(), "create");
+        assertTrue(result.contains("<mods>create,create-good</mods>"), result);
+        assertFalse(result.contains("审核员（Critic）的输出未通过校验"), result);
+        assertTrue(result.contains("\"allowBackfill\":false"), result);
+        verify(agents, times(1)).criticPools(anyString(), anyString(), anySet(), anyInt());
+    }
+
     @Test void tailStagesSeparateValidationPresentationAndSerializationWithoutInventingARepair() {
         var context = new yagen.waitmydawn.maa.runtime.DelegationContext(1000);
         var plan = intent(BuildIntent.Mode.NEW, List.of("ordinary-core"), List.of(),
@@ -23,12 +317,13 @@ class StructuredAssemblyTest {
         yagen.waitmydawn.maa.runtime.DelegationContext.runWith(context, () -> output.set(assemble(plan, "")));
         assertTrue(output.get().contains("<mods>ordinary-core</mods>"), output.get());
         var titles = context.progress().snapshot().stream().map(yagen.waitmydawn.maa.runtime.BuildProgress.Entry::title).toList();
-        var tail = List.of("解析依赖与协调版本", "核对需求覆盖与数量", "复核最终附属与生成准入",
+        var tail = List.of("解析依赖与协调版本", "核对需求覆盖与数量", "协调主体配额与剩余数量", "核对联动后的最终数量", "复核最终附属与生成准入",
                 "整理类别与依赖问题", "核对逐项目标与用途证据", "汇总构建来源与诊断", "序列化构建结果");
         assertEquals(tail, titles.subList(titles.indexOf(tail.getFirst()), titles.size()));
         context.progress().finish();
         assertTrue(context.progress().snapshot().stream().allMatch(entry -> entry.endedAt() != null));
         verifyNoInteractions(agents);
+        verify(engine,never()).resolveUsingFacts(anySet(),anyString(),anyString(),any(),anyMap());
     }
 
     @Test void partialAdmissionFactsStillBlockAnUnrequestedExtremePresetAndRemainReusable() {
@@ -331,6 +626,66 @@ class StructuredAssemblyTest {
                 """));
         when(agents.criticPools(anyString(), anyString(), anySet(), anyInt()))
                 .thenReturn(new AiAgentService.AgentCallResult(decision, 1, 1, 10, 10));
+    }
+
+    @Test void versionTwoLocalMismatchDoesNotRemoveApprovalForOtherGoals() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        String id = "r-0000000000000001";
+        var base = addonIntent();
+        var requirement = new BuildRequirement(id, "扩充机械动力附属", BuildRequirement.Kind.ADDONS,
+                List.of("create"), List.of(), List.of("create"));
+        var plan = new BuildIntent(1, base.mode(), base.reply(), base.name(), base.environment(), base.count(), base.mustHave(),
+                base.add(), base.remove(), base.exclude(), base.expandAddons(), base.replacementPolicy(), base.searchIntents(),
+                base.excludedCategories(), base.maxDownloads(), base.constraintChanges(), List.of(requirement));
+        var local = new ReviewDecision.Rejection("create-vetoed", ReviewDecision.Reason.OFF_TOPIC, "局部落选",
+                new ReviewDecision.Authority(ReviewDecision.Scope.GOAL, id, "Rejected addon", "", ""));
+        prepareAddonPool(json.writeValueAsString(new ReviewResponse(2, List.of("create-good", "create-vetoed"), List.of(local), true,
+                List.of(new RequirementReview(id, List.of(), "")), new ReviewDecision.Backfill(ReviewDecision.BackfillBasis.ALLOW, ""))));
+        String result = assemble(plan, "create");
+        String mods = result.split("<mods>")[1].split("</mods>")[0];
+        assertTrue(mods.contains("create-good"), result); assertTrue(mods.contains("create-vetoed"), result);
+        var trace = json.readTree(result.split("<trace>")[1].split("</trace>")[0]);
+        assertFalse(trace.path("criticDegraded").asBoolean(true));
+        assertEquals("create-vetoed", trace.path("reviewEvidenceRecovery").path("authority").path("localVetoes").path(id).get(0).asText());
+        assertEquals(0, trace.path("reviewEvidenceRecovery").path("authority").path("confirmedGlobalVetoes").size());
+    }
+
+    @Test void invalidPoolExhaustionDoesNotPoisonAValidatedVersionTwoRepair() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        String first = json.writeValueAsString(new ReviewResponse(2, List.of("create-good"), List.of(), false, List.of(),
+                new ReviewDecision.Backfill(ReviewDecision.BackfillBasis.POOL_EXHAUSTED, "")));
+        String repair = json.writeValueAsString(new ReviewResponse(2, List.of("create-good", "create-vetoed"), List.of(), true, List.of(),
+                new ReviewDecision.Backfill(ReviewDecision.BackfillBasis.ALLOW, "")));
+        prepareAddonPool(first);
+        when(agents.criticPools(anyString(), anyString(), anySet(), anyInt())).thenReturn(
+                new AiAgentService.AgentCallResult(first, 1, 1, 10, 10).forReview(2), new AiAgentService.AgentCallResult(repair, 1, 1, 10, 10).forReview(2));
+        String result = assemble(addonIntent(), "create");
+        String mods = result.split("<mods>")[1].split("</mods>")[0];
+        assertTrue(mods.contains("create-good"), result); assertTrue(mods.contains("create-vetoed"), result);
+        assertTrue(result.contains("BACKFILL_POOL_NOT_EXHAUSTED"), result);
+        var trace = json.readTree(result.split("<trace>")[1].split("</trace>")[0]);
+        assertTrue(trace.path("review").path("allowBackfill").asBoolean());
+        assertFalse(trace.path("reviewEvidenceRecovery").path("authority").path("backfillForbidden").asBoolean(true));
+        assertEquals(2, trace.path("reviewEvidenceRecovery").path("authority").path("expectedVersion").asInt());
+        verify(agents, times(2)).criticPools(anyString(), anyString(), anySet(), anyInt());
+    }
+
+    @Test void versionTwoVerifiedConflictRemainsBlockedDuringBackfill() {
+        var json = new tools.jackson.databind.ObjectMapper();
+        var veto = new ReviewDecision.Rejection("create-vetoed", ReviewDecision.Reason.CONFLICT, "声明与核心冲突",
+                new ReviewDecision.Authority(ReviewDecision.Scope.PACK, "", "Incompatible with create", "", "create"));
+        prepareAddonPool(json.writeValueAsString(new ReviewResponse(2, List.of("create-good"), List.of(veto), true, List.of(),
+                new ReviewDecision.Backfill(ReviewDecision.BackfillBasis.ALLOW, ""))));
+        when(api.search(anyString(), anyInt(), anyString())).thenReturn(json.readTree("""
+                {"hits":[{"slug":"create-good","title":"Good addon","downloads":10000},
+                  {"slug":"create-vetoed","title":"Rejected addon","description":"Incompatible with create","downloads":100000}]}
+                """));
+        String result = assemble(addonIntent(), "create");
+        String mods = result.split("<mods>")[1].split("</mods>")[0];
+        assertTrue(mods.contains("create-good"), result); assertFalse(mods.contains("create-vetoed"), result);
+        var trace = json.readTree(result.split("<trace>")[1].split("</trace>")[0]);
+        assertFalse(trace.path("criticDegraded").asBoolean(true));
+        assertEquals("create-vetoed", trace.path("reviewEvidenceRecovery").path("authority").path("confirmedGlobalVetoes").get(0).asText());
     }
 
     @Test void explicitlyNamedBridgeWithMissingPartnerPausesBeforeDependencyAssembly() {

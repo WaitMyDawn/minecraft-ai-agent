@@ -7,6 +7,28 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ReplacementSelectionsTest {
+    @Test void automaticGenerationUsesTheSameDefaultsAndExcludesRejectedCandidates() {
+        var pending = generationPending(new RetrievalBudget());
+        var result = selections.recommend(pending);
+        assertTrue(result.intent().mustHave().contains("nether-a"));
+        assertTrue(result.intent().exclude().contains("nether-b"));
+        assertEquals(List.of("nether-a"), result.pending().generation().selected().get("generation:nether"));
+        String ticket = selections.put(pending);
+        var explicit = selections.resume(ticket, 1L, generationPayload("nether-a"));
+        assertEquals(explicit.intent(), result.intent());
+        assertEquals(explicit.constraints(), result.constraints());
+    }
+    @Test void automaticReplacementNeverDropsUnverifiedOrEmptyRequiredGroups() {
+        var empty = new ReplacementSelections.Pending(1L, ReplacementSelections.snapshot(base), intent,
+                BuildConstraints.empty().apply(intent, Set.of()).constraints(), null, List.of(),
+                List.of(new RequiredModAlternatives.Group("missing", List.of(), true)));
+        assertThrows(IllegalArgumentException.class, () -> selections.recommend(empty));
+        var unknown = new RequiredModAlternatives.Candidate("candidate", "C", "", "", 10, 100, "移植");
+        var unverified = new ReplacementSelections.Pending(1L, empty.snapshot(), intent, empty.constraints(), null, List.of(),
+                List.of(new RequiredModAlternatives.Group("missing", List.of(unknown), false)));
+        assertThrows(IllegalArgumentException.class, () -> selections.recommend(unverified));
+    }
+
     @Test @org.junit.jupiter.api.Timeout(5)
     void pendingGenerationTicketsDoNotHoldTheOnlyBuildWorker() throws Exception {
         var tasks = new DelegationTasks(true, 5000, 1, 8);

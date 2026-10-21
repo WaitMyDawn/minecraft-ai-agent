@@ -23,10 +23,10 @@ public final class AgentContractCodec {
     private static final java.util.Set<String> KNOWN_FIELDS = java.util.Set.of(
             "schemaVersion", "mode", "reply", "name", "environment", "mcVersion", "loader", "changeRequested",
             "min", "max", "requirements", "criteria", "id", "source", "kind", "projects", "capabilities", "addonCores", "searches", "preferences", "popularity", "freshness", "releaseRequirements", "releaseCapabilities",
-            "count", "value", "scope", "precision", "mustHave", "add", "remove", "exclude", "expandAddons",
+            "quantity", "count", "value", "scope", "precision", "mustHave", "add", "remove", "exclude", "expandAddons",
             "replacementPolicy", "searchIntents", "category", "weight", "keywords", "excludedCategories", "maxDownloads",
             "constraintChanges", "clearCount", "allowSlugs", "allowCategories", "replacementPolicyChanged", "maxDownloadsChanged", "approved", "rejected",
-            "slug", "reason", "explanation", "allowBackfill", "evidence", "quote", "purpose", "gap", "status", "message", "operationId", "tool", "applied", "issues", "code");
+            "slug", "reason", "explanation", "allowBackfill", "authority", "targetId", "requestQuote", "relatedSlug", "backfill", "basis", "evidence", "quote", "purpose", "gap", "status", "message", "operationId", "tool", "applied", "issues", "code");
     private static final int MAX_JSON_LENGTH = 1_048_576;
     private final JsonMapper mapper = JsonMapper.builder()
             .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,
@@ -75,8 +75,13 @@ public final class AgentContractCodec {
         // 历史需求没有逐项检索计划；空计划保留旧语义，不编造用途或授予新增权限。
         if (tree != null && tree.path("requirements").isArray()) for (var entry : tree.path("requirements"))
             if (entry instanceof tools.jackson.databind.node.ObjectNode requirement) {
+                if (!requirement.has("quantity")) requirement.set("quantity", mapper.valueToTree(requirement.path("criteria").isEmpty() && localQuantityTarget(requirement)
+                        ? RequirementQuantity.fromSource(requirement.path("source").asText()) : null));
                 if (!requirement.has("searches")) requirement.putArray("searches");
                 if (!requirement.has("preferences")) requirement.set("preferences", mapper.valueToTree(SelectionPreferences.DEFAULT));
+                for (var child : requirement.path("criteria"))
+                    if (child instanceof tools.jackson.databind.node.ObjectNode criterion && !criterion.has("quantity"))
+                        criterion.set("quantity", mapper.valueToTree(localQuantityTarget(criterion) ? RequirementQuantity.fromSource(criterion.path("source").asText()) : null));
                 for (var child : requirement.path("criteria"))
                     if (child instanceof tools.jackson.databind.node.ObjectNode criterion && !criterion.has("preferences"))
                         criterion.set("preferences", mapper.valueToTree(SelectionPreferences.fromSource(criterion.path("source").asText())));
@@ -94,8 +99,114 @@ public final class AgentContractCodec {
             count.set("max", count.get("value"));
         }
     }
+    private boolean localQuantityTarget(tools.jackson.databind.JsonNode target) {
+        return !target.path("kind").asText().equals("CHANGE")
+                && (!target.path("kind").asText().equals("GENERAL") || !target.path("searches").isEmpty());
+    }
     public ReviewDecision readReviewDecision(String json) { return read(json, ReviewDecision.class); }
     public ReviewResponse readReviewResponse(String json) { return read(json, ReviewResponse.class); }
+    private void migrateReview(tools.jackson.databind.JsonNode tree) {
+        if (!(tree instanceof tools.jackson.databind.node.ObjectNode object) || !tree.path("schemaVersion").isIntegralNumber()
+                || tree.path("schemaVersion").asInt() != 1) return;
+        // v1 缺少作用域和来源，保持原有全包否决及补位语义，不能由缺省迁移授予新权限。
+        if (!object.has("backfill")) object.set("backfill", mapper.valueToTree(ReviewDecision.Backfill.LEGACY));
+        if (!object.path("backfill").equals(mapper.valueToTree(ReviewDecision.Backfill.LEGACY)))
+            throw failure(ReviewResponse.class, FailureKind.SEMANTIC, "backfill.version");
+        for (var item : object.path("rejected")) if (item instanceof tools.jackson.databind.node.ObjectNode rejection) {
+            if (!rejection.has("authority")) rejection.set("authority", mapper.valueToTree(ReviewDecision.Authority.LEGACY));
+            if (!rejection.path("authority").equals(mapper.valueToTree(ReviewDecision.Authority.LEGACY)))
+                throw failure(ReviewResponse.class, FailureKind.SEMANTIC, "authority.version");
+        }
+    }
+    public record FragmentIssue(String pointer, String code) {}
+    public record ReviewFragments(java.util.List<RequirementReview> requirements, java.util.Set<String> vetoes,
+                                  java.util.Set<String> contradictoryVetoes, boolean backfillForbidden, java.util.List<FragmentIssue> issues,
+                                  int schemaVersion, java.util.List<ReviewDecision.Rejection> rejections,
+                                  ReviewDecision.Backfill backfill, java.util.Set<String> approvals) {}
+
+    /** 完整JSON中的报告片段和限制可独立验证；片段恢复不授予批准或补位权限。 */
+    public ReviewFragments readReviewFragments(String json, java.util.Set<String> candidates) {
+        checkInput(json, ReviewResponse.class);
+        var tree = mapper.readTree(json);
+        migrateReview(tree);
+        var fields = java.util.Set.of("schemaVersion", "approved", "rejected", "allowBackfill", "requirements", "backfill");
+        if (!tree.isObject() || tree.propertyStream().anyMatch(e -> !fields.contains(e.getKey()))
+                || !tree.path("schemaVersion").isIntegralNumber() || !java.util.Set.of("1", "2").contains(tree.path("schemaVersion").asText())
+                || !tree.path("approved").isArray() || tree.path("approved").size() > ContractRules.MAX_MODS
+                || !tree.path("rejected").isArray() || tree.path("rejected").size() > ContractRules.MAX_MODS
+                || !tree.path("allowBackfill").isBoolean())
+            throw failure(ReviewResponse.class, FailureKind.STRUCTURE, "fragments.root");
+        var issues = new java.util.ArrayList<FragmentIssue>();
+        var vetoes = new java.util.LinkedHashSet<String>();
+        var rejections = new java.util.ArrayList<ReviewDecision.Rejection>();
+        for (int i = 0; i < tree.path("rejected").size(); i++) {
+            try {
+                var veto = mapper.treeToValue(tree.path("rejected").get(i), ReviewDecision.Rejection.class);
+                if (candidates.contains(veto.slug())) { rejections.add(veto); if (veto.global()) vetoes.add(veto.slug()); }
+                else fragmentIssue(issues, "/rejected/" + i, "OUTSIDE_CANDIDATES");
+            } catch (RuntimeException invalid) {
+                fragmentIssue(issues, "/rejected/" + i, "INVALID_REJECTION");
+                String ref = tree.path("rejected").get(i).path("slug").asText();
+                if (candidates.contains(ref)) vetoes.add(ref);
+            }
+        }
+        var rows = new java.util.ArrayList<RequirementReview>();
+        var contradictory = new java.util.LinkedHashSet<String>();
+        var approvals = new java.util.LinkedHashSet<String>();
+        for (var approved : tree.path("approved"))
+            if (approved.isTextual()) {
+                if (candidates.contains(approved.asText())) approvals.add(approved.asText());
+                if (vetoes.contains(approved.asText())) contradictory.add(approved.asText());
+            }
+        ReviewDecision.Backfill backfill = null;
+        try { backfill = mapper.treeToValue(tree.path("backfill"), ReviewDecision.Backfill.class); }
+        catch (RuntimeException invalid) { fragmentIssue(issues, "/backfill", "INVALID_BACKFILL"); }
+        var input = tree.path("requirements");
+        if (input.isMissingNode()) return new ReviewFragments(java.util.List.of(), java.util.Set.copyOf(vetoes),
+                java.util.Set.copyOf(contradictory), !tree.path("allowBackfill").asBoolean(), java.util.List.copyOf(issues),
+                tree.path("schemaVersion").asInt(), java.util.List.copyOf(rejections), backfill, java.util.Set.copyOf(approvals));
+        if (!input.isArray() || input.size() > 64) {
+            fragmentIssue(issues, "/requirements", "INVALID_REPORT");
+        } else {
+            int totalChildren = 0;
+            var ids = new java.util.HashMap<String, Integer>();
+            for (var row : input) ids.merge(row.path("id").asText(), 1, Integer::sum);
+            for (int i = 0; i < input.size(); i++) {
+                var row = input.get(i);
+                String pointer = "/requirements/" + i;
+                if (!row.isObject() || ids.getOrDefault(row.path("id").asText(), 0) != 1) {
+                    fragmentIssue(issues, pointer, "INVALID_OR_DUPLICATE_REQUIREMENT"); continue;
+                }
+                try {
+                    var base = ((tools.jackson.databind.node.ObjectNode) row).deepCopy();
+                    var children = base.remove("criteria");
+                    base.putArray("criteria");
+                    var parent = mapper.treeToValue(base, RequirementReview.class);
+                    if (children == null) children = mapper.createArrayNode();
+                    if (!children.isArray() || children.size() > 16 || (totalChildren += children.size()) > 128) {
+                        fragmentIssue(issues, pointer + "/criteria", "INVALID_CRITERIA"); continue;
+                    }
+                    var sources = new java.util.HashMap<String, Integer>();
+                    for (var child : children) sources.merge(child.path("source").asText(), 1, Integer::sum);
+                    var kept = new java.util.ArrayList<CriterionReview>();
+                    for (int j = 0; j < children.size(); j++) {
+                        try {
+                            var child = mapper.treeToValue(children.get(j), CriterionReview.class);
+                            if (sources.getOrDefault(child.source(), 0) != 1) throw new IllegalArgumentException();
+                            kept.add(child);
+                        } catch (RuntimeException invalid) { fragmentIssue(issues, pointer + "/criteria/" + j, "INVALID_CRITERION"); }
+                    }
+                    rows.add(new RequirementReview(parent.id(), parent.evidence(), parent.gap(), kept));
+                } catch (RuntimeException invalid) { fragmentIssue(issues, pointer, "INVALID_REQUIREMENT"); }
+            }
+        }
+        return new ReviewFragments(java.util.List.copyOf(rows), java.util.Set.copyOf(vetoes),
+                java.util.Set.copyOf(contradictory), !tree.path("allowBackfill").asBoolean(), java.util.List.copyOf(issues),
+                tree.path("schemaVersion").asInt(), java.util.List.copyOf(rejections), backfill, java.util.Set.copyOf(approvals));
+    }
+    private static void fragmentIssue(java.util.List<FragmentIssue> issues, String pointer, String code) {
+        if (issues.size() < 128) issues.add(new FragmentIssue(pointer, code));
+    }
     /** 用途报告与选模权限分别校验；只从完整、无重复键的 JSON 中隔离已知报告字段。 */
     public ReviewResponse readReviewSelection(String json) {
         checkInput(json, ReviewResponse.class);
@@ -112,9 +223,10 @@ public final class AgentContractCodec {
         var before = readReviewSelection(original);
         var after = readReviewSelection(repaired);
         if (!before.approved().equals(after.approved()) || !before.rejected().equals(after.rejected())
-                || before.allowBackfill() != after.allowBackfill())
+                || before.allowBackfill() != after.allowBackfill() || !before.backfill().equals(after.backfill())
+                || before.schemaVersion() != after.schemaVersion())
             throw new ValidationException(new Failure("ReviewResponse", FailureKind.SEMANTIC, "repair.selection", "",
-                    "仅修正requirements时不得改变approved、rejected或allowBackfill；保留原选模权限"));
+                    "仅修正requirements时不得改变schemaVersion、approved、rejected/authority、allowBackfill或backfill；保留原选模权限"));
     }
     public ToolResult readToolResult(String json) { return read(json, ToolResult.class); }
 
@@ -127,6 +239,7 @@ public final class AgentContractCodec {
         checkInput(json, type);
         try {
             var tree = mapper.readTree(json);
+            if (type == ReviewDecision.class || type == ReviewResponse.class) migrateReview(tree);
             if ((type == ReviewDecision.class || type == ReviewResponse.class)
                     && tree instanceof tools.jackson.databind.node.ObjectNode object && !object.has("requirements"))
                 object.putArray("requirements");
@@ -140,7 +253,11 @@ public final class AgentContractCodec {
                     throw new ValidationException(new Failure(type.getSimpleName(), FailureKind.SEMANTIC, "count", "/count",
                             "NEW/EMPTY 的 count 必须是对象；仅 EDIT/CLARIFY/REJECT 可为 null。仅点名集合的新建可用其去重大小作为 ROOT_MODS 单值目标，必要前置另计；不要改动用户明确给出的数量。"));
             }
+            int repeatedApprovals = type == ReviewResponse.class ? normalizeApprovals(tree) : 0;
+            if (type == ReviewResponse.class) normalizeRejections(tree);
             T result = mapper.treeToValue(tree, type);
+            if (repeatedApprovals > 0) yagen.waitmydawn.maa.logging.MaaLog.app(
+                    "Critic 批准列表规范化：合并 " + repeatedApprovals + " 个重复引用，仍执行候选、否决及证据校验");
             return ContractRules.required(result, "root");
         } catch (ValidationException invalid) { throw invalid; }
         catch (RuntimeException e) {
@@ -178,6 +295,32 @@ public final class AgentContractCodec {
                         + "；未列入枚举的玩法保留 source 和 searches，capabilities 可为空，不能创造新枚举";
             throw new ValidationException(new Failure(type.getSimpleName(), FailureKind.STRUCTURE, field,
                     pointer.isEmpty() ? "" : "/" + String.join("/", pointer), guidance));
+        }
+    }
+
+    /** 仅完全相同的批准引用可幂等合并；无效条目及否决仍严格校验。 */
+    private int normalizeApprovals(tools.jackson.databind.JsonNode tree) {
+        if (!(tree instanceof tools.jackson.databind.node.ObjectNode object)
+                || !(object.get("approved") instanceof tools.jackson.databind.node.ArrayNode approved)
+                || approved.size() > ContractRules.MAX_MODS) return 0;
+        var unique = new java.util.LinkedHashSet<String>();
+        for (var value : approved) {
+            if (!value.isTextual()) return 0;
+            unique.add(value.asText());
+        }
+        int duplicates = approved.size() - unique.size();
+        if (duplicates > 0) object.set("approved", mapper.valueToTree(java.util.List.copyOf(unique)));
+        return duplicates;
+    }
+    private void normalizeRejections(tools.jackson.databind.JsonNode tree) {
+        if (!(tree instanceof tools.jackson.databind.node.ObjectNode object)
+                || !tree.path("rejected").isArray() || tree.path("rejected").size() > ContractRules.MAX_MODS) return;
+        var unique = new java.util.LinkedHashSet<tools.jackson.databind.JsonNode>();
+        tree.path("rejected").forEach(unique::add);
+        int removed = tree.path("rejected").size() - unique.size();
+        if (removed > 0) {
+            object.set("rejected", mapper.valueToTree(unique));
+            yagen.waitmydawn.maa.logging.MaaLog.app("Critic 否决列表规范化：合并 " + removed + " 个完全相同的条目，仍执行候选及互斥校验");
         }
     }
     private static void checkReviewEvidence(tools.jackson.databind.JsonNode tree, Class<?> type) {

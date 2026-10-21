@@ -6,6 +6,55 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ReviewResponseTest {
+    @Test void repeatedApprovalsAreIdempotentButVetoesAndOrderRemainAuthoritative() {
+        var codec = new AgentContractCodec();
+        String raw = """
+                {"schemaVersion":1,"approved":["second","blocked","first","second","blocked"],
+                 "rejected":[{"slug":"blocked","reason":"OFF_TOPIC","explanation":"unrelated"}],"allowBackfill":false,"requirements":[]}
+                """;
+        var response = codec.readReviewResponse(raw);
+        assertEquals(List.of("second", "blocked", "first"), response.approved());
+        var selection = response.select(Set.of("first", "second", "blocked"), 1);
+        assertEquals(List.of("second", "first"), selection.decision().approved());
+        assertFalse(selection.decision().allowBackfill());
+        assertEquals(1, selection.overlapRemoved());
+        assertEquals(1, selection.excessApproved());
+        assertThrows(IllegalArgumentException.class, () -> response.select(Set.of("first"), 5));
+        assertDoesNotThrow(() -> codec.requireSameReviewSelection(raw,
+                raw.replace("\"second\",\"blocked\",\"first\",\"second\",\"blocked\"", "\"second\",\"blocked\",\"first\"")));
+    }
+
+    @Test void repeatedApprovalsCannotHideInvalidEntriesOversizeOrOtherContractViolations() {
+        var codec = new AgentContractCodec();
+        String base = "{\"schemaVersion\":1,\"approved\":[\"chosen\",\"chosen\"],\"rejected\":[],\"allowBackfill\":false,\"requirements\":[]}";
+        for (String invalid : List.of(
+                base.replace("\"chosen\",\"chosen\"", "\"chosen\",null,\"chosen\""),
+                base.replace("\"chosen\",\"chosen\"", "\"chosen\",5,\"chosen\""),
+                base.replace("\"chosen\",\"chosen\"", "\"bad/slug\",\"bad/slug\""),
+                base.replace("\"approved\":", "\"approved\":[],\"approved\":"),
+                base.replace("\"rejected\":[]", "\"rejected\":[{\"slug\":\"chosen\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"x\"},{\"slug\":\"chosen\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"different\"}]"),
+                base.replace("\"requirements\":[]", "\"requirements\":\"invalid\""),
+                base.replace("\"allowBackfill\":false", "\"allowBackfill\":\"false\""),
+                base.replace("\"schemaVersion\":1", "\"schemaVersion\":999"), base + "{}"))
+            assertThrows(IllegalArgumentException.class, () -> codec.readReviewResponse(invalid));
+        var json = new tools.jackson.databind.ObjectMapper();
+        var oversized = (tools.jackson.databind.node.ObjectNode) json.readTree(base);
+        oversized.set("approved", json.valueToTree(java.util.Collections.nCopies(501, "chosen")));
+        assertThrows(IllegalArgumentException.class, () -> codec.readReviewResponse(oversized.toString()));
+    }
+
+    @Test void identicalRejectionsAreIdempotentWhileConflictingDetailsAndBoundsStayStrict() {
+        var codec = new AgentContractCodec();
+        String rejection = "{\"slug\":\"blocked\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"unrelated\"}";
+        String raw = "{\"schemaVersion\":1,\"approved\":[\"blocked\",\"chosen\"],\"rejected\":["+rejection+","+rejection+"],\"allowBackfill\":false,\"requirements\":[]}";
+        var response = codec.readReviewResponse(raw).select(Set.of("blocked","chosen"),1).decision();
+        assertEquals(List.of("chosen"), response.approved()); assertEquals(1, response.rejected().size());
+        assertFalse(response.allowBackfill());
+        assertThrows(IllegalArgumentException.class, () -> codec.readReviewResponse(raw).select(Set.of("chosen"),1));
+        assertThrows(IllegalArgumentException.class, () -> codec.readReviewResponse(raw.replace(rejection+","+rejection,
+                String.join(",", java.util.Collections.nCopies(501,rejection)))));
+    }
+
     @Test void reportOnlyRepairCannotChangeAnySelectionPermission() {
         var json = new tools.jackson.databind.ObjectMapper();
         String original = """
@@ -184,7 +233,7 @@ class ReviewResponseTest {
         var codec = new AgentContractCodec();
         String valid = "{\"schemaVersion\":1,\"approved\":[\"jei\"],\"rejected\":[],\"allowBackfill\":true}";
         assertThrows(IllegalArgumentException.class, () -> codec.readReviewResponse(valid.replace("true", "\"true\"")));
-        assertThrows(IllegalArgumentException.class, () -> codec.readReviewResponse(valid.replace("\"jei\"", "\"jei\",\"jei\"")));
+        assertEquals(List.of("jei"), codec.readReviewResponse(valid.replace("\"jei\"", "\"jei\",\"jei\"")).approved());
         assertThrows(IllegalArgumentException.class, () -> codec.readReviewResponse(valid.replace("\"schemaVersion\":1", "\"schemaVersion\":1,\"unknown\":1")));
         assertThrows(IllegalArgumentException.class, () -> codec.readReviewResponse(valid).select(Set.of("jade"), 10));
         assertThrows(IllegalArgumentException.class, () -> new ReviewResponse(1, List.of(),

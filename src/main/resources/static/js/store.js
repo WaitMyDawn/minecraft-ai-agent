@@ -153,3 +153,7 @@ export const keModAError = ref('');
 export const keModBError = ref('');
 export const keMsg = ref('');
 export const keMsgOk = ref(true);   // keMsg 是"成功"还是"出错"：靠文案里有没有"成功"两个字判断太脆了
+
+export const selectionPreferences = ref({addons: true, replacements: true, overlap: true, generation: true});
+export const selectionPrefsBusy = ref(false);
+export const selectionPrefsMsg = ref('');

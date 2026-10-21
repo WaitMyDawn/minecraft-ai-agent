@@ -6,6 +6,22 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class AddonApplicabilityTest {
+    @Test void lexicalGuardsPreserveEveryRelationGrammarAndCrossoverSpelling() {
+        var core = project("A", "cooking-core", "Adds food", "food");
+        var partner = project("B", "magic-core", "Adds magic", "magic");
+        for (String text : List.of("Compatibility between Cooking Core and Magic Core",
+                "Integration for Cooking Core and Magic Core", "Bridge of Cooking Core with Magic Core",
+                "Compat of Cooking Core and Magic Core", "联动：Cooking Core与Magic Core",
+                "Cooking Core和Magic Core之间的兼容补丁", "Crossover for Cooking Core and Magic Core",
+                "Crossover addon for Cooking Core and Magic Core", "Add-on for Cooking Core and Magic Core",
+                "Addon for Cooking Core and Magic Core"))
+            assertTrue(AddonApplicability.relates(text, core, partner), text);
+        for (String text : List.of("Adds structures and creatures for exploration, equipment and cooking in an adventure world.",
+                "Adds cooking and magic themed items", "Recommended compatibility between Cooking Core and Magic Core",
+                "Not compatible between Cooking Core and Magic Core"))
+            assertFalse(AddonApplicability.relates(text, core, partner), text);
+    }
+
     @Test void explicitDualAddonPhrasingRetainsKnownPartnersWithoutTurningOrdinaryFeaturesIntoPartners() {
         var core = project("A", "cooking-core", "Adds food", "food");
         var partner = project("B", "magic-core", "Adds magic", "magic");

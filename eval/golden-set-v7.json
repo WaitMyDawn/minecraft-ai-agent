@@ -1,0 +1,352 @@
+{
+  "version": "6.0",
+  "frozenAt": "2026-10-17",
+  "notes": "组合边界增量集：8场景10次业务请求。与旧集分别计分；实时数据变化及保守暂停均如实记录。自动断言只验证身份、留存及已知缺口，玩法质量另由人工审核；固定事实测试补充稳定的冲突、缺席伙伴和硬件文本反例。",
+  "cases": [
+    {
+      "id": "C01",
+      "layer": "agent",
+      "difficulty": "adversarial",
+      "title": "普通冒险不隐含极端生成授权",
+      "capabilities": [
+        "generation-admission",
+        "negative-scope"
+      ],
+      "prompt": "新建NeoForge1.21.1冒险整合包，约12到20个模组，增加探索结构和生物，保留正常陆地探险体验，不需要大规模群系或地形重做，也不要空岛、虚空或超平坦世界，不要移除原有玩法内容。",
+      "manualReview": [
+        "逐项阅读生成与内容作用，排除未列入已知反例的极端改造；排除名单不是完整行为审计"
+      ],
+      "assert": {
+        "minMods": 2,
+        "modsNotContain": [
+          "standard-skyblock",
+          "terrainless-worlds",
+          "superflat-dimensions",
+          "ibo"
+        ],
+        "generation": {
+          "forbidden": [
+            "overworld",
+            "nether",
+            "end"
+          ]
+        },
+        "composition": {
+          "noKnownAddonGaps": true,
+          "retainedRelations": true
+        },
+        "resolutionReported": true,
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错",
+          "可直接运行"
+        ]
+      }
+    },
+    {
+      "id": "C02",
+      "layer": "agent",
+      "difficulty": "adversarial",
+      "title": "明确空岛授权不能被默认禁令覆盖",
+      "capabilities": [
+        "generation-admission",
+        "explicit-authorization",
+        "named-only"
+      ],
+      "prompt": "新建NeoForge1.21.1空岛整合包，我明确希望把世界改造成空岛，只加入standard-skyblock和必要前置，不需要其它推荐。",
+      "manualReview": [
+        "核对实际版本与空岛功能；若上游版本消失如实失败，不降低断言"
+      ],
+      "assert": {
+        "minMods": 1,
+        "modsContain": [
+          "standard-skyblock"
+        ],
+        "envMc": "1.21.1",
+        "envLoader": "neoforge",
+        "resolutionReported": true,
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错"
+        ]
+      }
+    },
+    {
+      "id": "C03",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "烹饪自动化联动只对应实际包内对象",
+      "capabilities": [
+        "integration",
+        "addon-applicability",
+        "cross-domain"
+      ],
+      "prompt": "新建Forge1.20.1烹饪与自动化整合包，约15到25个模组，包含create、farmers-delight，补充它们的附属，优先考虑这两个包内项目的联动。不要为了附属额外引入其它大型玩法核心。",
+      "manualReview": [
+        "核实联动是否有用、双方是否实际保留；没有已知缺口不代表穷尽了未声明关系"
+      ],
+      "assert": {
+        "minMods": 2,
+        "modsContain": [
+          "create",
+          "farmers-delight"
+        ],
+        "composition": {
+          "retainedRelations": true,
+          "noKnownAddonGaps": true
+        },
+        "coverage": {
+          "retainedEvidence": true,
+          "noMissingNamed": true
+        },
+        "resolutionReported": true,
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错",
+          "可直接运行"
+        ]
+      }
+    },
+    {
+      "id": "C04",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "配方信息与现代界面属于互补用途",
+      "capabilities": [
+        "utility",
+        "identity",
+        "complementarity"
+      ],
+      "prompt": "新建NeoForge1.21.1客户端辅助包，只添加modern-ui、jei、appleskin和必要前置。现代界面、配方查询、食物信息分别保留，不增加内容模组。",
+      "manualReview": [
+        "三个点名项目用途是否分别准确；不因同属界面就当成重复功能"
+      ],
+      "assert": {
+        "minMods": 3,
+        "modsContain": [
+          "modern-ui",
+          "jei",
+          "appleskin"
+        ],
+        "facts": {
+          "/trace/awaitingInput": {
+            "equals": false
+          }
+        },
+        "coverage": {
+          "retainedEvidence": true,
+          "noMissingNamed": true
+        },
+        "resolutionReported": true,
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错"
+        ]
+      }
+    },
+    {
+      "id": "C05",
+      "layer": "agent",
+      "difficulty": "adversarial",
+      "title": "服务端计算用途不能用基准硬件凑证据",
+      "capabilities": [
+        "optimization",
+        "mechanism-evidence",
+        "side-scope"
+      ],
+      "prompt": "新建Fabric1.20.1服务端优化包，约6到12个模组，需要降低内存占用和CPU计算开销；不要客户端渲染、界面或玩法内容。介绍里的测试机器内存和CPU型号不算优化作用。",
+      "manualReview": [
+        "阅读每条CPU与内存机制摘录，区分测试配置和改善对象；运行收益未测量"
+      ],
+      "assert": {
+        "minMods": 1,
+        "optimization": {
+          "side": "SERVER",
+          "rolesContain": [
+            "MEMORY",
+            "CPU"
+          ],
+          "retainedEvidence": true,
+          "maxRenderers": 0
+        },
+        "resolutionReported": true,
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错",
+          "可直接运行"
+        ]
+      }
+    },
+    {
+      "id": "C06",
+      "layer": "agent",
+      "difficulty": "adversarial",
+      "title": "取消主体后不为附属反向恢复",
+      "capabilities": [
+        "multi-turn",
+        "removal",
+        "addon-applicability"
+      ],
+      "turns": [
+        {
+          "prompt": "新建Forge1.20.1整合包，只加入create、farmers-delight和必要前置，不额外推荐。",
+          "assert": {
+            "modsContain": [
+              "create",
+              "farmers-delight"
+            ],
+            "minMods": 2
+          }
+        },
+        {
+          "prompt": "移除create，保留农夫乐事，不要为了附属或联动重新添加Create或其它自动化核心。",
+          "assert": {
+            "modsContain": [
+              "farmers-delight"
+            ],
+            "modsNotContain": [
+              "create"
+            ],
+            "composition": {
+              "noKnownAddonGaps": true,
+              "retainedRelations": true
+            },
+            "resolutionReported": true
+          }
+        }
+      ],
+      "manualReview": [
+        "核对移除与最终清单一致；复杂已有联动的失效另由固定事实测试稳定覆盖"
+      ]
+    },
+    {
+      "id": "C07",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "交通与仓储目标不退化为冒险模板",
+      "capabilities": [
+        "cross-domain",
+        "composite-goals",
+        "coverage"
+      ],
+      "prompt": "新建Forge1.20.1交通物流包，约15到25个模组，需要铁路运输、远距离物品物流和集中仓储，分别给出用途依据。不要新群系、生物生态、魔法、空岛或额外代码。",
+      "manualReview": [
+        "分别核对交通、物品物流、仓储，不以三个类别标签或同一笼统描述替代"
+      ],
+      "assert": {
+        "minMods": 3,
+        "coverage": {
+          "retainedEvidence": true,
+          "minSupporting": 1
+        },
+        "composition": {
+          "retainedRelations": true,
+          "noKnownAddonGaps": true
+        },
+        "resolutionReported": true,
+        "replyNotContains": [
+          "未通过结构化校验",
+          "组装过程中出错",
+          "可直接运行"
+        ]
+      }
+    },
+    {
+      "id": "C08",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "构筑范围从局部结构转为维度生成",
+      "capabilities": [
+        "multi-turn",
+        "dimension-generation",
+        "confirmation"
+      ],
+      "turns": [
+        {
+          "prompt": "新建NeoForge1.21.1整合包，只增加末地探索结构，不改末地地形或群系，约5到10个模组，不需要其它维度。",
+          "assert": {
+            "minMods": 1,
+            "generation": {
+              "forbidden": [
+                "end",
+                "overworld",
+                "nether"
+              ]
+            }
+          }
+        },
+        {
+          "prompt": "现在允许大幅丰富末地地形和群系，请让我选择末地核心生成候选，其它维度保持原样。",
+          "assert": {
+            "facts": {
+              "/replacement_options/kind": {
+                "equals": "GENERATION"
+              },
+              "/trace/awaitingInput": {
+                "equals": true
+              }
+            }
+          }
+        }
+      ],
+      "manualReview": [
+        "只验证进入明确确认阶段，不把未执行的候选选择或最终包算作成功构筑"
+      ]
+    },
+    {
+      "id": "Q01",
+      "layer": "agent",
+      "difficulty": "tricky",
+      "title": "附属和结构的独立新增数量范围",
+      "capabilities": [
+        "requirement-quantity",
+        "scoped-preference",
+        "addon-relation"
+      ],
+      "prompt": "新建NeoForge1.21.1整合包，约40～70个模组，包含铁魔法和农夫乐事。要求：1）补充铁魔法的附属5-10个；2）补充农夫乐事的偏冷门附属3-5个；3）补充主世界的冷门结构模组2-4个。",
+      "manualReview": [
+        "冷门偏好分别作用于农夫乐事附属和主世界结构，不扩散到铁魔法附属；数量不得用前置库冒充",
+        "用途、可用版本和组合质量由人工复核，数量达标不等于内容质量达标"
+      ],
+      "assert": {
+        "minMods": 10,
+        "envMc": "1.21.1",
+        "envLoader": "neoforge",
+        "coverage": {
+          "quantities": [
+            {
+              "source": "铁魔法",
+              "min": 5,
+              "max": 10,
+              "scope": "ADDED_ROOTS"
+            },
+            {
+              "source": "农夫乐事",
+              "min": 3,
+              "max": 5,
+              "scope": "ADDED_ROOTS"
+            },
+            {
+              "source": "主世界",
+              "min": 2,
+              "max": 4,
+              "scope": "ADDED_ROOTS"
+            }
+          ],
+          "retainedEvidence": true
+        },
+        "facts": {
+          "/trace/contract/quantity/met": {
+            "equals": true
+          }
+        },
+        "resolutionReported": true,
+        "replyNotContains": [
+          "未通过结构化校验",
+          "可直接运行"
+        ]
+      }
+    }
+  ],
+  "description": "；v7新增局部数量范围与冷门偏好案例，原有固定基准语句不变。"
+}

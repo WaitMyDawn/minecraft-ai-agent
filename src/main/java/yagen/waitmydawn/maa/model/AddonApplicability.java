@@ -13,12 +13,15 @@ public final class AddonApplicability {
     private static final String ENDPOINT = "[^\\n.!?;,。！？；，]{1,120}";
     private static final Pattern ADDON_PAIR = Pattern.compile("(?iu)\\b(?:add[- ]?on|crossover(?:\\s+add[- ]?on)?)\\s+for\\s+(?:both\\s+)?(?<left>" + ENDPOINT + "?)\\s+and\\s+(?<right>" + ENDPOINT + ")");
     private static final Pattern ADDON_FEATURE_CLAUSE = Pattern.compile("(?iu)\\b(?:that|which|adds?|with)\\b");
+    private static final Pattern RELATION_MARKER = Pattern.compile("(?iu)\\b(?:compatibility|integration|bridge|compat|add[- ]?on|crossover)\\b|兼容补丁|联动");
+    private static final Pattern CHINESE_PREFIX = Pattern.compile("(?iu)(?:兼容补丁|联动)(?:模组)?[：:]?\\s*(?<left>" + ENDPOINT + "?)(?:与|和)(?<right>" + ENDPOINT + ")");
+    private static final Pattern CHINESE_SUFFIX = Pattern.compile("(?iu)(?<left>" + ENDPOINT + "?)(?:与|和)(?<right>" + ENDPOINT + "?)(?:之间)?的?(?:联动|兼容补丁)");
     private static final List<Pattern> RELATIONS = List.of(
             Pattern.compile("(?iu)\\b(?:compatibility|integration|bridge|compat)\\s+(?:between|for)\\s+(?<left>" + ENDPOINT + "?)\\s+and\\s+(?<right>" + ENDPOINT + ")"),
             Pattern.compile("(?iu)\\b(?:compatibility|integration|bridge|compat)\\s+of\\s+(?<left>" + ENDPOINT + "?)\\s+with\\s+(?<right>" + ENDPOINT + ")"),
             Pattern.compile("(?iu)\\b(?:compatibility|integration|bridge|compat)\\s+of\\s+(?![^\\n.!?;,。！？；，]{0,240}\\bwith\\b)(?<left>" + ENDPOINT + "?)\\s+and\\s+(?<right>" + ENDPOINT + ")"),
-            Pattern.compile("(?iu)(?:兼容补丁|联动)(?:模组)?[：:]?\\s*(?<left>" + ENDPOINT + "?)(?:与|和)(?<right>" + ENDPOINT + ")"),
-            Pattern.compile("(?iu)(?<left>" + ENDPOINT + "?)(?:与|和)(?<right>" + ENDPOINT + "?)(?:之间)?的?(?:联动|兼容补丁)"), ADDON_PAIR);
+            CHINESE_PREFIX,
+            CHINESE_SUFFIX, ADDON_PAIR);
     private static final Pattern OPTIONAL = Pattern.compile("(?iu)\\boptional(?:ly)?\\b|\\b(?:recommended|suggested)\\b|可选|可选装|建议安装|推荐安装");
     private static final Pattern EXPLICIT_MODS = Pattern.compile("(?iu)\\bmods?\\b|模组");
     private record Relation(Set<String> projects, boolean unverified) {}
@@ -36,8 +39,13 @@ public final class AddonApplicability {
         if (text == null || text.isBlank()) return List.of();
         var result = new ArrayList<Relation>();
         for (String clause : text.split("[\\n.!?;,。！？；，]")) {
+            // 所有关系语法都包含这些标记；普通描述无须执行端点搜索。
+            if (!RELATION_MARKER.matcher(clause).find()) continue;
             if (NEGATIVE.matcher(clause).find() || OPTIONAL.matcher(clause).find()) continue;
             for (var pattern : RELATIONS) {
+                // 中文后缀语法在无对应关系词的拉丁文本上会产生大量无效回溯。
+                if ((pattern == CHINESE_PREFIX || pattern == CHINESE_SUFFIX)
+                        && !clause.contains("联动") && !clause.contains("兼容补丁")) continue;
                 var matcher = pattern.matcher(clause);
                 while (matcher.find()) {
                     String left = matcher.group("left"), right = matcher.group("right");
@@ -70,7 +78,7 @@ public final class AddonApplicability {
     }
     public static Check assess(PackAddonPolicy.Project candidate, JsonNode version, Map<String, String> versionProjects,
                                Collection<PackAddonPolicy.Project> projects, Set<String> retained, Set<String> permittedContent, boolean knownAddon) {
-        if (candidate == null || version == null || !knownAddon && !addon(candidate.description()))
+        if (candidate == null || version == null || candidate.infrastructure() || !knownAddon && !addon(candidate.description()))
             return new Check("NOT_ASSESSED", List.of(), List.of(), "");
         var byId = new HashMap<String, PackAddonPolicy.Project>(); projects.forEach(p -> byId.put(p.id(), p));
         var peers = byId.values().stream().filter(p -> !p.id().equals(candidate.id())).toList();

@@ -126,10 +126,10 @@ public final class RequirementPlanning {
                 if (c.kind() != BuildRequirement.Kind.PROJECTS && !c.addonCores().contains(identity)) continue;
                 identities.add(identity);
             }
-            return new RequirementCriterion(c.source(), c.kind(), List.copyOf(identities), c.addonCores(), c.searches(), c.preferences());
+            return new RequirementCriterion(c.source(), c.kind(), List.copyOf(identities), c.addonCores(), c.searches(), c.preferences(), c.quantity());
         }).toList();
         return new BuildRequirement(parent.id(), parent.source(), parent.kind(), List.copyOf(projects), parent.capabilities(),
-                parent.addonCores(), parent.searches(), parent.preferences(), criteria);
+                parent.addonCores(), parent.searches(), parent.preferences(), criteria, parent.quantity());
     }
 
     public static BuildIntent bind(String prompt, BuildIntent intent, Map<String, String> aliasInput) {
@@ -187,7 +187,7 @@ public final class RequirementPlanning {
                 // 原文决定附属约束强度；只校正标签，不能推断核心身份或补造关系证据。
                 if (entry.kind() != BuildRequirement.Kind.CHANGE && entry.kind() != expected)
                     entry = new BuildRequirement(entry.id(), entry.source(), expected, entry.projects(),
-                            entry.capabilities(), entry.addonCores(), entry.searches(), entry.preferences(), entry.criteria());
+                            entry.capabilities(), entry.addonCores(), entry.searches(), entry.preferences(), entry.criteria(), entry.quantity());
                 if (entry.kind() != expected)
                     throw new InvalidPlan("requirements.kind", "需求 " + anchor.getKey() + " 须使用 kind=" + expected);
             }
@@ -205,7 +205,24 @@ public final class RequirementPlanning {
             }
             if (entry.searches().stream().anyMatch(s -> intent.excludedCategories().contains(s.category())))
                 throw new InvalidPlan("requirements.searches", "逐项检索不能使用明确排除的类别：" + anchor.getKey());
-            if (intent.schemaVersion() >= 3) validateCriteria(entry, aliases, intent);
+            if (intent.schemaVersion() >= 3) {
+                // 单片段只重复父项映射，不涉及语义拆分；仍由后续校验检查用途、身份和数量。
+                if (entry.criteria().isEmpty() && Set.of(BuildRequirement.Kind.CAPABILITY, BuildRequirement.Kind.ADDONS,
+                        BuildRequirement.Kind.PACK_INTEGRATIONS).contains(entry.kind())
+                        && criterionSources(entry.source()).equals(List.of(entry.source())))
+                    entry = new BuildRequirement(entry.id(), entry.source(), entry.kind(), entry.projects(), entry.capabilities(),
+                            entry.addonCores(), entry.searches(), entry.preferences(),
+                            List.of(new RequirementCriterion(entry.source(), entry.kind(), entry.projects(), entry.addonCores(),
+                                    entry.searches(), entry.preferences(), entry.quantity())), entry.quantity());
+                validateCriteria(entry, aliases, intent);
+            }
+            var quantityParent = entry;
+            for (var target : entry.criteria().isEmpty() ? List.of(entry) : entry.criteria().stream().map(c -> c.target(quantityParent)).toList()) {
+                var literalQuantity = target.kind() == BuildRequirement.Kind.GENERAL && target.searches().isEmpty()
+                        && target.quantity() == null ? null : RequirementQuantity.fromSource(target.source());
+                if (literalQuantity != null && !literalQuantity.equals(target.quantity()))
+                    throw new InvalidPlan("requirements.quantity", "局部数量范围及新增/保留口径须与对应原文一致：" + target.id());
+            }
             ledger.put(entry.id(), entry);
         }
         if (RecommendationPolicy.namedOnly(prompt)) {
@@ -224,6 +241,15 @@ public final class RequirementPlanning {
         while (matcher.find()) {
             String before = prompt.substring(Math.max(0, matcher.start() - 30), matcher.start());
             if (before.matches("(?s).*(?:取消|不要|放弃|不再|不需要|原来|之前)[^，,；;。\\n]{0,12}$")) continue;
+            String rangeText = matcher.group();
+            int boundary = 0;
+            for (char separator : new char[]{'\n','；',';','，',',','。'}) boundary = Math.max(boundary, prompt.lastIndexOf(separator, matcher.start()) + 1);
+            String localPrefix = prompt.substring(boundary, matcher.start());
+            boolean globalContext = localPrefix.matches("(?is).*(整合包|总量|总共|总计|modpack|total).*")
+                    || localPrefix.matches("(?is)\\s*(?:大约|大概|约|about|around)?\\s*");
+            boolean local = !globalContext && ledger.values().stream().flatMap(r -> r.criteria().isEmpty() ? java.util.stream.Stream.of(r)
+                    : r.criteria().stream().map(c -> c.target(r))).anyMatch(r -> r.quantity() != null && r.source().contains(rangeText));
+            if (local) continue;
             min = Integer.parseInt(matcher.group(1)); max = Integer.parseInt(matcher.group(2));
         }
         int answerAt = prompt.lastIndexOf("用户答复：");
@@ -232,6 +258,11 @@ public final class RequirementPlanning {
             if (!RANGE.matcher(answer).find()) {
                 var scalar = Pattern.compile("(?<![\\d.])(\\d{1,3})\\s*(?:个|款|模组文件|mods?\\b)", Pattern.CASE_INSENSITIVE).matcher(answer);
                 while (scalar.find()) {
+                    String scalarText = scalar.group();
+                    boolean localAnswer = ledger.values().stream().flatMap(r -> r.criteria().isEmpty() ? java.util.stream.Stream.of(r)
+                            : r.criteria().stream().map(c -> c.target(r))).anyMatch(r -> r.quantity() != null
+                                    && r.source().contains(scalarText) && (r.source().contains(answer.trim()) || answer.contains(r.source())));
+                    if (localAnswer) continue;
                     String before = answer.substring(Math.max(0, scalar.start() - 20), scalar.start());
                     if (!before.matches("(?s).*(?:不要|取消|放弃|原来|之前)[^，,；;。]{0,12}$"))
                         min = max = Integer.parseInt(scalar.group(1));
@@ -241,6 +272,16 @@ public final class RequirementPlanning {
         if (min >= 0 && !intent.constraintChanges().clearCount()) {
             if (intent.count() == null || intent.count().min() != min || intent.count().max() != max)
                 throw new InvalidPlan("count.range", "数量区间必须保留原始上下界，不能仅取中间值");
+        }
+        if (intent.count() != null) {
+            int ceiling = intent.count().range() || intent.count().precision() == BuildIntent.Precision.EXACT
+                    ? intent.count().max() : (int)Math.ceil(intent.count().value() * 1.5);
+            for (var target : yagen.waitmydawn.maa.model.RequirementQuantities.targets(List.copyOf(ledger.values()))) {
+                var q = target.quantity();
+                if (q != null && q.min() > ceiling && (intent.count().scope() != BuildIntent.CountScope.ADDED_ROOTS
+                        || q.scope() == RequirementQuantity.Scope.ADDED_ROOTS))
+                    throw new InvalidPlan("requirements.quantity.conflict", "局部数量下限超过全局数量上限，不能同时满足；返回CLARIFY，请用户调整总量或该项范围，不能静默放宽原始要求");
+            }
         }
         return new BuildIntent(intent.schemaVersion(), intent.mode(), intent.reply(), intent.name(), intent.environment(), intent.count(),
                 intent.mustHave(), intent.add(), intent.remove(), intent.exclude(), intent.expandAddons(), intent.replacementPolicy(),
@@ -252,14 +293,16 @@ public final class RequirementPlanning {
                 || entry.kind() == BuildRequirement.Kind.PACK_INTEGRATIONS || !entry.searches().isEmpty()
                 || (entry.kind() != BuildRequirement.Kind.PROJECTS && !entry.capabilities().isEmpty()) || entry.capabilities().size() > 1;
         if (entry.criteria().isEmpty()) {
-            if (content) throw new InvalidPlan("requirements.criteria", "内容要求须分别映射 Java 提供的子目标原文片段");
+            if (content) throw new InvalidPlan("requirements.criteria", "内容要求须分别映射 Java 提供的子目标原文片段："
+                    + entry.id() + "；预期片段=" + criterionSources(entry.source()));
             return;
         }
         var expected = criterionSources(entry.source());
         var actual = entry.criteria().stream().map(RequirementCriterion::source).toList();
         if (actual.stream().anyMatch(s -> expected.stream().noneMatch(part -> part.contains(s)))
                 || expected.stream().anyMatch(part -> actual.stream().noneMatch(part::contains)))
-            throw new InvalidPlan("requirements.criteria.source", "子目标须来自各原文片段的连续子串，不能跨片段合并、遗漏或新增要求：" + entry.id());
+            throw new InvalidPlan("requirements.criteria.source", "子目标须来自各原文片段的连续子串，不能跨片段合并、遗漏或新增要求："
+                    + entry.id() + "；预期片段=" + expected + "；实际片段=" + actual);
         for (var capability : capabilities(entry.source())) if (entry.criteria().stream().noneMatch(c -> capabilities(c.source()).contains(capability)))
             throw new InvalidPlan("requirements.criteria.source", "子目标遗漏父项用途映射：" + capability);
         var mapped = new HashSet<String>();

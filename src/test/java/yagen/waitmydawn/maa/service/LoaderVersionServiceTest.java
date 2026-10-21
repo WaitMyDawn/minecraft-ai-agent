@@ -186,8 +186,10 @@ class LoaderVersionServiceTest {
 
         server.expect(requestTo(containsString("net/neoforged/neoforge/maven-metadata.xml")))
                 .andRespond(withSuccess("<version>21.1.251</version>", MediaType.APPLICATION_XML));
-        // neoforge 的旧 artifact（MC 1.20.1 那批）持续 500 → 会重试 3 次后判失败
-        server.expect(ExpectedCount.times(3), requestTo(containsString("net/neoforged/forge/maven-metadata.xml")))
+        // 主站失败后切换独立域名镜像，总尝试次数仍限制为三次。
+        server.expect(requestTo("https://maven.neoforged.net/releases/net/neoforged/forge/maven-metadata.xml"))
+                .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
+        server.expect(ExpectedCount.times(2), requestTo("https://neoforged.forgecdn.net/releases/net/neoforged/forge/maven-metadata.xml"))
                 .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
         server.expect(requestTo(containsString("promotions_slim.json")))
                 .andRespond(withSuccess("{\"promos\":{\"1.20.1-latest\":\"47.4.23\"}}", MediaType.APPLICATION_JSON));
@@ -212,6 +214,53 @@ class LoaderVersionServiceTest {
 
         Files.deleteIfExists(file);
         Files.deleteIfExists(dir);
+    }
+
+    @Test
+    void connectionTimeoutSwitchesToMirrorAndMergesBothNeoForgeArtifacts() throws Exception {
+        assertMirrorRefresh(false);
+    }
+
+    @Test
+    void htmlErrorPageCannotBeAcceptedAsSuccessfulVersionRefresh() throws Exception {
+        assertMirrorRefresh(true);
+    }
+
+    private void assertMirrorRefresh(boolean invalidBody) throws Exception {
+        Path dir = Files.createTempDirectory("maa-loader-mirror-test");
+        Path file = dir.resolve("loader-versions.json");
+        try {
+            Files.writeString(file, "{\"loaders\":{\"neoforge\":{\"gameVersions\":{\"1.21.1\":\"21.1.200\"}},"
+                    + "\"forge\":{\"gameVersions\":{}},\"fabric-loader\":{\"gameVersions\":{\"*\":\"0.0.0\"}}}}", StandardCharsets.UTF_8);
+            RestClient.Builder builder = RestClient.builder();
+            MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+            LoaderVersionService svc = new LoaderVersionService(builder.build(), MAPPER);
+            setField(svc, "versionsPath", file.toString());
+            setField(svc, "retryBackoffBaseMs", 0L);
+            setField(svc, "retriesLeft", new AtomicInteger(0));
+            svc.init();
+            for (String artifact : java.util.List.of("neoforge", "forge")) {
+                var expectation = server.expect(requestTo("https://maven.neoforged.net/releases/net/neoforged/" + artifact + "/maven-metadata.xml"));
+                if (invalidBody) expectation.andRespond(withSuccess("<html>unavailable</html>", MediaType.TEXT_HTML));
+                else expectation.andRespond(request -> { throw new SocketTimeoutException("Connect timed out"); });
+                String version = artifact.equals("neoforge") ? "21.1.251" : "1.20.1-47.1.106";
+                server.expect(requestTo("https://neoforged.forgecdn.net/releases/net/neoforged/" + artifact + "/maven-metadata.xml"))
+                        .andRespond(withSuccess("<metadata><version>" + version + "</version></metadata>", MediaType.APPLICATION_XML));
+            }
+            server.expect(requestTo(containsString("promotions_slim.json")))
+                    .andRespond(withSuccess("{\"promos\":{\"1.20.1-latest\":\"47.4.23\"}}", MediaType.APPLICATION_JSON));
+            server.expect(requestTo(containsString("meta.fabricmc.net")))
+                    .andRespond(withSuccess("[{\"version\":\"0.19.5\",\"stable\":true}]", MediaType.APPLICATION_JSON));
+            svc.refreshAll();
+            server.verify();
+            assertEquals("21.1.251", svc.resolve("neoforge", "1.21.1"));
+            assertEquals("47.1.106", svc.resolve("neoforge", "1.20.1"));
+            assertEquals("0.19.5", svc.resolve("fabric", "1.21.1"));
+            assertEquals(svc.snapshot(), MAPPER.readTree(Files.readString(file)));
+        } finally {
+            Files.deleteIfExists(file);
+            Files.deleteIfExists(dir);
+        }
     }
 
     private static void setField(Object target, String name, Object value) throws Exception {

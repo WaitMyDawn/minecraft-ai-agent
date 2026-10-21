@@ -6,6 +6,23 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PackAddonPolicyTest {
+    @Test void explicitDeveloperApiPurposeDoesNotRequireALibraryCategoryOrName() {
+        for (String description : List.of("A util API for making Iron's Spells and Spellbooks addons",
+                "A library for creating mod integrations", "This mod is a shared API designed for mod developers")) {
+            var library = new PackAddonPolicy.Project("API12345", "spell-tools", 100L, Set.of("magic", "utility"), "Spell Tools", "v1", description);
+            assertTrue(library.infrastructure(), description);
+            assertFalse(library.content(), description);
+        }
+        for (String description : List.of("Adds new spells using a utility API for making addons",
+                "Requires a library for creating custom mobs", "Not an API for making mods",
+                "Adds a spellcrafting table. A library for creating mods is optional.",
+                "Adds inventory utilities", "An addon for Iron's Spells and Spellbooks")) {
+            var content = new PackAddonPolicy.Project("MOD12345", "spell-content", 100L, Set.of("magic", "utility"), "Spells", "v1", description);
+            assertFalse(content.infrastructure(), description);
+            assertTrue(content.content(), description);
+        }
+    }
+
     @Test void exactIncompatibilityDefersOnlyWhenItsSelectedTargetVersionIsStillUnknown() {
         var version = json.readTree("{\"id\":\"bridge-v\",\"dependencies\":[{\"project_id\":\"A\",\"version_id\":\"old-a\",\"dependency_type\":\"incompatible\"}]}");
         var a = project("A", "cooking-core", 100L, "food");

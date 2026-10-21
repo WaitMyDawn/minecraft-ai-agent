@@ -13,7 +13,7 @@ def redact(text, secrets):
     text = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "[REDACTED_KEY]", text)
     text = re.sub(r"(?i)Bearer\s+[A-Za-z0-9._~-]+", "Bearer [REDACTED]", text)
     text = re.sub(r"[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", "[REDACTED_TOKEN]", text)
-    text = re.sub(r'''(?i)(["']?(?:password|passwd|api[-_ ]?key|token|authorization|x-auth-token|密码)["']?\s*[:=]\s*)["']?[^\s,;\r\n}"']+["']?''', r'\1"[REDACTED]"', text)
+    text = re.sub(r'''(?i)((?<![\w-])["']?(?:password|passwd|api[-_ ]?key|token|authorization|x-auth-token|密码)["']?\s*[:=]\s*)["']?[^\s,;\r\n}"']+["']?''', r'\1"[REDACTED]"', text)
     if any(secret and secret in text for secret in secrets):
         raise ValueError("Redaction did not remove a supplied secret")
     return text

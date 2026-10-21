@@ -20,13 +20,21 @@ public class AiAgentService {
     private org.springframework.core.env.Environment environment;
     /** 原始模型响应与调用成本；进入业务流程前必须通过对应的契约校验。 */
     public record AgentCallResult(String text, long elapsedMs, int modelCalls,
-                                  int inputTokens, int outputTokens, int truncatedCalls) {
+                                  int inputTokens, int outputTokens, int truncatedCalls, int reviewSchemaVersion) {
+        public AgentCallResult(String text, long elapsedMs, int modelCalls, int inputTokens, int outputTokens, int truncatedCalls) {
+            this(text, elapsedMs, modelCalls, inputTokens, outputTokens, truncatedCalls, 0);
+        }
         public AgentCallResult(String text, long elapsedMs, int modelCalls, int inputTokens, int outputTokens) {
             this(text, elapsedMs, modelCalls, inputTokens, outputTokens, 0);
         }
         public AgentCallResult followedBy(AgentCallResult next) {
             return new AgentCallResult(next.text, elapsedMs + next.elapsedMs, modelCalls + next.modelCalls,
-                    inputTokens + next.inputTokens, outputTokens + next.outputTokens, truncatedCalls + next.truncatedCalls);
+                    inputTokens + next.inputTokens, outputTokens + next.outputTokens, truncatedCalls + next.truncatedCalls,
+                    next.reviewSchemaVersion != 0 ? next.reviewSchemaVersion : reviewSchemaVersion);
+        }
+        /** 请求协议由调用方绑定，不能让模型自报旧版本来绕过新增权限字段。 */
+        public AgentCallResult forReview(int version) {
+            return new AgentCallResult(text, elapsedMs, modelCalls, inputTokens, outputTokens, truncatedCalls, version);
         }
     }
 
@@ -97,6 +105,9 @@ public class AiAgentService {
             同一个 searchIntents 或 searches 数组内 category 不能重复；同类的不同关键词合并到一项。父项和不同子目标各自可以使用相同类别。
             同一原文片段同时包含点名项目、玩法和附属时，不拆分或遗漏原文：附属类型优先 ADDONS，明确包内联动优先 PACK_INTEGRATIONS，仍同时保留 projects/capabilities/searches；不能因含玩法而选择 CAPABILITY 覆盖附属语义。
             capabilities 是可选的已知用途提示，不是允许构建的玩法白名单。科技、自动化、仓储、物流、战斗、职业、烹饪、装饰等任意目标均须保留原文并提供对应 searches；不能强行归为 UTILITY 或 GENERAL 后忽略。
+            每项 requirements.quantity 和 criteria.quantity 为 null 或 {"min":5,"max":10,"scope":"ADDED_ROOTS"}。
+            只在对应要求明确指定模组数量时填写；补充/新增用 ADDED_ROOTS，全包包含/保留用 RETAINED_ROOTS。数量只计有用途或附属关系依据的内容根，核心本体与前置库不冒充附属。
+            复合要求的数量分别写在相应 criteria，不把父项数量复制到所有子目标；未指定局部数量用 null。全包总数写 count，不能被“附属5-10个”等局部范围覆盖。
             每项 requirements.preferences 及 criteria.preferences 单独记录选择偏好：popularity=DEFAULT/POPULAR/LESS_POPULAR，freshness=DEFAULT/RECENT；无明确偏好两者 DEFAULT。
             复合要求的 criteria.preferences 按各子目标的真实作用范围填写，不能直接复制父项；例如冷门附属和热门装饰分别记录 LESS_POPULAR 与 POPULAR。
             “较新”和“非热门”是独立偏好，不等同；偏好仅作用于原文对应的内容或附属，不能扩展到其它要求、点名核心或前置。
@@ -146,17 +157,24 @@ public class AiAgentService {
             """;
 
     private static final String CRITIC = """
-            你是 Minecraft 模组组合审核员。只返回符合下方 JSON Schema 的一个 JSON 对象，schemaVersion=1。
+            你是 Minecraft 模组组合审核员。只返回符合下方 JSON Schema 的一个 JSON 对象，schemaVersion=2。
             approved/rejected 只能引用本轮候选池的原始 slug，不得复述候选描述，不得新增候选外模组。
             approved 数量不得超过上下文新增额度，优先遵循用户主题、硬约束和逐项需求目标，再参考相关性评分。
             候选标注的局部偏好、下载量与发布日期用于相同用途的选择：优先符合对应子目标的较新或非热门候选，不能把其它要求、点名核心或前置一起降权。
             发布未知不能声称较新，最近更新不能等同新发布；低下载量不是质量或安全证明。内容依据与真实附属关系优先，不能为了偏好批准无关项目。
             类别上限只在上下文明确要求时使用；有能力目标时优先缺失用途与互补作用，不能用热门同类挤掉其它目标。
-            rejected 写明确拒绝的候选、原因枚举和简短单行解释；与 approved 不得重叠。
-            先确定 rejected，再从剩余候选中选 approved，最后检查两组没有交集且 approved 不超限。
+            rejected 必须区分PACK全包禁入和GOAL局部落选；仅写有明确依据的候选、原因枚举和简短单行解释。只有PACK禁止与approved重叠，GOAL允许项目为其它目标获批。
+            某候选只不适合一个子目标、内容较小、不是首选或当前数量已够，不构成全局否决；未选中时省略，让其它目标和有界补位仍可考虑它。OFF_TOPIC表达局部主题匹配判断，只能用GOAL；CONSTRAINT只表达原文明确的硬约束。
+            先确定PACK拒绝，再从其余候选中选approved；最后检查approved与PACK没有交集且approved不超限，GOAL不得无依据扩大全包限制。
             未选中的候选可以省略，不要求覆盖整个候选池；每条拒绝解释只写一句简短理由。
-            缺乏事实的运行冲突只能用 INSUFFICIENT_EVIDENCE，不得声称已验证能够启动。
-            allowBackfill 只有允许 Java 从未拒绝候选中补齐时为 true；否决整池时为 false 且 approved 为空。
+            缺乏事实的运行冲突不是否决依据；INSUFFICIENT_EVIDENCE 仅用于项目连基本用途或必要关系都无法核实，不能因缺少启动实测或性能测评使用。不得声称已验证能够启动。
+            allowBackfill 控制 Java 是否能从其余未拒绝候选中有界补齐，不表示是否还有待满足要求。通常为 true；仅用户明确不允许补充或整个剩余候选池均有明确全局禁入依据时为 false。已经选够、局部配额已满、没有更多推荐或暂缺证据都不构成禁止补位的理由，最终数量由 Java 核对。
+            每个rejected必须包含authority={scope,targetId,quote,requestQuote,relatedSlug}，全部字段必填。quote逐字引用该slug项目用途事实的4～280字连续原文，不用自己的解释冒充引用。
+            scope=GOAL只表示不适合特定目标，targetId必须来自Java提供的targets，requestQuote和relatedSlug为空；该项目仍可为其它目标入选，允许与approved重叠。多目标局部落选可按不同targetId分别记录。
+            scope=PACK才是全包禁入，targetId为空。CONSTRAINT必须用requestQuote逐字引用request中至少4字完整的明确排除分句（例如“不要移除原版结构”），并用quote给出项目自身的当前行为；主题、数量、局部范围及“尽量/优先”等偏好不能作为全包排除依据，可选预设或历史说明不能作为默认行为依据，relatedSlug为空。
+            PACK的CONFLICT必须引用明确不兼容原文，relatedSlug为确实已保留或本轮批准的另一项目，引用中必须提及该项目slug，requestQuote为空；不能把潜在重叠当作已确认冲突。
+            OFF_TOPIC、DUPLICATE_FUNCTION、INSUFFICIENT_EVIDENCE和OTHER只能用GOAL，或直接省略，不能产生PACK禁令；功能重叠由组合选择处理。
+            backfill={basis,quote}必须与allowBackfill一致：允许时basis=ALLOW且quote为空；禁止时basis=USER_REQUEST且quote逐字引用request中完整的全局禁止补位分句（例如“不要自动补位”“只加入点名的模组”），不能截取仅限制某一类别/目标的句子冒充全局禁令；或basis=POOL_EXHAUSTED且quote为空并且所有未批准候选均有有效PACK否决。GOAL落选不能证明池已耗尽。
             requirements 为逐项用途审核：复制上下文原始要求的 id，每项填写 evidence 和 gap，不遗漏历史有效要求。
             有规划 criteria 的要求，父项 evidence=[]、gap=""，criteria 逐个复制 source，每项独立填写 evidence/gap。纯项目子目标可 evidence=[]，身份由 Java 核查；不能将性能证据分给 UI、将自动化证据分给仓储。
             每个玩法子目标通常列1个最直接的项目依据；一个项目可以支持多个目标，但须分别有对应描述依据。不存在对应依据的目标明确留空并填写 gap，不因父项已有其它证据而跳过。
@@ -174,7 +192,7 @@ public class AiAgentService {
             每项通常只列1至3个最能说明用途的项目，quote 尽量不超过80字，purpose/gap 简短；不要复述整个候选池。
             每个 evidence 数组均须遵守 JSON Schema 的 maxItems，不能把全部 approved 复制到单个子目标；修正响应时检查所有子目标的证据数量。
             一个项目只支持部分要求时明确 gap；不得因为有几个相关项目就宣称丰富程度、组合体验或启动能力已验证。
-            明确拒绝的项目不能出现在 evidence；未批准但允许补位的候选可以作为有依据的补缺建议，Java 最终决定是否入包。
+            PACK明确拒绝的项目不能出现在evidence；GOAL局部落选项目不能为该目标提供evidence，但可为其它目标提供依据。未批准但允许补位的候选可以作为有依据的补缺建议，Java最终决定是否入包。
             不输出 Markdown、XML 或 JSON 外的文字。
             审核 criteria 子目标只有 source/evidence/gap；不含 id/kind/projects/searches/preferences，也不嵌套 criteria。不要把父项审核对象或规划对象复制到子目标。
             source/evidence/gap 三个字段每条都必须出现，即使 evidence=[]、gap=""。每个规划 source 恰好一条，不得拆分、重复或新增 source 来容纳更多证据。
@@ -186,7 +204,7 @@ public class AiAgentService {
     }
 
     public AgentCallResult criticPools(String context, String userApiKey) {
-        return call(CRITIC + COMPACT_REVIEW + "\nJSON Schema:\n" + AgentSchemas.reviewDecision(), context, userApiKey, criticOutputLimit());
+        return call(CRITIC + COMPACT_REVIEW + "\nJSON Schema:\n" + AgentSchemas.reviewDecision(), context, userApiKey, criticOutputLimit()).forReview(2);
     }
 
     public AgentCallResult criticPools(String context, String userApiKey, Set<String> candidates, int approvalLimit) {
@@ -198,19 +216,31 @@ public class AiAgentService {
             schema.withObject("properties").withObject("rejected").put("maxItems", 0);
         } else {
             var permitted = schema.withObject("properties").withObject("approved").withObject("items").putArray("enum");
-            candidates.forEach(permitted::add);
+            candidates.stream().sorted().forEach(permitted::add);
+            var rejections = schema.withObject("properties").withObject("rejected");
+            rejections.put("maxItems", candidates.size());
+            var rejected = rejections.withObject("items").withObject("properties").withObject("slug").putArray("enum");
+            candidates.stream().sorted().forEach(rejected::add);
         }
         return call(CRITIC + COMPACT_REVIEW + "\n本轮 approved 硬上限=" + approvalLimit
                 + "。不能将全部适合的候选都写入 approved，必须从中选出限额以内的最佳组合。"
                 + "未选择不等于拒绝，不需要逐个写 rejected；rejected 仅写明确不应补入的项。"
-                + "同一个 slug 不能重复，也不能同时出现在 approved 和 rejected。"
-                + "\nJSON Schema:\n" + schema, context, userApiKey, criticOutputLimit());
+                + "approved内同一个slug不能重复；rejected内同一slug及相同作用域目标不能重复，PACK不得与approved重叠。"
+                + "先完成requirements的逐项目的证据与缺口，再写选模结果；rejected仅列有明确依据的决定，多条GOAL必须分别绑定不同目标。"
+                + "retainedProjects仅可提供证据，不能写入approved或rejected。不要为全部未批准项目逐个编写否决说明。"
+                + "\nJSON Schema:\n" + schema, context, userApiKey, criticOutputLimit()).forReview(2);
     }
 
     private static final String COMPACT_REVIEW = "\n输出紧凑JSON。每个子目标优先选1～2条最有代表性的引用，不需要列出所有已批准项目。"
+            + "网站只做模组组合与静态事实核对，安装后的运行检查由MAA-Checker负责。候选已经过目标环境版本筛选，不要求介绍提供实机启动、性能收益或内容质量测评。"
+            + "介绍明确说明新增群系、地牢、建筑、生物或某项功能，即可作为对应用途依据；不能因为没有质量评价或运行兼容实测而否决。"
+            + "丰富性由组合共同贡献，单个项目范围较窄不等于偏题；局部结构与整体地形生成不是同一功能，不能只因同属一个维度就判冲突。"
+            + "功能或生成范围重叠由用户组合选择处理；CONFLICT须有明确不兼容声明或已核实的静态矛盾，不能把潜在风险当已确认冲突。"
+            + "缺少完成证据应写入该目标gap，不自动变成对所有相关候选的否决。先选实际推荐组合，再检查approved与PACK否决完全不相交；不得把整份候选清单复制成approved。"
             + "Java提供维度核心生成目标时，每个维度优先保留有该维度地貌或大规模生成依据的兼容候选；quote须同时包含对应维度和生成改动。"
             + "大量群系、丰富地形或大规模结构均可提供核心生成依据，不要求三者齐全；普通单体结构、生物或单纯加高不构成证明。跨维度项目可以考虑，但群系总数不等于每个维度均丰富。"
             + "未明确要求时排除空岛、虚空、超平坦等极端世界预设及削减既有核心主要内容的附加包；不得为补足数量加入它们。"
+            + "上述排除针对当前默认行为；兼容某种世界、可选择的预设、配置开关和旧版故障不是默认改造。可选能力也不能计为默认已完成的用途；介绍同时明确写出默认行为时单独核对，不因另有配置选项忽略默认风险。"
             + "quote用能证明用途的最短连续原文，建议不超过160字；purpose和否决explanation建议不超过40字，gap不超过60字。"
             + "不得截短或改写source，不得丢失规划子目标；有criteria的父项仍须evidence=[]、gap=空字符串。";
 

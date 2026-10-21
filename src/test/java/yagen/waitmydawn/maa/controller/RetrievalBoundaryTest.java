@@ -34,7 +34,8 @@ class RetrievalBoundaryTest {
                 .thenReturn(mapper.readTree("""
                 {"dependencies":[{"version_id":"core-version","dependency_type":"required"}]}
                 """));
-        when(api.getVersionById("core-version")).thenReturn(mapper.readTree("{\"project_id\":\"core-id\"}"));
+        when(api.getVersionsBatch(anyCollection())).thenReturn(Map.of(
+                "core-version", mapper.readTree("{\"project_id\":\"core-id\"}")));
         when(api.getLatestCompatibleVersionBySlug("unknown-conflict", "1.21.1", "neoforge"))
                 .thenReturn(mapper.readTree("""
                 {"dependencies":[{"project_id":"core-id","dependency_type":"required"},
@@ -47,7 +48,8 @@ class RetrievalBoundaryTest {
         assertEquals("REQUIRED_CORE", result.getFirst().addonEvidence);
         assertEquals(1, budget.snapshot().get("unverified"));
         verify(api).search(eq("Core"), eq(25), contains("1.21.1"));
-        verify(api).prefetchVersions(anyList());
+        verify(api).getVersionsBatch(Set.of("core-version", "missing-ref"));
+        verify(api, never()).getVersionById(anyString());
         verify(api, never()).getLatestCompatibleVersionBySlug(eq("bridge-api"), anyString(), anyString());
     }
 

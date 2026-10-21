@@ -99,13 +99,14 @@ public class MrpackParser {
             versions.add(match.group(2));
             projects.add(match.group(1));
         }
-        apiClient.prefetchVersions(new java.util.ArrayList<>(versions));
+        var versionFacts = apiClient.getVersionsBatch(versions);
         apiClient.getProjectsBatch(projects);
         for (JsonNode file : index.path("files")) {
             String url = file.path("downloads").get(0).asText();
             var match = pattern.matcher(url); match.matches();
             String projectId = match.group(1), versionId = match.group(2);
-            JsonNode version = apiClient.getVersionById(versionId);
+            JsonNode version = versionFacts.get(versionId);
+            if (version == null) version = apiClient.getVersionById(versionId);
             JsonNode project = apiClient.getProjectInfo(projectId);
             if (version == null || project == null || !projectId.equals(version.path("project_id").asText())
                     || !supports(version.path("game_versions"), mc) || !supports(version.path("loaders"), loader))

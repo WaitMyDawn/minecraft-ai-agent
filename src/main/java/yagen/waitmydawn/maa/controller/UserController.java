@@ -250,6 +250,7 @@ public class UserController {
                 "accountNumber", user.getAccountNumber(),
                 "username", user.getUsername(),
                 "preferenceWeight", user.getPreferenceWeight(),
+                "selectionPreferences", user.getSelectionPreferences(),
                 "hasApiKey", user.getEncryptedApiKey() != null && !user.getEncryptedApiKey().isEmpty(),
                 "enableBlacklist", user.isEnableBlacklist(),
                 "enableUserFeedbackRules", user.isEnableUserFeedbackRules(),
@@ -299,6 +300,7 @@ public class UserController {
                 "accountNumber", user.getAccountNumber(),
                 "username", user.getUsername(),
                 "preferenceWeight", user.getPreferenceWeight(),
+                "selectionPreferences", user.getSelectionPreferences(),
                 "hasApiKey", user.getEncryptedApiKey() != null && !user.getEncryptedApiKey().isEmpty(),
                 "enableBlacklist", user.isEnableBlacklist(),
                 "enableUserFeedbackRules", user.isEnableUserFeedbackRules(),
@@ -364,6 +366,20 @@ public class UserController {
         if (body.containsKey("apiKey") && body.get("apiKey") != null
                 && (body.get("apiKey").length() > 512 || body.get("apiKey").chars().anyMatch(Character::isISOControl)))
             return ResponseEntity.badRequest().body(Map.of("error", "API Key 超过长度限制或包含控制字符"));
+        var popup = user.getSelectionPreferences();
+        var popupValues = new java.util.LinkedHashMap<String, Boolean>();
+        popupValues.put("addons", popup.addons()); popupValues.put("replacements", popup.replacements());
+        popupValues.put("overlap", popup.overlap()); popupValues.put("generation", popup.generation());
+        for (var field : popupValues.entrySet()) {
+            String key = "popup." + field.getKey();
+            if (!body.containsKey(key)) continue;
+            String value = body.get(key);
+            if (!"true".equals(value) && !"false".equals(value))
+                return ResponseEntity.badRequest().body(Map.of("error", "弹窗设置必须为 true 或 false"));
+            field.setValue(Boolean.parseBoolean(value));
+        }
+        user.setSelectionPreferences(new yagen.waitmydawn.maa.model.PopupPreferences(popupValues.get("addons"),
+                popupValues.get("replacements"), popupValues.get("overlap"), popupValues.get("generation")));
         if (body.containsKey("username")) user.setUsername(body.get("username"));
         if (body.containsKey("preferenceWeight")) {
             user.setPreferenceWeight(Double.parseDouble(body.get("preferenceWeight")));
@@ -382,6 +398,7 @@ public class UserController {
         return ResponseEntity.ok(Map.of(
                 "username", user.getUsername(),
                 "preferenceWeight", user.getPreferenceWeight(),
+                "selectionPreferences", user.getSelectionPreferences(),
                 "hasApiKey", user.getEncryptedApiKey() != null && !user.getEncryptedApiKey().isEmpty()
         ));
     }
@@ -595,6 +612,7 @@ public class UserController {
                 "accountNumber", user.getAccountNumber(),
                 "username", user.getUsername(),
                 "preferenceWeight", user.getPreferenceWeight(),
+                "selectionPreferences", user.getSelectionPreferences(),
                 "hasApiKey", user.getEncryptedApiKey() != null && !user.getEncryptedApiKey().isEmpty(),
                 "enableBlacklist", user.isEnableBlacklist(),
                 "enableUserFeedbackRules", user.isEnableUserFeedbackRules(),

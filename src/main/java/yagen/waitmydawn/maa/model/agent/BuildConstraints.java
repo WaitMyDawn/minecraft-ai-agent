@@ -87,7 +87,7 @@ public record BuildConstraints(int schemaVersion, List<String> mustHave, List<St
                             .filter(c -> c.addonCores().isEmpty() || !blocked.containsAll(c.addonCores()))
                             .map(c -> new RequirementCriterion(c.source(), c.kind(), c.projects().stream().filter(p -> !blocked.contains(p)).toList(),
                                     c.addonCores().stream().filter(p -> !blocked.contains(p)).toList(),
-                                    c.searches().stream().filter(s -> !categories.contains(s.category())).toList(), c.preferences())).toList();
+                                    c.searches().stream().filter(s -> !categories.contains(s.category())).toList(), c.preferences(), c.quantity())).toList();
             if (!entry.criteria().isEmpty() && criteria.isEmpty() && remaining.isEmpty()) continue;
             var activeAddonCores = entry.criteria().isEmpty() ? entry.addonCores().stream().filter(p -> !blocked.contains(p)).toList()
                     : criteria.stream().flatMap(c -> c.addonCores().stream()).distinct().toList();
@@ -95,7 +95,7 @@ public record BuildConstraints(int schemaVersion, List<String> mustHave, List<St
                     && criteria.isEmpty() && activeAddonCores.isEmpty() && !remaining.isEmpty() ? BuildRequirement.Kind.PROJECTS : entry.kind();
             ledger.put(entry.id(), new BuildRequirement(entry.id(), entry.source(), retainedKind, remaining, capabilities, activeAddonCores,
                     Collections.disjoint(entry.capabilities(), changes.releaseCapabilities())
-                            ? entry.searches().stream().filter(s -> !categories.contains(s.category())).toList() : List.of(), entry.preferences(), criteria));
+                            ? entry.searches().stream().filter(s -> !categories.contains(s.category())).toList() : List.of(), entry.preferences(), criteria, entry.quantity()));
         }
         planned.requirements().forEach(entry -> ledger.put(entry.id(), entry));
         var releasedChildProjects = previous.requirements().stream().flatMap(r -> r.criteria().stream()

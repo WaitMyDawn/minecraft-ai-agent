@@ -13,7 +13,7 @@ public final class OverlapSelections {
     private static final ObjectMapper JSON = tools.jackson.databind.json.JsonMapper.builder()
             .enable(tools.jackson.core.StreamReadFeature.STRICT_DUPLICATE_DETECTION).build();
     private record Pending(Long owner, Long conversation, String snapshot, String reply, AssemblySnapshot assembly,
-                           DependencyClosure closure, List<ContentOverlap.Group> groups, Map<String, List<String>> categories) {}
+                           DependencyClosure closure, List<ContentOverlap.Group> groups, Map<String, List<String>> categories, Map<String, ReplacementSelections.Selection> automatic) {}
     public record Confirmed(String reply, Runnable acknowledge) {
         public String complete() { acknowledge.run(); return reply; }
     }
@@ -46,6 +46,16 @@ public final class OverlapSelections {
     public String prepare(Long owner, Long conversation, Map<String, String> payload, String reply,
                           AssemblySnapshot assembly, DependencyClosure closure, ModrinthApiClient api, java.util.function.BooleanSupplier aborted,
                           Map<String, List<String>> confirmedGeneration) {
+        return prepare(owner, conversation, payload, reply, assembly, closure, api, aborted, confirmedGeneration, PopupPreferences.defaults());
+    }
+    public String prepare(Long owner, Long conversation, Map<String, String> payload, String reply,
+                          AssemblySnapshot assembly, DependencyClosure closure, ModrinthApiClient api, java.util.function.BooleanSupplier aborted,
+                          Map<String, List<String>> confirmedGeneration, PopupPreferences preferences) {
+        return prepareFromFacts(owner, conversation, payload, reply, assembly, closure, api, aborted, confirmedGeneration, preferences, null);
+    }
+    public String prepareFromFacts(Long owner, Long conversation, Map<String, String> payload, String reply,
+                          AssemblySnapshot assembly, DependencyClosure closure, ModrinthApiClient api, java.util.function.BooleanSupplier aborted,
+                          Map<String, List<String>> confirmedGeneration, PopupPreferences preferences, Map<String, JsonNode> suppliedFacts) {
         if (owner == null || assembly == null || closure == null) return reply;
         var selected = assembly.versions().keySet();
         Set<String> outputFiles = new HashSet<>(Arrays.asList(tag(reply, "mods").split(",")));
@@ -61,7 +71,7 @@ public final class OverlapSelections {
         var categories = new TreeMap<String, List<String>>();
         int unknown = 0;
         Map<String, JsonNode> facts;
-        try { facts = api.getProjectsBatch(selected); }
+        try { facts = suppliedFacts == null ? api.getProjectsBatch(selected) : suppliedFacts; }
         catch (ModrinthApiClient.PartialProjectBatchException partial) { facts = partial.projects(); }
         catch (java.util.concurrent.CancellationException canceled) { throw canceled; }
         catch (RuntimeException unavailable) { facts = Map.of(); }
@@ -83,17 +93,36 @@ public final class OverlapSelections {
                         info.path("downloads").asLong()));
             } catch (RuntimeException unavailable) { unknown++; }
         }
-        var groups = ContentOverlap.detectByDimension(projects, protectedSlugs, confirmedGeneration).stream().filter(group -> acknowledgements.getIfPresent(
+        var detected = ContentOverlap.detectByDimension(projects, protectedSlugs, confirmedGeneration).stream().filter(group -> acknowledgements.getIfPresent(
                 fingerprint(owner, conversation, payload.getOrDefault("uuid", ""), assembly, group, Set.of())) == null).toList();
+        var groups = SelectionRecommendations.preserveRequirements(detected, JSON.readTree(tag(reply, "requirement_report")), assembly);
         var updatedTrace = (ObjectNode) JSON.readTree(tag(reply, "trace"));
-        updatedTrace.set("upstream", JSON.readTree(yagen.waitmydawn.maa.runtime.RequestScope.toTraceJson()));
+        updatedTrace.set(suppliedFacts == null ? "upstream" : "selectionUpstream",
+                JSON.readTree(yagen.waitmydawn.maa.runtime.RequestScope.toTraceJson()));
         updatedTrace.set("contentOverlapAudit", JSON.valueToTree(Map.of("groups", groups.size(), "unverifiedDescriptions", unknown)));
         reply = replaceTag(reply, "trace", MessageJson.write(updatedTrace));
-        if (groups.isEmpty()) return reply;
-        var value = new Pending(owner, conversation, snapshot(payload), reply, assembly, closure, groups, Map.copyOf(categories));
+        if (groups.isEmpty()) return BuildCompletion.enrich(reply);
+        var recommended = SelectionRecommendations.combinations(groups);
+        var automatic = new LinkedHashMap<String, ReplacementSelections.Selection>();
+        groups.stream().filter(g -> !preferences.asks(g)).forEach(g -> {
+            if (recommended.containsKey(g.original())) automatic.put(g.original(), recommended.get(g.original()));
+        });
+        // 跨组共享项目必须统一决定；与人工组连接的组一并展示，不能让隐藏默认覆盖人工选择。
+        var interactiveSlugs = new HashSet<String>();
+        boolean expanded;
+        do {
+            expanded = false;
+            groups.stream().filter(g -> !automatic.containsKey(g.original())).forEach(g -> g.candidates().forEach(c -> interactiveSlugs.add(c.slug())));
+            for (var g : groups) if (automatic.containsKey(g.original()) && g.candidates().stream().anyMatch(c -> interactiveSlugs.contains(c.slug()))) {
+                automatic.remove(g.original()); expanded = true;
+            }
+        } while (expanded);
+        var interactive = groups.stream().filter(g -> !automatic.containsKey(g.original())).toList();
+        var value = new Pending(owner, conversation, snapshot(payload), reply, assembly, closure, groups, Map.copyOf(categories), Map.copyOf(automatic));
+        if (interactive.isEmpty()) return finish(value, choices(value, "{}")) + "\n已按设置采用推荐组合。";
         String ticket = put(value);
         return "发现需要确认的内容组合，请查看介绍依据后选择保留的项目。当前清单尚未修改，等待不会占用构建名额。"
-                + "\n<replacement_options>" + MessageJson.write(Map.of("kind", "OVERLAP", "ticket", ticket, "groups", groups,
+                + "\n<replacement_options>" + MessageJson.write(Map.of("kind", "OVERLAP", "ticket", ticket, "groups", interactive, "recommendedChoices", recommended,
                     "loader", assembly.loader(), "mcVersion", assembly.mcVersion())) + "</replacement_options>"
                 + "\n<trace>" + MessageJson.write(Map.of("branch", "AWAITING_INPUT", "awaitingInput", true,
                     "overlapGroups", groups.size(), "unverifiedDescriptions", unknown)) + "</trace>";
@@ -129,10 +158,15 @@ public final class OverlapSelections {
         if (raw.length() > 512000) throw new IllegalArgumentException("组合选择超过输入限额");
         JsonNode choices;
         try { choices = JSON.readTree(raw); } catch (RuntimeException invalid) { throw new IllegalArgumentException("组合选择格式无效"); }
-        if (choices == null || !choices.isObject() || choices.size() != value.groups().size()) throw new IllegalArgumentException("请处理每个组合分组");
+        if (choices == null || !choices.isObject() || choices.size() != value.groups().size() - value.automatic().size()) throw new IllegalArgumentException("请处理每个组合分组");
+        var merged = (ObjectNode) choices.deepCopy();
+        for (var entry : value.automatic().entrySet()) {
+            if (merged.has(entry.getKey())) throw new IllegalArgumentException("自动组合不能由请求覆盖");
+            merged.set(entry.getKey(), JSON.valueToTree(entry.getValue()));
+        }
         var states = new HashMap<String, Boolean>();
         for (var group : value.groups()) {
-            var choice = choices.path(group.original());
+            var choice = merged.path(group.original());
             if (!choice.path("slugs").isArray() || !choice.path("drop").isBoolean() || choice.path("drop").asBoolean()
                     || !choice.path("manualSlug").isTextual() || !choice.path("manualSlug").asText().isEmpty())
                 throw new IllegalArgumentException("组合确认只能选择本组项目");
@@ -150,10 +184,14 @@ public final class OverlapSelections {
         }
         return states.entrySet().stream().filter(e -> !e.getValue()).map(Map.Entry::getKey).collect(java.util.stream.Collectors.toSet());
     }
+    static String finishSnapshot(String reply, AssemblySnapshot assembly, DependencyClosure closure,
+                                 Map<String, List<String>> categories, Set<String> rejected) {
+        return finish(new Pending(null, null, "", reply, assembly, closure, List.of(), categories, Map.of()), rejected);
+    }
     private static String finish(Pending value, Set<String> rejected) {
         if (rejected.isEmpty()) {
             var acceptedTrace = (ObjectNode) JSON.readTree(tag(value.reply(), "trace"));
-            acceptedTrace.set("overlapSelection", JSON.valueToTree(Map.of("rejected", List.of(), "groups", decisionEvidence(value, rejected))));
+            acceptedTrace.set("overlapSelection", JSON.valueToTree(Map.of("rejected", List.of(), "groups", decisionEvidence(value, rejected), "automaticGroups", value.automatic().keySet())));
             return replaceTag(value.reply(), "trace", MessageJson.write(acceptedTrace)) + "\n已确认保留所选内容组合。";
         }
         var roots = new LinkedHashSet<>(value.assembly().roots()); roots.removeAll(rejected);
@@ -165,11 +203,21 @@ public final class OverlapSelections {
         var assembly = new AssemblySnapshot(value.assembly().loader(), value.assembly().mcVersion(), List.copyOf(roots), versions, origins, value.assembly().rootsKnown());
         var trace = (ObjectNode) JSON.readTree(tag(value.reply(), "trace"));
         var report = (ObjectNode) JSON.readTree(tag(value.reply(), "build_report"));
+        if (trace.has("candidateProvenance")) trace.set("candidateProvenance", JSON.valueToTree(CandidateProvenance.afterSelection(
+                JSON.treeToValue(trace.path("candidateProvenance"), CandidateProvenance.Report.class), assembly, value.closure())));
+        if (trace.has("candidateAdmission")) trace.set("candidateAdmission", JSON.valueToTree(CandidateAdmission.afterSelection(
+                JSON.treeToValue(trace.path("candidateAdmission"), CandidateAdmission.Report.class), selected)));
+        if(trace.path("requirementExecution").has("targets")) trace.set("requirementExecution",JSON.valueToTree(RequirementExecution.afterSelection(
+                JSON.treeToValue(trace.path("requirementExecution"),RequirementExecution.Report.class),assembly)));
         var coverage = JSON.readTree(tag(value.reply(), "requirement_report"));
         var invalidatedEvidence = new HashSet<>(removed);
         for (var addon : trace.path("addonEvidence")) for (var evidence : addon.path("finalEvidence"))
             for (var partner : evidence.path("partners")) if (removed.contains(partner.asText())) invalidatedEvidence.add(addon.path("slug").asText());
         adjustCoverage(coverage, removed, invalidatedEvidence);
+        var automaticallyRejected=new HashSet<String>();
+        value.groups().stream().filter(g -> value.automatic().containsKey(g.original())).forEach(g -> g.candidates().stream()
+                .map(ContentOverlap.Candidate::slug).filter(rejected::contains).forEach(automaticallyRejected::add));
+        RequirementAssessment.refresh(coverage,JSON.readTree(tag(value.reply(),"requirement_report")),rejected,removed,automaticallyRejected);
         var categoryCounts = new TreeMap<String, Integer>();
         selected.forEach(slug -> value.categories().getOrDefault(slug, List.of()).forEach(cat -> categoryCounts.merge(cat, 1, Integer::sum)));
         int unclassified = (int) selected.stream().filter(s -> value.categories().getOrDefault(s, List.of()).isEmpty()).count();
@@ -187,7 +235,7 @@ public final class OverlapSelections {
         if (trace.path("resolution") instanceof ObjectNode resolution) {
             resolution.put("status", closure.status() == DependencyClosure.Status.COMPLETE ? "COMPLETE" : "INCOMPLETE"); resolution.put("unresolved", closure.issues().size());
         }
-        trace.set("overlapSelection", JSON.valueToTree(Map.of("rejected", rejected, "removedIncludingOrphans", removed, "staticClosure", closure, "groups", decisionEvidence(value, rejected))));
+        trace.set("overlapSelection", JSON.valueToTree(Map.of("rejected", rejected, "removedIncludingOrphans", removed, "staticClosure", closure, "groups", decisionEvidence(value, rejected), "automaticGroups", value.automatic().keySet())));
         trace.set("quantity", JSON.valueToTree(Map.of("status", "USER_SELECTION", "totalFiles", selected.size(), "roots", roots.size(),
                 "dependencies", Math.max(0, selected.size() - roots.size()), "trimmed", removed, "rootsKnown", assembly.rootsKnown())));
         for (var row : trace.path("addonEvidence")) if (row instanceof ObjectNode object) {
@@ -223,12 +271,13 @@ public final class OverlapSelections {
                 if (old.count() != null && !quantity.path("met").isNull()) quantity.put("met", old.count().accepts(actual));
             }
         }
-        return "已按你的选择保留 " + selected.size() + " 个模组文件；已移除未选项目，根来源核实后的孤立前置一并清理。"
+        return BuildCompletion.enrich("已按你的选择保留 " + selected.size() + " 个模组文件；已移除未选项目，根来源核实后的孤立前置一并清理。"
                 + "\n" + optionalTag(value.reply(), "replacement_choices") + optionalTag(value.reply(), "ops_summary") + optionalTag(value.reply(), "name") + "\n<mc>" + assembly.mcVersion() + "</mc><loader>" + assembly.loader() + "</loader>"
+                + "\n<dependency_audit>" + MessageJson.write(closure) + "</dependency_audit>"
                 + "\n<build_report>" + MessageJson.write(report) + "</build_report>"
                 + (coverage.isMissingNode() ? "" : "\n<requirement_report>" + MessageJson.write(coverage) + "</requirement_report>")
                 + "\n<trace>" + MessageJson.write(trace) + "</trace>\n<mods>" + String.join(",", new TreeSet<>(selected)) + "</mods>"
-                + "\n<constraints>" + codec.write(constraints) + "</constraints>";
+                + "\n<constraints>" + codec.write(constraints) + "</constraints>");
     }
     private static List<Map<String, Object>> decisionEvidence(Pending value, Set<String> rejected) {
         return value.groups().stream().map(group -> Map.<String, Object>of("id", group.original(), "explanation", group.explanation(),
@@ -281,7 +330,23 @@ public final class OverlapSelections {
         boolean generationChanged = false;
         for (var realm : row.path("evidenceState").path("generation"))
             for (var project : realm.path("projects")) generationChanged |= removed.contains(project.asText());
-        if (!changed && !childChanged && !generationChanged && !(truncated && !invalidatedRelations.isEmpty())) return false;
+        boolean quantityChanged = false;
+        if (row.path("quantity") instanceof ObjectNode quantity && quantity.path("projects").isArray()) {
+            var counted = JSON.createArrayNode();
+            for (var project : quantity.path("projects")) {
+                if (removed.contains(project.asText()) || invalidatedRelations.contains(project.asText())) {
+                    quantityChanged = true;
+                    if (!removed.contains(project.asText()) && invalidatedRelations.contains(project.asText())) quantity.put("complete", false);
+                }
+                else counted.add(project.asText());
+            }
+            quantity.set("projects", counted); quantity.put("actual", counted.size());
+            if (quantityChanged && counted.size() < quantity.path("min").asInt()) {
+                row.put("status", "PARTIAL"); row.put("note", "组合选择后数量不足：" + counted.size() + " / "
+                        + quantity.path("min").asInt() + "～" + quantity.path("max").asInt() + " 个有依据的内容模组");
+            }
+        }
+        if (!changed && !childChanged && !generationChanged && !(truncated && !invalidatedRelations.isEmpty())) return quantityChanged;
         row.set("mods", kept); row.put("modCount", kept.size());
         row.set("missing", JSON.valueToTree(missing)); row.put("missingCount", Math.max(previousMissingCount + addedMissing, missing.size()));
         boolean pendingChild = false;
@@ -323,6 +388,10 @@ public final class OverlapSelections {
             if (!previous.equals("CONTEXT")) row.put("status", kept.isEmpty() ? "UNVERIFIED" : "PARTIAL");
             state.put("code", truncated ? "DISPLAY_TRUNCATED" : relationChanged ? "RELATION_PENDING" : "EVIDENCE_REMOVED");
             row.put("note", relationChanged ? "组合选择后联动对象发生变化，关系仍待核实" : "组合选择后部分关联已移除，当前用途待核实");
+        }
+        if (row.path("quantity").isObject() && row.path("quantity").path("actual").asInt() < row.path("quantity").path("min").asInt()) {
+            row.put("status", "PARTIAL");
+            row.put("note", row.path("note").asText() + "；选择后未达到该项数量下限");
         }
         row.set("evidenceState", state);
         return true;

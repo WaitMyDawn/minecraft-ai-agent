@@ -36,6 +36,60 @@ import static org.mockito.Mockito.when;
  */
 class ModrinthApiClientTest {
     @Test @org.junit.jupiter.api.Timeout(10)
+    void exactVersionBatchRegistersTogetherAndOnlyReusesTaskLocalBrowserFacts() throws Exception {
+        var fetcher = mock(ModrinthFetcher.class); var tasks = new DelegationTasks(true, 2000);
+        var api = new ModrinthApiClient(fetcher, tasks); var ctx = new DelegationContext(); var json = new ObjectMapper();
+        var ids = java.util.stream.IntStream.range(0, 12).mapToObj(i -> "V" + i).toList();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var future = executor.submit(() -> DelegationContext.runWith(ctx, () -> {
+                var result = api.getVersionsBatch(ids);
+                assertEquals(ids, new java.util.ArrayList<>(result.keySet()));
+                ids.forEach(id -> assertEquals(result.get(id), api.getVersionById(id)));
+            }));
+            for (int i = 0; i < 400 && ctx.pendingWants().size() < 12; i++) Thread.sleep(2);
+            var wants = ctx.dispatchWants(); assertEquals(12, wants.size());
+            for (var want : wants) {
+                assertEquals(Kind.VERSION, want.kind());
+                ctx.deliver(want.kind(), want.key(), json.createObjectNode().put("id", want.key()).put("project_id", "P" + want.key()));
+            }
+            future.get(2, TimeUnit.SECONDS);
+            assertTrue(ctx.pendingWants().isEmpty()); assertEquals(12, ctx.factReuseCount());
+            org.mockito.Mockito.verifyNoInteractions(fetcher);
+        } finally { tasks.close(); }
+    }
+
+    @Test void nativeVersionBatchPrefetchesOnceAndCancelledTaskCannotStartFetching() {
+        var fetcher = mock(ModrinthFetcher.class); var tasks = new DelegationTasks(false, 2000);
+        var version = new ObjectMapper().createObjectNode().put("id", "V1");
+        when(fetcher.getVersionById("V1")).thenReturn(version);
+        try {
+            var api = new ModrinthApiClient(fetcher, tasks);
+            assertEquals(java.util.Map.of("V1", version), api.getVersionsBatch(java.util.List.of("V1", "V1")));
+            verify(fetcher).prefetchVersions(java.util.List.of("V1")); verify(fetcher, times(1)).getVersionById("V1");
+            org.mockito.Mockito.clearInvocations(fetcher);
+            var ctx = new DelegationContext(); ctx.cancelAll();
+            org.junit.jupiter.api.Assertions.assertThrows(java.util.concurrent.CancellationException.class,
+                    () -> DelegationContext.runWith(ctx, () -> api.getVersionsBatch(java.util.List.of("V2"))));
+            org.mockito.Mockito.verifyNoInteractions(fetcher);
+        } finally { tasks.close(); }
+    }
+
+    @Test @org.junit.jupiter.api.Timeout(10)
+    void versionBatchUnavailableIsNotReportedAsAnAbsentVersion() throws Exception {
+        var fetcher = mock(ModrinthFetcher.class); var tasks = new DelegationTasks(true, 2000);
+        when(fetcher.getVersionById("V1")).thenThrow(new ModrinthApiClient.UnavailableException("network failure"));
+        var api = new ModrinthApiClient(fetcher, tasks); var ctx = new DelegationContext();
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            var future = executor.submit(() -> DelegationContext.runWith(ctx, () ->
+                    org.junit.jupiter.api.Assertions.assertThrows(ModrinthApiClient.UnavailableException.class,
+                            () -> api.getVersionsBatch(java.util.List.of("V1")))));
+            for (int i = 0; i < 400 && ctx.pendingWants().isEmpty(); i++) Thread.sleep(2);
+            assertEquals(1, ctx.pendingWants().size()); ctx.handBack(Kind.VERSION, "V1", "NETWORK_ERROR");
+            future.get(2, TimeUnit.SECONDS); verify(fetcher).getVersionById("V1");
+        } finally { tasks.close(); }
+    }
+
+    @Test @org.junit.jupiter.api.Timeout(10)
     void partialBrowserBatchRetainsSuccessfulFactsAndReportsUnavailableInsteadOfAbsent() throws Exception {
         var fetcher = mock(ModrinthFetcher.class);
         when(fetcher.getProjectInfo("failed")).thenThrow(new ModrinthApiClient.UnavailableException("fixture failure"));

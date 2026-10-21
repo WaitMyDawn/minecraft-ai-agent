@@ -74,6 +74,7 @@ final class GoldenAssertions {
     static List<String> checkGeneration(JsonNode facts, Set<String> selected, JsonNode rule) {
         validateGeneration(rule);
         var report = facts.path("requirement_report");
+
         if (report.path("schemaVersion").asInt() != 1 || !report.path("requirements").isArray() || report.path("requirements").isEmpty()) return List.of("缺少维度生成需求报告");
         var pending = new ArrayDeque<JsonNode>(); report.path("requirements").forEach(pending::add);
         var targets = new HashSet<String>(); var covered = new HashSet<String>(); var failures = new ArrayList<String>();
@@ -99,8 +100,16 @@ final class GoldenAssertions {
     static void validateCoverage(JsonNode rule) {
         if (!rule.isObject() || rule.isEmpty()) throw new IllegalArgumentException("coverage 必须是非空对象");
         rule.properties().forEach(e -> {
-            if (!Set.of("sourcesContain", "minSupporting", "maxRepairAdds", "noMissingNamed", "retainedEvidence").contains(e.getKey()))
+            if (!Set.of("sourcesContain", "minSupporting", "maxRepairAdds", "noMissingNamed", "retainedEvidence", "quantities").contains(e.getKey()))
                 throw new IllegalArgumentException("未知 coverage 断言: " + e.getKey());
+            if (e.getKey().equals("quantities")) {
+                if (!e.getValue().isArray() || e.getValue().isEmpty()) throw new IllegalArgumentException("quantities须为非空数组");
+                for (var q : e.getValue()) if (!q.isObject() || !q.path("source").isTextual() || q.path("source").asText().isBlank()
+                        || !q.path("min").isIntegralNumber() || !q.path("max").isIntegralNumber()
+                        || q.path("min").asInt() < 0 || q.path("max").asInt() > 500 || q.path("min").asInt() > q.path("max").asInt()
+                        || !Set.of("ADDED_ROOTS", "RETAINED_ROOTS").contains(q.path("scope").asText()))
+                    throw new IllegalArgumentException("quantity断言格式无效");
+            }
             if (e.getKey().equals("sourcesContain") && (!e.getValue().isArray() || e.getValue().isEmpty()
                     || java.util.stream.StreamSupport.stream(e.getValue().spliterator(), false).anyMatch(v -> !v.isTextual() || v.asText().isBlank())))
                 throw new IllegalArgumentException("sourcesContain 必须是非空文本数组");
@@ -114,6 +123,25 @@ final class GoldenAssertions {
         validateCoverage(rule);
         var failures = new ArrayList<String>();
         var report = facts.path("requirement_report");
+        var allRows = new ArrayList<JsonNode>();
+        for (var row : report.path("requirements")) {
+            allRows.add(row); for (var child : row.path("criteria")) allRows.add(child);
+        }
+        for (var expected : rule.path("quantities")) {
+            boolean matched = allRows.stream().anyMatch(row -> {
+                var q = row.path("quantity");
+                if (!row.path("source").asText().contains(expected.path("source").asText())
+                        || !q.path("complete").asBoolean(false) || !q.path("scope").equals(expected.path("scope"))
+                        || !q.path("min").equals(expected.path("min")) || !q.path("max").equals(expected.path("max"))
+                        || !q.path("actual").isIntegralNumber() || q.path("actual").asInt() < expected.path("min").asInt()
+                        || q.path("actual").asInt() > expected.path("max").asInt() || !q.path("projects").isArray()) return false;
+                var projects = new HashSet<String>();
+                for (var project : q.path("projects")) if (!project.isTextual() || !finalMods.contains(project.asText()) || !projects.add(project.asText())) return false;
+                return projects.size() == q.path("actual").asInt();
+            });
+            if (!matched) failures.add("局部数量未满足或未可靠报告: " + expected.path("source").asText());
+        }
+
         if (report.path("schemaVersion").asInt() != 1 || !report.path("requirements").isArray())
             return List.of("缺少有效最终需求报告");
         var rows = report.path("requirements"); var ids = new HashSet<String>(); int supporting = 0;

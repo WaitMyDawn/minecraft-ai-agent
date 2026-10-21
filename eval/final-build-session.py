@@ -31,6 +31,8 @@ def remember_auth_response(path, data):
         token = json.loads(data).get("token")
         if token:
             STATE["secrets"].append(token)
+            # Full-site evaluation must continue with the session issued by its visible login flow.
+            STATE["token"] = token
     except (ValueError, AttributeError):
         pass
 
@@ -76,6 +78,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self.dispatch()
 
+    def do_PUT(self):
+        self.dispatch()
+
     def dispatch(self):
         origin = self.headers.get("Origin", "")
         if origin and origin != f"http://127.0.0.1:{PORT}":
@@ -117,7 +122,7 @@ class Handler(BaseHTTPRequestHandler):
                 headers["X-LLM-Api-Key"] = STATE["key"]
             record({"event": "request", "path": self.path, "method": self.command, "body": body.decode("utf-8", errors="replace")})
             try:
-                status, response_headers, data = upstream(self.path, self.command, body if self.command == "POST" else None, headers)
+                status, response_headers, data = upstream(self.path, self.command, body if self.command in {"POST", "PUT"} else None, headers)
                 mime = response_headers.get("Content-Type", "application/octet-stream")
                 remember_auth_response(self.path, data)
                 binary = is_pack_response(self.path, status, mime, data)
@@ -151,6 +156,7 @@ if __name__ == "__main__":
     parser.add_argument("--app-port", type=int, default=8781)
     parser.add_argument("--runtime-jar", type=Path, help="Exact jar started for this evaluation")
     parser.add_argument("--full-site", action="store_true", help="Serve the production index and use the normal chat UI")
+    parser.add_argument("--case-id", help="Use an unchanged single-prompt case from golden-set-v7.json")
     parser.add_argument("--delegation-budget-ms", type=int, help="Verified runtime per-call delegation budget; omit if unknown")
     args = parser.parse_args()
     if args.delegation_budget_ms is not None and args.delegation_budget_ms <= 0:
@@ -165,6 +171,12 @@ if __name__ == "__main__":
         (RUN / directory).mkdir(parents=True, exist_ok=True)
     BASE, PORT = f"http://127.0.0.1:{args.app_port}", args.port
     prompt = (ROOT / "docs/final-build-evaluation.md").read_text(encoding="utf-8").split("```text\n", 1)[1].split("```", 1)[0].strip()
+    if args.case_id:
+        cases = json.loads((ROOT / "eval/golden-set-v7.json").read_text(encoding="utf-8"))["cases"]
+        case = next((item for item in cases if item["id"] == args.case_id), None)
+        if not case or not isinstance(case.get("prompt"), str):
+            parser.error("Case must exist and contain a single prompt")
+        prompt = case["prompt"]
     index = (STATIC / "index.html").read_text(encoding="utf-8")
     modal = index[index.index('    <div v-if="replacementPrompt"'):index.index('    <!-- 顶部导航栏 -->')]
     PAGE = '<!doctype html><meta charset="utf-8"><script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script><script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script><script type="importmap">{"imports":{"vue":"https://cdn.jsdelivr.net/npm/vue@3/dist/vue.esm-browser.prod.js"}}</script><div id="app" class="p-6"><button @click="run" :disabled="busy || started" class="bg-indigo-600 text-white p-3 rounded">开始朝花夕拾基线测试</button><p class="mt-3">{{status}}</p><article id="chat-output" class="max-w-4xl mx-auto mt-6 bg-white border rounded-xl p-6"><div v-html="renderMarkdownSafe(cleanChatReply(reply))"></div><build-report :content="cleanChatReply(reply)"></build-report></article>' + modal + '</div><script type="module">'
@@ -173,12 +185,16 @@ if __name__ == "__main__":
     PAGE += 'createApp({components:{BuildReport},setup(){const busy=ref(false),started=ref(false),status=ref("等待开始"),reply=ref("");const run=async()=>{if(started.value)return;started.value=true;busy.value=true;authUser.value={token:"relay-session"};const signal=new AbortController().signal;const body={prompt:input,currentMods:"",uuid:"final-' + FINAL.name + '",loader:"neoforge",mcVersion:"1.21.1",constraints:"",importedPack:"",excludedSlugs:""};try{status.value="浏览器取数与构建中";await capture({event:"phase-start",phase:"build-round"});let response=await apiFetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});let text=await response.text();await capture({event:"phase-end",phase:"build-round"});for(let round=0;round<5;round++){const match=text.match(/<replacement_options>([\\s\\S]*?)<\\/replacement_options>/);if(!match)break;const options=JSON.parse(match[1]);await capture({event:"candidates",options});status.value="等待选择兼容候选";const choices=await chooseReplacements(options,signal);if(!choices)throw new Error("候选选择已取消");await capture({event:"choices",choices});status.value="续建中";await capture({event:"phase-start",phase:"build-round"});response=await apiFetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,selectionKind:options.kind||"REPLACEMENT",replacementTicket:options.ticket,replacementChoices:JSON.stringify(choices)})});text=await response.text();await capture({event:"phase-end",phase:"build-round"});}reply.value=text;await nextTick();await capture({event:"chat-visible",content:document.getElementById("chat-output").innerText,renderer:"production-markdown-build-report",scope:"evaluation-relay"});await capture({event:"chat-final",reply:text});const mods=text.match(/<mods>(.*?)<\\/mods>/s);if(!mods)throw new Error("未产生可导出的清单");const slugs=mods[1].split(",").filter(Boolean);const name=(text.match(/<name>(.*?)<\\/name>/s)||[])[1]||"朝花夕拾";status.value="预览与导出中";const trace=JSON.parse(text.split("<trace>")[1]?.split("</trace>")[0]||"{}");const pack={name,loader:"neoforge",mcVersion:"1.21.1",modSlugs:slugs,excludedSlugs:[],assembly:trace.assembly||null};await capture({event:"phase-start",phase:"preview"});const preview=await(await apiFetch("/api/modpack/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(pack)})).json();await capture({event:"phase-end",phase:"preview"});if(preview.assembly)pack.assembly=preview.assembly;await capture({event:"phase-start",phase:"export"});const downloaded=await apiFetch("/api/modpack/build",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...pack,manifestId:preview.manifestId,selectedIds:preview.nodes.map(n=>n.id),allowIncomplete:true})});await capture({event:"phase-end",phase:"export"});if(!downloaded.ok)throw new Error("导出失败");const bytes=await downloaded.arrayBuffer();const sha256=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes))).map(v=>v.toString(16).padStart(2,"0")).join("");await capture({event:"final",reply:text,preview,download:{bytes:bytes.byteLength,sha256}});status.value="测试完成，实际清单已保存";}catch(e){status.value="测试失败："+e.message;await capture({event:"failure",message:e.message,reply:reply.value});}finally{busy.value=false;}};return{renderMarkdownSafe,cleanChatReply,busy,started,status,reply,run,replacementPrompt,replacementLink,confirmReplacement,cancelReplacement,syncReplacementSelection};}}).mount("#app");</script>'
     if args.full_site:
         PAGE = production_page(index)
+    elif args.case_id:
+        PAGE = PAGE.replace("开始朝花夕拾基线测试", "开始 " + args.case_id + " 验收测试")
     (RUN / "input.md").write_text("# 实际输入\n\n" + prompt + "\n\n测试方式：真实浏览器使用生产取数器；本机评测代理持有账号令牌，认证与模型 key 不写入产物。\n", encoding="utf-8")
     git_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
     metadata = {"captureKind": "final-build-session", "captureDirectory": str(RUN), "publicationDirectory": str(FINAL),
                 "gitHead": git_head, "startedAt": datetime.now(timezone.utc).isoformat(),
                 "appPort": args.app_port, "relayPort": PORT, "relayPid": os.getpid(), "browserHttpCapture": True,
                 "renderScope": "production-site" if args.full_site else "evaluation-relay"}
+    if args.case_id:
+        metadata["caseId"] = args.case_id
     if args.runtime_jar:
         metadata["jarSha256"] = hashlib.sha256(args.runtime_jar.read_bytes()).hexdigest()
     if args.delegation_budget_ms is not None:

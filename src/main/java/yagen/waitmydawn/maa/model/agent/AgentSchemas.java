@@ -29,15 +29,17 @@ public final class AgentSchemas {
         ObjectNode preferences = object(SelectionPreferences.class,
                 "popularity", enumeration(SelectionPreferences.Popularity.class),
                 "freshness", enumeration(SelectionPreferences.Freshness.class));
+        ObjectNode quantity = object(RequirementQuantity.class, "min", integer(0, 500), "max", integer(0, 500),
+                "scope", enumeration(RequirementQuantity.Scope.class));
         ObjectNode criterion = object(RequirementCriterion.class, "source", text(1, 4000),
                 "kind", enumeration(BuildRequirement.Kind.class), "projects", projects(), "addonCores", projects(),
-                "searches", array(intent, 0, 3, false), "preferences", preferences);
+                "searches", array(intent, 0, 3, false), "preferences", preferences, "quantity", nullable(quantity));
         ObjectNode requirement = object(BuildRequirement.class,
                 "id", text(1, 64).put("pattern", "^r-[a-f0-9]{16}$"), "source", text(1, 4000),
                 "kind", enumeration(BuildRequirement.Kind.class), "projects", projects(),
                 "capabilities", array(enumeration(BuildRequirement.Capability.class), 0, BuildRequirement.Capability.values().length, true),
                 "addonCores", projects(), "searches", array(intent, 0, 3, false), "preferences", preferences,
-                "criteria", array(criterion, 0, 16, false));
+                "criteria", array(criterion, 0, 16, false), "quantity", nullable(quantity));
         ObjectNode changes = object(ConstraintChanges.class, "allowSlugs", projects(),
                 "allowCategories", array(strings(CategoryRegistry.CATEGORIES), 0, ContractRules.MAX_SEARCH_INTENTS, true),
                 "clearCount", type("boolean"), "replacementPolicyChanged", type("boolean"), "maxDownloadsChanged", type("boolean"),
@@ -75,13 +77,36 @@ public final class AgentSchemas {
         parentFields.putObject("gap").put("maxLength", 0);
         var flattened = requirement.putArray("allOf").addObject();
         flattened.set("if", hasChildren); flattened.set("then", parentOnly);
+        ObjectNode authority = object(ReviewDecision.Authority.class,
+                "scope", strings(List.of("PACK", "GOAL")), "targetId", text(0, 64), "quote", text(4, 280),
+                "requestQuote", text(0, 500), "relatedSlug", text(0, 128));
+        var localAuthority = authority.putArray("allOf").addObject();
+        localAuthority.putObject("if").putObject("properties").putObject("scope").put("const", "GOAL");
+        var localFields = localAuthority.putObject("then").putObject("properties");
+        localFields.putObject("targetId").put("pattern", "^r-[a-f0-9]{16}$");
+        localFields.putObject("requestQuote").put("maxLength", 0); localFields.putObject("relatedSlug").put("maxLength", 0);
+        var packAuthority = authority.withArray("allOf").addObject();
+        packAuthority.putObject("if").putObject("properties").putObject("scope").put("const", "PACK");
+        packAuthority.putObject("then").putObject("properties").putObject("targetId").put("maxLength", 0);
         ObjectNode rejection = object(ReviewDecision.Rejection.class,
                 "slug", project(), "reason", enumeration(ReviewDecision.Reason.class),
-                "explanation", text(1, ContractRules.MAX_REASON));
-        return root("maa-review-decision-v1", object(ReviewDecision.class,
-                "schemaVersion", version(), "approved", projects(),
+                "explanation", text(1, ContractRules.MAX_REASON), "authority", authority);
+        var globalReasons = rejection.putArray("allOf").addObject();
+        globalReasons.putObject("if").putObject("properties").putObject("authority").putObject("properties").putObject("scope").put("const", "PACK");
+        globalReasons.putObject("then").putObject("properties").set("reason", strings(List.of("CONSTRAINT", "CONFLICT")));
+        ObjectNode backfill = object(ReviewDecision.Backfill.class,
+                "basis", strings(List.of("ALLOW", "USER_REQUEST", "POOL_EXHAUSTED")), "quote", text(0, 500));
+        var schema = root("maa-review-decision-v2", object(ReviewDecision.class,
+                "schemaVersion", type("integer").put("const", 2), "approved", projects(),
                 "rejected", array(rejection, 0, ContractRules.MAX_MODS, false), "allowBackfill", type("boolean"),
-                "requirements", array(requirement, 0, 64, false)));
+                "requirements", array(requirement, 0, 64, false), "backfill", backfill));
+        var permission = schema.putArray("allOf").addObject();
+        permission.putObject("if").putObject("properties").putObject("allowBackfill").put("const", true);
+        var allowed = permission.putObject("then").putObject("properties").putObject("backfill").putObject("properties");
+        allowed.putObject("basis").put("const", "ALLOW"); allowed.putObject("quote").put("maxLength", 0);
+        permission.putObject("else").putObject("properties").putObject("backfill").putObject("properties")
+                .set("basis", strings(List.of("USER_REQUEST", "POOL_EXHAUSTED")));
+        return schema;
     }
 
     public static ObjectNode toolResult() {

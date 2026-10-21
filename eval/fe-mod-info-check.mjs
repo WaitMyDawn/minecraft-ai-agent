@@ -74,6 +74,7 @@ const prefsSource = await readFile(new URL('../src/main/resources/static/js/feat
 const watchers = [], requests = [];
 const ref = value => ({value});
 const fixture = {createModInfoLoader, authUser: ref({token: 'first'}), currentView: ref('chat'),
+    selectionPreferences: ref({}), selectionPrefsMsg: ref(''),
     modPrefs: ref([]), blacklistItems: ref([]), categoryPrefs: ref([]), modInfoCache: ref({}),
     modPrefPage: ref(0), blacklistPage: ref(0), modPrefSearch: ref(''), addingModBySlug: ref(false),
     computed: getter => ({get value() { return getter(); }}),
@@ -107,6 +108,7 @@ const sections = [
 ];
 const pages = await import('data:text/javascript;base64,' + Buffer.from(
     `const {${Object.keys(fixture).join(',')}}=globalThis.metadataPageFixture;\n` + sections.join('\n')).toString('base64'));
+assert.deepEqual(fixture.selectionPreferences.value,{addons:true,replacements:true,overlap:true,generation:true});
 fixture.modPrefs.value = Array.from({length: 100}, (_, i) => ({slug: 'pref-' + i}));
 fixture.blacklistItems.value = Array.from({length: 100}, (_, i) => ({slug: 'black-' + i}));
 flush(); await tick(); assert.equal(requests.length, 0, '后台刷新列表不触发整表资料读取');
@@ -131,7 +133,8 @@ globalThis.metadataRaceFixture = raceFixture;
 const raceModule = await import('data:text/javascript;base64,' + Buffer.from(
     `const {${Object.keys(raceFixture).join(',')}}=globalThis.metadataRaceFixture;\n` + sections.join('\n')).toString('base64'));
 const stale = raceModule.loadBlacklist(); await tick();
-fixture.authUser.value = {token: 'second'}; flush();
+fixture.authUser.value = {token: 'second',selectionPreferences:{overlap:false}}; flush();
+assert.deepEqual(fixture.selectionPreferences.value,{addons:true,replacements:true,overlap:false,generation:true});
 releaseBody([{slug: 'old-account'}]); await stale;
 assert.deepEqual(fixture.blacklistItems.value, [], '响应体解析晚于账号切换时不得重新填入旧账号列表');
 assert.deepEqual(fixture.modInfoCache.value, {});

@@ -10,6 +10,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.Set;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -81,17 +82,27 @@ class AiAgentStructuredOutputTest {
             assertEquals(1, architect.modelCalls());
             assertEquals(17, architect.inputTokens());
             var critic = service.criticPools("候选池", "fixture-key", Set.of("create-good"), 1);
-            assertWireRequest(request.get(), "maa-review-decision-v1");
+            assertEquals(2, critic.reviewSchemaVersion());
+            assertWireRequest(request.get(), "maa-review-decision-v2");
             assertEquals(32768, request.get().path("max_tokens").asInt());
             String system = request.get().path("messages").get(0).path("content").asText();
             assertTrue(system.contains("本轮 approved 硬上限=1"));
             assertTrue(system.contains("最短连续原文"));
             assertTrue(system.contains("\"maxItems\":1"));
             assertTrue(system.contains("\"enum\":[\"create-good\"]"));
+            var selectionSchema = mapper.readTree(system.substring(system.indexOf("JSON Schema:\n") + "JSON Schema:\n".length()));
+            assertEquals(2, selectionSchema.path("properties").path("schemaVersion").path("const").asInt());
+            assertTrue(selectionSchema.path("properties").has("backfill"));
+            var authority = selectionSchema.path("properties").path("rejected").path("items").path("properties").path("authority");
+            assertEquals(List.of("PACK", "GOAL"), authority.path("properties").path("scope").path("enum")
+                    .valueStream().map(JsonNode::asText).toList());
+            assertEquals("create-good", selectionSchema.path("properties").path("rejected").path("items").path("properties").path("slug").path("enum").get(0).asText());
+            assertEquals(1, selectionSchema.path("properties").path("rejected").path("maxItems").asInt());
             assertEquals(9, critic.outputTokens());
             assertEquals(0, critic.truncatedCalls());
             var total = architect.followedBy(critic);
             assertEquals(2, total.modelCalls());
+            assertEquals(2, total.reviewSchemaVersion());
             assertEquals(34, total.inputTokens());
             assertEquals(18, total.outputTokens());
             service.criticPools("仅复核已有项目用途", "fixture-key", Set.of(), 0);

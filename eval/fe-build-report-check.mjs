@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {readBuildReport, readReplacementChoices, readRequirementReport, requirementStatus, requirementNote, requirementTone, issueReason, modProjectLink} from '../src/main/resources/static/js/utils/build-report.js';
+import {readBuildReport, readReplacementChoices, readRequirementReport, readCompletion, quantitySummary, requirementStatus, requirementNote, requirementTone, issueReason, modProjectLink} from '../src/main/resources/static/js/utils/build-report.js';
 import {renderMarkdownSafe, cleanChatReply} from '../src/main/resources/static/js/utils/format.js';
 
 assert.equal(cleanChatReply('构建完成<mods>a,b</mods><trace>{}</trace><constraints>{}</constraints><build_report>{}</build_report>'), '构建完成<build_report>{}</build_report>');
@@ -117,3 +117,48 @@ const badLinkPortfolio = structuredClone(optimizationFixture);
 badLinkPortfolio.optimization.entries[0].slug = 'javascript:bad';
 assert.equal(readBuildReport(optimizerText(badLinkPortfolio)).optimization, null);
 assert.doesNotMatch(renderMarkdownSafe(optimizerText(optimizationFixture)), /build_report|Reduces memory/);
+
+const quantityFixture = {schemaVersion:1,repairStatus:'NONE',repaired:[],requirements:[{id:'r-0000000000000001',source:'物流',status:'PARTIAL',
+    mods:[],missing:[],note:'',criteria:[],quantity:{min:2,max:4,scope:'ADDED_ROOTS',actual:1,projects:['logistics-mod'],complete:true}}]};
+const quantityReport = () => readRequirementReport('<requirement_report>'+JSON.stringify(quantityFixture)+'</requirement_report>');
+assert.equal(quantityReport().requirements[0].quantity.actual,1);
+assert.match(quantitySummary(quantityReport().requirements[0]), /本轮新增.*1 \/ 2～4/);
+quantityFixture.requirements[0].quantity.actual = 2;
+assert.equal(quantityReport().requirements[0].quantity,null,'数量与引用数不一致时不展示伪计数');
+delete quantityFixture.requirements[0].quantity;
+assert.equal(quantityReport().requirements[0].quantity,null,'旧历史继续可读');
+
+const assessmentCases = JSON.parse(await readFile(new URL('../src/test/resources/fixtures/requirement-assessment-cases.json', import.meta.url), 'utf8'));
+for (const fixture of assessmentCases) {
+    const content = '<requirement_report>' + JSON.stringify({schemaVersion:1,repairStatus:'NONE',repaired:[],requirements:[fixture.row]}) + '</requirement_report>';
+    const row = readRequirementReport(content).requirements[0];
+    assert.equal(requirementStatus(row), fixture.row.assessment.label, fixture.name);
+    assert.equal(row.assessment.evidenceLabel, fixture.row.assessment.evidenceLabel);
+}
+const rejectedAssessment = {...assessmentCases[0].row,assessment:{...assessmentCases[0].row.assessment,label:'伪造通过'}};
+assert.equal(readRequirementReport('<requirement_report>'+JSON.stringify({schemaVersion:1,repairStatus:'NONE',repaired:[],requirements:[rejectedAssessment]})+'</requirement_report>').requirements[0].assessment,null);
+console.log('统一评估检查通过：共享完成状态、独立证据状态、旧报告兼容与无效结论拒绝。');
+
+const pinnedEvidence = {schemaVersion:1,repairStatus:'NONE',repaired:[],requirements:[{...assessmentCases[0].row,
+    mods:[{slug:'transport-content',purpose:'物流',quote:'Moves items',evidenceType:'REVIEW_QUOTE',partners:['partner-content']}]}],
+    ledger:[{targetId:'r-0000000000000001',slug:'transport-content',versionId:'EXACT_VERSION',status:'VERIFIED',evidenceType:'REVIEW_QUOTE'}]};
+const pinnedRow = readRequirementReport('<requirement_report>'+JSON.stringify(pinnedEvidence)+'</requirement_report>').requirements[0];
+assert.equal(pinnedRow.mods[0].versionId,'EXACT_VERSION');
+assert.deepEqual(pinnedRow.mods[0].partners,['partner-content']);
+
+const completionCases = JSON.parse(await readFile(new URL('../src/test/resources/fixtures/build-completion-cases.json', import.meta.url),'utf8'));
+for (const fixture of completionCases) {
+    const content = '<requirement_report>' + JSON.stringify({...fixture.coverage,completion:fixture.expected}) + '</requirement_report>';
+    assert.deepEqual(readRequirementReport(content).completion,fixture.expected,fixture.name);
+}
+const identity = completionCases[0].coverage.requirements[0];
+assert.equal(requirementStatus(readRequirementReport('<requirement_report>'+JSON.stringify({...completionCases[0].coverage})+'</requirement_report>').requirements[0]),'点名项目已保留');
+const legacyIdentity = {...identity,assessment:{...identity.assessment,label:'已满足'}};
+assert.equal(requirementStatus(readRequirementReport('<requirement_report>'+JSON.stringify({schemaVersion:1,repairStatus:'NONE',repaired:[],requirements:[legacyIdentity]})+'</requirement_report>').requirements[0]),'点名项目已保留');
+assert.equal(readRequirementReport('<requirement_report>'+JSON.stringify(completionCases[0].coverage)+'</requirement_report>').completion,null);
+for (const changed of [{...completionCases[0].expected,label:'全部通过'},
+    {...completionCases[0].expected,targets:{...completionCases[0].expected.targets,met:999}},
+    {...completionCases[0].expected,quantity:{...completionCases[0].expected.quantity,actual:'30'}}]) assert.equal(readCompletion(changed),null);
+const component = await readFile(new URL('../src/main/resources/static/js/components/BuildReport.js',import.meta.url),'utf8');
+assert.ok(component.indexOf('coverage.completion.label') < component.indexOf('v-for="row in coverage.requirements"'),'整体结论在逐项结果之前展示');
+console.log('整体需求核对检查通过：总量、局部与身份范围分开，旧记录不推断整体通过。');

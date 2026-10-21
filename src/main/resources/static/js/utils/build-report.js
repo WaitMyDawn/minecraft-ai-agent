@@ -33,6 +33,51 @@ const evidenceState = value => {
             .map(g => ({dimension: g.dimension, label: g.label, projects: g.projects.filter(s => typeof s === 'string'
                 && /^[a-zA-Z0-9_.-]{1,128}$/.test(s)).slice(0, 24)})) : []};
 };
+const readQuantity = value => {
+    if (!value || !['RETAINED_ROOTS', 'ADDED_ROOTS'].includes(value.scope) || typeof value.complete !== 'boolean'
+        || ![value.min, value.max, value.actual].every(n => Number.isInteger(n) && n >= 0 && n <= 500)
+        || value.min > value.max || !Array.isArray(value.projects) || value.projects.length !== value.actual
+        || new Set(value.projects).size !== value.projects.length
+        || !value.projects.every(s => typeof s === 'string' && /^[a-zA-Z0-9_.-]{1,128}$/.test(s))) return null;
+    return value;
+};
+export const quantitySummary = row => {
+    const q = row.quantity;
+    return q ? `${q.scope === 'ADDED_ROOTS' ? '本轮新增' : '全包保留'}有依据的内容模组：${q.actual} / ${q.min}～${q.max} 个（不含前置）${q.complete ? '' : '，计数待核实'}` : '';
+};
+const readAssessment = (value, status) => {
+    const labels = {MET:'已满足', PARTIAL:'部分满足', NOT_MET:'未满足', UNKNOWN:'暂无法核实', WAITING:'待选择', CONTEXT:'上下文'};
+    const projects = list => Array.isArray(list) && list.length <= 500 && list.every(s => typeof s === 'string' && /^[a-zA-Z0-9_.-]{1,128}$/.test(s));
+    const identity = status === 'VERIFIED_PROJECTS' && value?.outcome === 'MET' && value.label === '点名项目已保留';
+    if (!value || value.schemaVersion !== 1 || !Object.hasOwn(labels, value.outcome) || (!identity && value.label !== labels[value.outcome])
+        || typeof value.evidenceCode !== 'string' || !/^[A-Z_]{1,64}$/.test(value.evidenceCode)
+        || typeof value.evidenceLabel !== 'string' || value.evidenceLabel.length > 200
+        || !projects(value.userRemoved) || !projects(value.cleanupRemoved) || !projects(value.automaticRemoved || [])) return null;
+    return value;
+};
+export const readCompletion = value => {
+    const labels = {MET:'已核对的构建要求均满足', PARTIAL:'尚未完全满足构建要求', UNKNOWN:'整体结果仍待核实',
+        WAITING:'等待确认，尚非最终结果', CONTEXT:'仅完成基础信息核对'};
+    const quantityLabels = {MET:'数量已达标', NOT_MET:'数量未达标', UNVERIFIED:'数量待核实', NO_TARGET:'无额外数量要求'};
+    const bounded = (s, max) => typeof s === 'string' && s.length <= max;
+    const number = n => Number.isInteger(n) && n >= 0 && n <= 500;
+    const q = value?.quantity, counts = value?.targets;
+    if (!value || value.schemaVersion !== 1 || !Object.hasOwn(labels,value.outcome) || value.label !== labels[value.outcome]
+        || !bounded(value.note,1000) || !q || !Object.hasOwn(quantityLabels,q.status) || q.label !== quantityLabels[q.status]
+        || !['','TOTAL_FILES','ROOT_MODS','ADDED_ROOTS'].includes(q.scope) || !['','EXACT','APPROXIMATE'].includes(q.precision)
+        || !bounded(q.display,500) || !['target','min','max','actual','acceptedMin','acceptedMax'].every(k => q[k] === null || number(q[k]))
+        || (['MET','NOT_MET'].includes(q.status) && (!q.scope || !q.precision || !['target','min','max','actual','acceptedMin','acceptedMax'].every(k => number(q[k]))))
+        || !counts || !['met','partial','notMet','unknown','waiting','context'].every(k => number(counts[k]) && counts[k] <= 192)
+        || !number(counts.parentIssues) || counts.parentIssues > 64
+        || ['met','partial','notMet','unknown','waiting','context'].reduce((n,k) => n + counts[k],0) > 192) return null;
+    return value;
+};
+export const requirementEvidence = row => row.assessment?.evidenceLabel || '历史消息未包含统一评估结论，以原始依据与备注为准';
+export const selectionSummary = row => [row.assessment?.userRemoved?.length ? '按用户选择取消：' + row.assessment.userRemoved.join('、') : '',
+    row.assessment?.cleanupRemoved?.length ? '随选择清理：' + row.assessment.cleanupRemoved.join('、') : '',
+    row.assessment?.automaticRemoved?.length ? '按设置采用推荐组合，未保留：' + row.assessment.automaticRemoved.join('、') : ''].filter(Boolean).join('；');
+export const evidenceTypeLabel = code => ({PROJECT_IDENTITY:'点名身份及选版', REVIEW_QUOTE:'项目用途原文',
+    VERSION_RELATION:'所选版本关系', DESCRIPTION_RELATION:'项目声明关系', PROJECT_GENERATION:'维度生成原文'}[code] || '历史用途依据');
 export const readRequirementReport = content => {
     const match = String(content || '').match(/<requirement_report>([\s\S]*?)<\/requirement_report>/);
     if (!match || match[1].length > 1_000_000) return null;
@@ -43,33 +88,46 @@ export const readRequirementReport = content => {
             || !text(data.repairStatus, 80) || !Array.isArray(data.repaired)) return null;
         const validRow = r => r && /^r-[a-f0-9]{16}$/.test(r.id) && text(r.source, 4000) && text(r.status, 40)
             && text(r.note, 4000) && Array.isArray(r.mods) && Array.isArray(r.missing);
-        const items = mods => mods.slice(0, 24).filter(m => m && text(m.slug, 128) && text(m.purpose, 500)
+        const items = mods => mods.slice(0, 24).filter(m => m && text(m.slug, 128) && /^[a-zA-Z0-9_.-]{1,128}$/.test(m.slug) && text(m.purpose, 500)
             && text(m.quote, m.evidenceType === 'PROJECT_GENERATION' ? 1000 : 280));
+        const ledger = Array.isArray(data.ledger) ? data.ledger.slice(0,4096).filter(p => p && /^r-[a-f0-9]{16}$/.test(p.targetId)
+            && text(p.slug,128) && /^[a-zA-Z0-9_.-]{1,128}$/.test(p.slug) && text(p.versionId,128)
+            && /^[a-zA-Z0-9_.-]*$/.test(p.versionId) && text(p.status,64) && text(p.evidenceType,64)) : [];
+        const enrich = (mods, id) => items(mods).map(m => {
+            const proof = ledger.find(p => p.targetId === id && p.slug === m.slug && p.evidenceType === m.evidenceType && p.status === 'VERIFIED');
+            return {...m, versionId: proof?.versionId || '', partners: Array.isArray(m.partners)
+                ? m.partners.filter(s => text(s,128) && /^[a-zA-Z0-9_.-]{1,128}$/.test(s)).slice(0,24) : []};
+        });
         const requirements = data.requirements.filter(r => r && /^r-[a-f0-9]{16}$/.test(r.id)
             && text(r.source, 4000) && text(r.status, 40) && text(r.note, 4000)
             && Array.isArray(r.mods) && Array.isArray(r.missing))
             .filter(r => r.status !== 'CONTEXT').map(r => ({...r,
-                evidenceState: evidenceState(r.evidenceState),
-                mods: items(r.mods),
+                assessment: readAssessment(r.assessment,r.status), quantity: readQuantity(r.quantity), evidenceState: evidenceState(r.evidenceState),
+                mods: enrich(r.mods,r.id),
                 missing: r.missing.filter(s => text(s, 128)).slice(0, 100),
                 criteria: Array.isArray(r.criteria) ? r.criteria.slice(0, 16).filter(validRow).filter(c => c.status !== 'CONTEXT').map(c => ({...c,
-                    evidenceState: evidenceState(c.evidenceState),
-                    mods: items(c.mods), missing: c.missing.filter(s => text(s, 128)).slice(0, 24)})) : []}));
+                    assessment: readAssessment(c.assessment,c.status), quantity: readQuantity(c.quantity), evidenceState: evidenceState(c.evidenceState),
+                    mods: enrich(c.mods,c.id), missing: c.missing.filter(s => text(s, 128)).slice(0, 24)})) : []}));
         if (requirements.reduce((total, r) => total + r.criteria.length, 0) > 128) return null;
-        return {...data, requirements};
+        return {...data, requirements, ledger, completion:readCompletion(data.completion)};
     } catch { return null; }
 };
 export const requirementStatus = value => {
     const row = typeof value === 'string' ? {status: value} : value || {};
+    if (row.assessment) return row.status === 'VERIFIED_PROJECTS' && row.assessment.outcome === 'MET' ? '点名项目已保留' : row.assessment.label;
     const state = row.evidenceState?.code;
     if (state === 'PROJECT_MISSING') return '点名项目未入包';
     if (state === 'VERSION_PENDING') return '版本待核实';
     if (state === 'RELATION_PENDING') return '关系待核实';
     if (state === 'CORE_GENERATION_PENDING') return '核心生成待核实';
+    if (row.quantity && !row.quantity.complete) return '数量待核实';
+    if (row.quantity && row.quantity.actual < row.quantity.min) return '数量不足';
+    if (row.quantity && row.quantity.actual > row.quantity.max) return '超出本项数量范围';
     return {VERIFIED_PROJECTS: '点名项目已保留', SUPPORTING_EVIDENCE: '有用途依据', PARTIAL: '部分目标待核实',
         UNVERIFIED: '用途待核实', NOT_RETAINED: '项目待复核'}[row.status] || '待核实';
 };
-export const requirementTone = row => row.evidenceState?.code === 'PROJECT_MISSING' ? 'bg-rose-50 text-rose-800'
+export const requirementTone = row => row.assessment ? ({MET:'bg-indigo-50 text-indigo-700', NOT_MET:'bg-rose-50 text-rose-800',
+    PARTIAL:'bg-amber-50 text-amber-800', WAITING:'bg-amber-50 text-amber-800'}[row.assessment.outcome] || 'bg-slate-100 text-slate-600') : row.evidenceState?.code === 'PROJECT_MISSING' ? 'bg-rose-50 text-rose-800'
     : ['VERIFIED_PROJECTS','SUPPORTING_EVIDENCE'].includes(row.status) ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-600';
 export const requirementNote = row => {
     const note = String(row.note || '');

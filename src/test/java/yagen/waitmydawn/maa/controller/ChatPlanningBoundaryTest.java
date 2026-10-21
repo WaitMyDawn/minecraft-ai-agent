@@ -16,6 +16,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class ChatPlanningBoundaryTest {
+    private boolean pairOnlyAddon;
     private ChatController controller;
     private AiAgentService agents;
     private DependencyEngine engine;
@@ -60,6 +61,35 @@ class ChatPlanningBoundaryTest {
 
     private AiAgentService.AgentCallResult response(String json) {
         return new AiAgentService.AgentCallResult(json, 1, 1, 10, 10);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void replacementPolicyComesFromTheAccountAndCannotBeOverriddenByChatPayload(boolean enabled) {
+        var user = new User(); user.setPreferenceWeight(0);
+        user.setSelectionPreferences(new PopupPreferences(true, enabled, true, true));
+        var repository = mock(UserRepository.class); when(repository.findById(1L)).thenReturn(Optional.of(user));
+        ReflectionTestUtils.setField(controller, "userRepo", repository);
+        when(users.validateToken("fixture-token")).thenReturn(1L);
+        var intent = new BuildIntent(1,BuildIntent.Mode.NEW,"构建","测试",BuildEnvironment.current("1.20.1","fabric"),
+                new BuildIntent.CountTarget(1,BuildIntent.CountScope.TOTAL_FILES,BuildIntent.Precision.EXACT),
+                List.of("original"),List.of(),List.of(),List.of(),List.of(),BuildIntent.ReplacementPolicy.NONE,List.of(),List.of(),2100000000L);
+        when(agents.planBlueprint(anyString(),anyString())).thenReturn(response(new AgentContractCodec().write(intent)));
+        when(api.getLatestCompatibleVersionBySlug(eq("original"),anyString(),anyString())).thenReturn(null);
+        var candidate = new RequiredModAlternatives.Candidate("replacement", "Replacement", "", "", 100, 100, "移植");
+        try (var discovery = mockStatic(RequiredModAlternatives.class)) {
+            discovery.when(() -> RequiredModAlternatives.discover(any(),eq("original"),any(),anySet()))
+                    .thenReturn(new RequiredModAlternatives.Group("original",List.of(candidate),true));
+            String result = ReflectionTestUtils.invokeMethod(controller,"doChat",Map.of("prompt","构建一个整合包","uuid","fixture-session",
+                    "mcVersion","1.20.1","loader","fabric","popup.replacements",String.valueOf(!enabled)),"fixture-token",null,null);
+            assertEquals(enabled,result.contains("replacement_options"),result);
+            if (!enabled) {
+                assertTrue(result.contains("<mods>replacement</mods>"),result);
+                assertTrue(result.contains("<replacement_choices>"),result);
+                verify(engine).resolveCachedResult(eq(Set.of("replacement")),eq("fabric"),eq("1.20.1"),any());
+            } else verifyNoInteractions(engine);
+            verify(agents,times(1)).planBlueprint(anyString(),anyString());
+        }
     }
 
     @Test void boundedFollowupCanReviewRetainedFactsWithoutCandidatesAndReturnsOnlyScopedUpdates() {
@@ -340,8 +370,10 @@ class ChatPlanningBoundaryTest {
         org.mockito.stubbing.Answer<ResolutionResult> complete = call -> {
             Set<String> roots = call.getArgument(0);
             var graph = new DependencyGraph(); graph.allSlugs.addAll(roots);
-            for (String slug : roots) graph.selectedVersions.put(slug, new tools.jackson.databind.ObjectMapper()
-                    .createObjectNode().put("id", slug + "v").put("project_id", slug));
+            for (String slug : roots) {
+                var version = new tools.jackson.databind.ObjectMapper().createObjectNode().put("id", slug + "v").put("project_id", slug);
+                version.putArray("dependencies"); graph.selectedVersions.put(slug, version);
+            }
             return new ResolutionResult(graph, ResolutionResult.Status.COMPLETE, roots, List.of(), List.of(), 500, false);
         };
         when(engine.resolveCachedResult(anySet(), anyString(), anyString(), any())).thenAnswer(complete);
@@ -428,11 +460,17 @@ class ChatPlanningBoundaryTest {
             info.putArray("categories").add(slug.equals("factory-content") ? "technology" : "food");
             return info;
         });
+        when(api.getProjectsBatch(anyCollection())).thenAnswer(call -> {
+            var facts=new LinkedHashMap<String,tools.jackson.databind.JsonNode>();
+            for(String ref : (Collection<String>)call.getArgument(0)) facts.put(ref,api.getProjectInfo(ref));
+            return facts;
+        });
         when(api.search(anyString(), eq(25), anyString())).thenAnswer(call -> {
             var page = json.createObjectNode();
             var hits = page.putArray("hits");
             hits.addObject().put("slug", "plain-addon").put("title", "Plain addon").put("downloads", 1000);
-            hits.addObject().put("slug", "factory-cooking-addon").put("title", "Factory Cooking addon").put("downloads", 900);
+            if(!pairOnlyAddon || ((String)call.getArgument(0)).contains("factory-content"))
+                hits.addObject().put("slug", "factory-cooking-addon").put("title", "Factory Cooking addon").put("downloads", 900);
             if (secondLinked) hits.addObject().put("slug", "second-cooking-addon").put("title", "Second Cooking addon").put("downloads", 100);
             return page;
         });
@@ -452,7 +490,7 @@ class ChatPlanningBoundaryTest {
         });
         when(agents.criticPools(anyString(), anyString(), anySet(), anyInt())).thenReturn(response(
                 "{\"schemaVersion\":1,\"approved\":" + json.writeValueAsString(approved) + ",\"rejected\":" + rejected + ",\"allowBackfill\":false}"));
-        when(engine.resolveCachedResult(anySet(), anyString(), anyString(), any())).thenAnswer(call -> {
+        org.mockito.stubbing.Answer<ResolutionResult> addonResolution = call -> {
             Set<String> roots = new LinkedHashSet<>(call.getArgument(0));
             var graph = new DependencyGraph();
             for (String slug : roots) if (!dropPartner || !slug.equals("factory-content")) {
@@ -460,8 +498,23 @@ class ChatPlanningBoundaryTest {
                 graph.selectedVersions.put(slug, api.getLatestCompatibleVersionBySlug(slug, "1.20.1", "fabric"));
             }
             return new ResolutionResult(graph, ResolutionResult.Status.COMPLETE, roots, List.of(), List.of(), 500, false);
-        });
-        return run(prompt);
+        };
+        when(engine.resolveCachedResult(anySet(),anyString(),anyString(),any())).thenAnswer(addonResolution);
+        when(engine.resolveUsingFacts(anySet(),anyString(),anyString(),any(),anyMap())).thenAnswer(addonResolution);
+        String result = run(prompt);
+        var options = java.util.regex.Pattern.compile("<replacement_options>(.*?)</replacement_options>",java.util.regex.Pattern.DOTALL).matcher(result);
+        if (options.find()) {
+            var offered = json.readTree(options.group(1));
+            if (offered.path("kind").asText().equals("ADDONS")) {
+                var payload = new HashMap<String,String>();
+                payload.put("prompt",prompt);payload.put("currentMods","create");payload.put("uuid","fixture-session");
+                payload.put("mcVersion","1.20.1");payload.put("loader","Fabric");
+                payload.put("replacementChoices",json.writeValueAsString(offered.path("recommendedChoices")));
+                var selections = (AddonSelections) ReflectionTestUtils.getField(controller,"addonSelections");
+                result = selections.admit(offered.path("ticket").asText(),users.validateToken("fixture-token"),null,payload,api,()->false,AddonSelections.Confirmed::complete);
+            }
+        }
+        return result;
     }
 
     @Test void ordinaryAddonUsesActualContentPartnerMultiplierWithoutAnotherModelCall() {
@@ -471,6 +524,18 @@ class ChatPlanningBoundaryTest {
         assertTrue(mods.contains("factory-cooking-addon") && !mods.contains("plain-addon"), result);
         assertTrue(result.contains("\"coefficient\":2.0") && result.contains("\"partners\":[\"factory-content\"]"));
         verify(agents, times(1)).criticPools(anyString(), anyString(), anySet(), anyInt());
+    }
+    @Test void integrationWithNewlySelectedSubjectIsDiscoveredOnlyAfterItsVersionIsResolved() {
+        pairOnlyAddon=true;
+        String result=addonBuild(true,3,false,List.of("factory-content"),"[]",false,false);
+        assertTrue(result.contains("<mods>"),result);
+        String mods=result.substring(result.indexOf("<mods>")+6,result.indexOf("</mods>"));
+        assertEquals(Set.of("cooking-core","factory-content","factory-cooking-addon"),Set.copyOf(Arrays.asList(mods.split(","))),result);
+        assertTrue(result.contains("PACK_RELATION_ASSEMBLY"),result);assertTrue(result.contains("RETAINED_SUBJECT_VERSIONS"),result);
+        var order=inOrder(engine,api);
+        order.verify(engine).resolveCachedResult(eq(Set.of("cooking-core","factory-content")),anyString(),anyString(),any());
+        order.verify(api).search(contains("factory-content"),eq(25),anyString());
+        order.verify(engine).resolveUsingFacts(eq(Set.of("cooking-core","factory-content","factory-cooking-addon")),anyString(),anyString(),any(),anyMap());
     }
 
     @Test void explicitIntegrationIsPreservedWhenCriticDoesNotSelectItAndBackfillIsForbidden() {
@@ -486,14 +551,16 @@ class ChatPlanningBoundaryTest {
                 "[{\"slug\":\"factory-cooking-addon\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"明确否决\"}]", false);
         assertTrue(result.contains("NEEDS_USER_DECISION") && result.contains("被审核明确否决"), result);
         assertFalse(result.contains("<mods>"));
-        verifyNoInteractions(engine);
+        verify(engine).resolveCachedResult(eq(Set.of("cooking-core","factory-content")),anyString(),anyString(),any());
+        verify(engine,never()).resolveUsingFacts(anySet(),anyString(),anyString(),any(),anyMap());
     }
 
     @Test void mandatoryIntegrationsCannotBePrunedToFitAStrictCount() {
         String result = addonBuild(true, 3, true, List.of(), "[]", false);
         assertTrue(result.contains("NEEDS_USER_DECISION") && result.contains("扩大数量上限"), result);
         assertFalse(result.contains("<mods>"));
-        verifyNoInteractions(engine);
+        verify(engine).resolveCachedResult(eq(Set.of("cooking-core","factory-content")),anyString(),anyString(),any());
+        verify(engine,atMost(8)).resolveUsingFacts(anySet(),anyString(),anyString(),any(),anyMap());
     }
 
     @Test void losingThePartnerDuringDependencyResolutionDoesNotClaimIntegrationCompletion() {
@@ -678,7 +745,10 @@ class ChatPlanningBoundaryTest {
         });
         java.util.function.Function<Set<String>, ResolutionResult> resolved = roots -> {
             var graph = new DependencyGraph(); graph.allSlugs.addAll(roots);
-            roots.forEach(s -> graph.selectedVersions.put(s, mapper.createObjectNode().put("id", s + "V").put("project_id", s)));
+            roots.forEach(s -> {
+                var version = mapper.createObjectNode().put("id", s + "V").put("project_id", s);
+                version.putArray("dependencies"); graph.selectedVersions.put(s, version);
+            });
             return new ResolutionResult(graph, ResolutionResult.Status.COMPLETE, roots, List.of(), List.of(), 500, false);
         };
         when(engine.resolveCachedResult(anySet(), anyString(), anyString(), any())).thenAnswer(call -> resolved.apply(call.getArgument(0)));

@@ -7,7 +7,12 @@ import java.util.*;
 
 /** 子目标沿用原文，不以固定玩法枚举限制可表达的目标。 */
 public record RequirementCriterion(String source, BuildRequirement.Kind kind, List<String> projects,
-                                   List<String> addonCores, List<BuildIntent.SearchIntent> searches, SelectionPreferences preferences) {
+                                   List<String> addonCores, List<BuildIntent.SearchIntent> searches, SelectionPreferences preferences, RequirementQuantity quantity) {
+    public RequirementCriterion(String source, BuildRequirement.Kind kind, List<String> projects, List<String> addonCores,
+                                List<BuildIntent.SearchIntent> searches, SelectionPreferences preferences) {
+        this(source, kind, projects, addonCores, searches, preferences, kind != BuildRequirement.Kind.CHANGE && (kind != BuildRequirement.Kind.GENERAL || !searches.isEmpty())
+                ? RequirementQuantity.fromSource(source) : null);
+    }
     public RequirementCriterion {
         source = ContractRules.text(source, "criteria.source", 1, 4000);
         ContractRules.required(kind, "criteria.kind");
@@ -30,10 +35,10 @@ public record RequirementCriterion(String source, BuildRequirement.Kind kind, Li
     public BuildRequirement target(BuildRequirement parent) {
         var capabilities = kind == BuildRequirement.Kind.PROJECTS ? List.<BuildRequirement.Capability>of()
                 : RequirementPlanning.capabilities(source).stream().filter(parent.capabilities()::contains).toList();
-        return new BuildRequirement(key(parent.id()), source, kind, projects, capabilities, addonCores, searches, preferences);
+        return new BuildRequirement(key(parent.id()), source, kind, projects, capabilities, addonCores, searches, preferences, List.of(), quantity);
     }
     public RequirementCriterion replace(Map<String, List<String>> replacements) {
         return new RequirementCriterion(source, kind, projects.stream().flatMap(s -> replacements.getOrDefault(s, List.of(s)).stream()).distinct().toList(),
-                addonCores.stream().flatMap(s -> replacements.getOrDefault(s, List.of(s)).stream()).distinct().toList(), searches, preferences);
+                addonCores.stream().flatMap(s -> replacements.getOrDefault(s, List.of(s)).stream()).distinct().toList(), searches, preferences, quantity);
     }
 }

@@ -5,6 +5,22 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class WorldGenerationPolicyTest {
+    @Test void configurationListEditingIsNotRemovalOfWorldContent() {
+        for (String text : List.of("| `/letmedespawn remove <mobName>` | Remove mobs from the config |",
+                "Remove mobs from the denylist", "Removes structures from the whitelist")) {
+            assertTrue(WorldGenerationPolicy.findings(text).isEmpty(), text);
+            assertTrue(WorldGenerationPolicy.blocked("adventure", "arbitrary-project", text).isEmpty(), text);
+        }
+    }
+
+    @Test void configurationInstructionsDoNotEraseSeparateWorldRemovalOrExtremeGeneration() {
+        for (String text : List.of("Remove mobs from the denylist and disables structures in the Nether",
+                "Removes mobs from the world by default", "Remove mobs from the config. Removes structures from the Nether.",
+                "Remove mobs from the config. Creates Superflat dimensions.",
+                "Remove mobs from the config. Classic Skyblock with infinite void generation."))
+            assertFalse(WorldGenerationPolicy.blocked("adventure", "arbitrary-project", text).isEmpty(), text);
+    }
+
     @Test void ordinaryAdventureDoesNotAuthorizeExtremePresetsOrSubtractiveAddons() {
         for (String facts : List.of(
                 "Classic SkyBlock with infinite void generation. The biome map matches a normal world.",

@@ -46,10 +46,21 @@ public final class ReplacementSelections {
         Pending value = pending.getIfPresent(ticket);
         if (value == null || !Objects.equals(owner, value.owner()) || !snapshot(payload).equals(value.snapshot()))
             throw new IllegalArgumentException("候选选择已过期或整合包状态已变化，请重新提交需求");
+        Resumed result = resolve(value, payload.getOrDefault("replacementChoices", ""));
+        if (!pending.asMap().remove(ticket, value)) throw new IllegalArgumentException("该选择已提交，请等待构建结果");
+        return result;
+    }
+    public Resumed recommend(Pending value) {
+        var choices = value.generation() == null ? SelectionRecommendations.replacements(value.groups())
+                : SelectionRecommendations.combinations(value.generation().groups());
+        if (choices.size() != value.groups().size()) throw new IllegalArgumentException("没有可核实的推荐组合，请人工确认");
+        return resolve(value, MessageJson.write(choices));
+    }
+    private Resumed resolve(Pending value, String raw) {
         JsonNode choices;
-        try { choices = JSON.readTree(payload.getOrDefault("replacementChoices", "")); }
+        try { choices = JSON.readTree(raw); }
         catch (RuntimeException invalid) { throw new IllegalArgumentException("候选选择格式无效"); }
-        if (!choices.isObject() || choices.size() != value.groups().size()) throw new IllegalArgumentException("请处理所有待替换模组");
+        if (choices == null || !choices.isObject() || choices.size() != value.groups().size()) throw new IllegalArgumentException("请处理所有待替换模组");
         Map<String, List<String>> replacements = new LinkedHashMap<>();
         for (var group : value.groups()) {
             JsonNode choice = choices.path(group.original());
@@ -73,7 +84,7 @@ public final class ReplacementSelections {
             if (slugs.stream().anyMatch(value.intent().exclude()::contains)) throw new IllegalArgumentException("选择与已有排除项冲突");
             replacements.put(group.original(), List.copyOf(slugs));
         }
-        if (value.generation() != null) return resumeGeneration(ticket, value, replacements, choices);
+        if (value.generation() != null) return resumeGeneration(value, replacements, choices);
         var i = value.intent();
         BuildIntent resolved = new BuildIntent(i.schemaVersion(), i.mode(), i.reply(), i.name(), i.environment(), i.count(),
                 replace(i.mustHave(), replacements), replace(i.add(), replacements), i.remove(), i.exclude(),
@@ -83,10 +94,9 @@ public final class ReplacementSelections {
         BuildConstraints constraints = new BuildConstraints(c.schemaVersion(), replace(c.mustHave(), replacements), c.exclude(),
                 c.excludedCategories(), c.count(), c.replacementPolicy(), c.maxDownloads(),
                 remapRequirements(c.requirements(), replacements));
-        if (!pending.asMap().remove(ticket, value)) throw new IllegalArgumentException("该选择已提交，请等待构建结果");
         return new Resumed(value, resolved, constraints, Map.copyOf(replacements));
     }
-    private Resumed resumeGeneration(String ticket, Pending value, Map<String, List<String>> selected, JsonNode choices) {
+    private Resumed resumeGeneration(Pending value, Map<String, List<String>> selected, JsonNode choices) {
         var chosen = new LinkedHashSet<String>(); var rejected = new LinkedHashSet<String>();
         var states = new HashMap<String, Boolean>();
         for (var group : value.generation().groups()) {
@@ -117,7 +127,6 @@ public final class ReplacementSelections {
                 c.count(), c.replacementPolicy(), c.maxDownloads(), c.requirements());
         var context = new GenerationContext(value.generation().groups(), value.generation().budget(), value.generation().priorReplacements(), selected);
         var resumed = new Pending(value.owner(), value.snapshot(), intent, constraints, value.architect(), value.failures(), value.groups(), context);
-        if (!pending.asMap().remove(ticket, value)) throw new IllegalArgumentException("该选择已提交，请等待构建结果");
         return new Resumed(resumed, intent, constraints, context.priorReplacements());
     }
     private static List<BuildRequirement> remapRequirements(

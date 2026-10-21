@@ -226,17 +226,20 @@
         <section role="dialog" aria-modal="true" aria-labelledby="replacement-title"
                  class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
             <div class="px-6 py-5 border-b bg-gradient-to-r from-indigo-50 to-sky-50">
-                <h2 id="replacement-title" class="text-xl font-bold text-slate-900">{{ replacementPrompt.kind === 'GENERATION' ? '选择维度核心世界生成' : ['OVERLAP', 'GENERATION'].includes(replacementPrompt.kind) ? '确认内容组合' : '选择兼容的替代模组' }}</h2>
+                <h2 id="replacement-title" class="text-xl font-bold text-slate-900">{{ replacementPrompt.kind === 'ADDONS' ? '选择核心附属' : replacementPrompt.kind === 'GENERATION' ? '选择维度核心世界生成' : ['OVERLAP', 'GENERATION', 'ADDONS'].includes(replacementPrompt.kind) ? '确认内容组合' : '选择兼容的替代模组' }}</h2>
                 <p class="text-sm text-slate-600 mt-2">目标环境 {{ replacementPrompt.loader }} / {{ replacementPrompt.mcVersion }}。
-                    <span v-if="['OVERLAP', 'GENERATION'].includes(replacementPrompt.kind)">可保留一个、几个或全部。默认勾选是建议；未确认不会自动继续。</span>
+                    <span v-if="['OVERLAP', 'GENERATION', 'ADDONS'].includes(replacementPrompt.kind)">{{ replacementPrompt.kind === 'ADDONS' ? '可保留推荐、另选、全选或不选。受保护项目必须保留。' : '可保留一个、几个或全部。' }}默认勾选是建议；未确认不会自动继续。</span>
                     <span v-else>可选择一个或多个候选，已默认勾选匹配度最高、同分下载量最多的项目。确认后继续原构建需求。</span></p>
             </div>
             <div class="p-6 overflow-y-auto space-y-7">
+                <p v-if="replacementPrompt.kind === 'ADDONS'" class="rounded-lg bg-indigo-50 p-3 text-sm text-indigo-800">推荐组合约 {{ replacementPrompt.recommendedFiles }} 个文件，候选全选最多 {{ replacementPrompt.candidateFiles }} 个文件（含前置）。最终数量随选择重算。</p>
                 <div v-for="group in replacementPrompt.groups" :key="group.original">
-                    <h3 class="font-semibold text-slate-900 mb-3">{{ ['OVERLAP', 'GENERATION'].includes(replacementPrompt.kind) ? group.title : '替换 ' + group.original }}</h3>
+                    <h3 class="font-semibold text-slate-900 mb-3">{{ ['OVERLAP', 'GENERATION', 'ADDONS'].includes(replacementPrompt.kind) ? group.title : '替换 ' + group.original }}</h3>
+                    <p v-if="replacementPrompt.kind === 'ADDONS'" class="text-xs text-indigo-600 mb-2">已选 {{ group.choice.slugs.length }} / {{ group.candidates.length }} 项附属</p>
                     <p v-if="group.explanation" class="text-sm text-slate-600 mb-3">{{ group.explanation }}</p>
-                    <button v-if="['OVERLAP', 'GENERATION'].includes(replacementPrompt.kind)" @click="group.candidates.forEach(c => syncReplacementSelection(c.slug, true))"
+                    <button v-if="['OVERLAP', 'GENERATION', 'ADDONS'].includes(replacementPrompt.kind)" @click="group.candidates.forEach(c => syncReplacementSelection(c.slug, true))"
                             class="text-xs text-indigo-600 underline mb-3">保留本组全部</button>
+                    <button v-if="replacementPrompt.kind === 'ADDONS'" @click="group.candidates.filter(c => !c.protectedSelection).forEach(c => syncReplacementSelection(c.slug, false))" class="text-xs text-slate-500 underline mb-3 ml-4">不选可选项</button>
                     <p v-if="!group.verified" class="text-sm text-amber-700 mb-3">取数未全部完成，不能断言没有兼容版本。可取消后重试，或补充准确 slug。</p>
                     <p v-if="!group.candidates.length && group.verified" class="text-sm text-slate-600 mb-3">未发现经过验证的兼容移植或平替。请补充准确 slug，或选择去除这项要求再继续。</p>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -253,7 +256,7 @@
                                     <div class="text-xs text-slate-500 break-all mt-1">{{ candidate.slug }}</div>
                                     <div class="flex gap-2 flex-wrap mt-2 text-xs">
                                         <span class="rounded-full bg-sky-100 text-sky-800 px-2 py-1">{{ candidate.relation }}</span>
-                                        <span v-if="['OVERLAP', 'GENERATION'].includes(replacementPrompt.kind) ? candidate.recommended : index === 0" class="rounded-full bg-indigo-100 text-indigo-800 px-2 py-1">默认推荐</span>
+                                        <span v-if="['OVERLAP', 'GENERATION', 'ADDONS'].includes(replacementPrompt.kind) ? candidate.recommended : index === 0" class="rounded-full bg-indigo-100 text-indigo-800 px-2 py-1">默认推荐</span>
                                         <span v-if="candidate.scope" class="rounded-full bg-slate-100 text-slate-700 px-2 py-1">{{ candidate.scope }}</span>
                                         <span v-if="candidate.protectedSelection" class="rounded-full bg-amber-100 text-amber-800 px-2 py-1">点名核心 / 必要前置 / 锁定版本</span>
                                         <span class="py-1 text-slate-600">{{ candidate.downloads.toLocaleString() }} 次下载</span>
@@ -269,7 +272,7 @@
                                @click.stop class="inline-block text-xs text-indigo-600 mt-3 underline">查看项目详情 ↗</a>
                         </label>
                     </div>
-                    <div v-if="!['OVERLAP', 'GENERATION'].includes(replacementPrompt.kind)" class="mt-3 flex flex-col sm:flex-row gap-3 sm:items-center">
+                    <div v-if="!['OVERLAP', 'GENERATION', 'ADDONS'].includes(replacementPrompt.kind)" class="mt-3 flex flex-col sm:flex-row gap-3 sm:items-center">
                         <label class="text-sm text-slate-600 flex items-center gap-2 shrink-0">
                             <input type="checkbox" v-model="group.choice.drop" class="accent-indigo-600">去除这项要求
                         </label>
@@ -559,9 +562,16 @@
                     <!-- 空图谱/删空之后的引导：不写这句，用户看到的就是一片空白，会以为坏了 -->
                     <div v-if="filteredRootNodes.length === 0"
                          class="text-xs text-slate-400 leading-relaxed p-3 border border-dashed border-slate-200 rounded-lg">
-                        <b class="text-slate-500">还没有模组</b><br>
-                        在上面输入 slug 后点「添加」，或点「💡 智能抽卡」批量挑选。<br>
-                        加进来之后会自动补齐前置依赖并画出连线。
+                        <template v-if="(previewData?.nodes || []).length > 0">
+                            <b class="text-slate-500">没有匹配的模组</b><br>
+                            换个名称或 slug 再试，当前清单中的模组仍然保留。
+                            <button @click="searchQuery = ''" class="mt-2 text-indigo-600 font-bold">清除搜索</button>
+                        </template>
+                        <template v-else>
+                            <b class="text-slate-500">还没有模组</b><br>
+                            在上面输入 slug 后点「添加」，或点「💡 智能抽卡」批量挑选。<br>
+                            加进来之后会自动补齐前置依赖并画出连线。
+                        </template>
                     </div>
                 </div>
             </div>
@@ -1107,6 +1117,21 @@
                 </div>
             </div>
 
+            <div class="bg-white rounded-xl shadow-sm border p-6">
+                <h3 class="font-bold text-lg mb-2">构建候选确认</h3>
+                <p class="text-sm text-slate-500 mb-4">开启时由你选择；关闭时采用推荐组合，可保留一个或多个。无可用候选的必选要求仍需确认。相互关联的选择会一并展示。</p>
+                <div class="grid sm:grid-cols-2 gap-3">
+                    <label v-for="option in [{key:'replacements',label:'移植与平替'}, {key:'overlap',label:'同定位与内容重叠'}, {key:'generation',label:'核心世界生成组合'}, {key:'addons',label:'核心附属'}]" :key="option.key" class="flex items-center gap-3 rounded-lg border px-3 py-3 text-sm">
+                        <input type="checkbox" v-model="selectionPreferences[option.key]" :disabled="selectionPrefsBusy" class="w-5 h-5 accent-indigo-600">
+                        <span>{{ option.label }}</span>
+                    </label>
+                </div>
+                <div class="flex items-center gap-3 mt-4">
+                    <button @click="saveSelectionPreferences" :disabled="selectionPrefsBusy" class="bg-indigo-600 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm">{{ selectionPrefsBusy ? '保存中…' : '保存选择设置' }}</button>
+                    <span role="status" class="text-sm text-slate-500">{{ selectionPrefsMsg }}</span>
+                </div>
+            </div>
+
             <!-- 类别偏好 -->
             <div class="bg-white rounded-xl shadow-sm border p-6">
                 <div class="flex justify-between items-center mb-3">
@@ -1510,7 +1535,7 @@
         modPrefJump, blacklistPage, blacklistJump, modInfoCache, manualSlugInput, addingModBySlug,
         modSlugAddMsg, editingBuildCountId, editingBuildCountVal, blacklistItems, blacklistSlugInput, blacklistMsg,
         latestSnapshotId, labChangeNote,
-        enableBlacklist, enableUserFeedbackRules, keLoaderEnvs, keLoader, keVersion, keEnv, keRelation, keModA,
+        selectionPreferences, selectionPrefsBusy, selectionPrefsMsg, enableBlacklist, enableUserFeedbackRules, keLoaderEnvs, keLoader, keVersion, keEnv, keRelation, keModA,
         keModB, keModAInfo, keModBInfo, keModAError, keModBError, keMsg, keMsgOk,
         dbFilterLoader, dbFilterVersion, dbFilterModA, dbVoteBusy,
     } from './js/store.js';
@@ -1525,7 +1550,7 @@
         jumpModPrefPage, loadKeEnvs, modPrefTotalPages,
         nextBlacklistPageFn, nextModPrefPage, onKeSlugInput, openSuggestBoardForBlacklist, pagedBlacklist, pagedModPrefs,
         pageSize, prevBlacklistPageFn, prevModPrefPage, removeBlacklistItem, removeCategoryPref, removeModPref,
-        refreshDbRules, saveApiKey, saveBlacklistToggle, saveBuildCount, saveFeedbackRulesToggle, saveProfileWeight, saveUsername,
+        refreshDbRules, saveSelectionPreferences, saveApiKey, saveBlacklistToggle, saveBuildCount, saveFeedbackRulesToggle, saveProfileWeight, saveUsername,
         startEditBuildCount, submitKeRule, toggleModSource,
         voteRule, sendPwCode, sendBindCode, saveBindEmail, dismissEmailHint,
         openEmailAction, doUnbindEmail,
@@ -1600,6 +1625,7 @@
                 editingBuildCountId, editingBuildCountVal, startEditBuildCount, saveBuildCount, toggleModSource,
                 addCategoryPref, removeCategoryPref, removeModPref, clearPrefs, exportPrefs, importPrefs,
                 // 🚫 blacklist
+                selectionPreferences, selectionPrefsBusy, selectionPrefsMsg, saveSelectionPreferences,
                 blacklistItems, blacklistSlugInput, blacklistMsg, enableBlacklist, enableUserFeedbackRules,
                 addBlacklistBySlug, removeBlacklistItem, clearBlacklist, saveBlacklistToggle, saveFeedbackRulesToggle, openSuggestBoardForBlacklist,
                 // 🧬 knowledge editor

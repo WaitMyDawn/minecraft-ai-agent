@@ -91,7 +91,16 @@ public final class GenerationChoices {
                 ? List.copyOf(groups) : List.of();
     }
     public static boolean allows(Map<String, List<String>> confirmed, String slug, String facts) {
+        return allows(confirmed, Map.of(), slug, facts);
+    }
+    public static boolean allows(Map<String, List<String>> confirmed, Map<String, List<String>> offered, String slug, String facts) {
         for (var choice : confirmed.entrySet()) {
+            // 未展示的后续候选由最终组合确认处理，不能伪造为已被用户拒选。
+            if (offered.containsKey(choice.getKey())) {
+                if (!offered.get(choice.getKey()).contains(slug)) continue;
+                if (!choice.getValue().contains(slug)) return false;
+                continue;
+            }
             String dimension = choice.getKey().substring("generation:".length());
             if (!choice.getValue().contains(slug) && (DimensionGeneration.supports(new DimensionGeneration.Goal(dimension, dimension, ""), facts)
                     || ContentOverlap.majorChangeIn(slug, facts, dimension))) return false;

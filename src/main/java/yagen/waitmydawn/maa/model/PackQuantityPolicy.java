@@ -8,8 +8,7 @@ public final class PackQuantityPolicy {
     private PackQuantityPolicy() {}
     public static Optional<String> shortfall(BuildIntent.CountTarget target, int files) {
         if (target == null || target.scope() != BuildIntent.CountScope.TOTAL_FILES) return Optional.empty();
-        int minimum = target.range() ? target.min() : target.precision() == BuildIntent.Precision.EXACT
-                ? target.value() : (int) Math.ceil(target.value() * .8);
+        int minimum = FinalQuantityCoordinator.minimum(target);
         return files < minimum ? Optional.of("⚠️ 本轮仅组装 " + files + " 个文件，低于数量目标下限 " + minimum
                 + "；这是未补足的清单，数量要求尚未满足。可以继续补充，已保留的核心和前置不会因为数量不足被删除。") : Optional.empty();
     }
@@ -22,8 +21,7 @@ public final class PackQuantityPolicy {
             return new Result(resolution, selected, removed, resolution.graph().allSlugs.size(), "UNKNOWN_ROOT_IDENTITY");
         if (target == null || target.scope() != BuildIntent.CountScope.TOTAL_FILES || !resolution.isComplete())
             return new Result(resolution, selected, removed, resolution.graph().allSlugs.size(), "NOT_TRIMMED");
-        int upper = target.precision() == BuildIntent.Precision.EXACT ? target.max() : target.range()
-                ? target.max() + Math.min(10, (int) Math.ceil(target.max() * .1)) : target.value() + Math.min(10, (int) Math.ceil(target.value() * .1));
+        int upper = FinalQuantityCoordinator.maximum(target);
         var files = reachable(resolution.graph(), selected);
         for (String slug : removable) {
             if (files.size() <= upper) break;
@@ -32,6 +30,11 @@ public final class PackQuantityPolicy {
             files = reachable(resolution.graph(), selected);
         }
         if (removed.isEmpty()) return new Result(resolution, selected, removed, files.size(), files.size() > upper ? "PROTECTED_OVERAGE" : "WITHIN_POLICY");
+        return new Result(retain(resolution,selected), selected, List.copyOf(removed), files.size(), files.size() > upper ? "PROTECTED_OVERAGE" : "TRIMMED_OPTIONAL");
+    }
+    /** 只复制根可达子图；原始解析诊断及缓存图保持不变。 */
+    public static ResolutionResult retain(ResolutionResult resolution, Set<String> roots) {
+        var files = reachable(resolution.graph(), roots);
         var graph = new DependencyGraph();
         graph.projectAliases.putAll(resolution.graph().projectAliases);
         graph.allSlugs.addAll(files);
@@ -40,9 +43,8 @@ public final class PackQuantityPolicy {
             if (resolution.graph().pinnedSlugs.contains(slug)) graph.pinnedSlugs.add(slug);
             resolution.graph().getDependenciesOf(slug).stream().filter(files::contains).forEach(d -> graph.addEdge(slug, d));
         }
-        var adjusted = new ResolutionResult(graph, resolution.status(), selected, resolution.unresolved(), resolution.dropped(),
+        return new ResolutionResult(graph, resolution.status(), roots, resolution.unresolved(), resolution.dropped(),
                 resolution.nodeBudget(), resolution.budgetExhausted()).coordinated(resolution.coordination());
-        return new Result(adjusted, selected, List.copyOf(removed), files.size(), files.size() > upper ? "PROTECTED_OVERAGE" : "TRIMMED_OPTIONAL");
     }
     private static Set<String> reachable(DependencyGraph graph, Set<String> roots) {
         var result = new TreeSet<String>();

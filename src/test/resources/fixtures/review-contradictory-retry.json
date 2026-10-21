@@ -1,0 +1,2082 @@
+{
+  "candidates": [
+    "aces-spell-utils",
+    "adaptive-performance-tweaks",
+    "addadd",
+    "additional-structures",
+    "adorabuild-structures",
+    "aeroblender",
+    "ai-improvements",
+    "alexs-biome-dimensions",
+    "alshanexs-familiars",
+    "amplified-nether",
+    "apprentices-codex",
+    "aquaculture-delight",
+    "archaeological_research_exploration",
+    "archers-expansion",
+    "arphex",
+    "arsdelight",
+    "asterism-arcanum-addon-for-irons-spells-and-spellbooks",
+    "ati-structures-vanilla-edition",
+    "autochefs-delight",
+    "badoptimizations",
+    "better-farming-with-hoes-farmers-delight-compatibility",
+    "big-globe-farmers-delight-compatibility",
+    "biomes-o-plenty",
+    "brown-cheese-delight-a-farmers-delight-add-on",
+    "cannibal-villages",
+    "cataclysm-dimension",
+    "cataclysm-spellbooks",
+    "cobbled-armour-trims",
+    "compat-delight",
+    "countereds-terrain-slabs",
+    "create-bugfix-clipboard-patch",
+    "create-bugfix-schematic-patch",
+    "create-let-the-adventure-begin",
+    "create-structures-overhaul",
+    "create-wizardry",
+    "crystal-chronicles",
+    "dark-doppelganger",
+    "dimensional-tears",
+    "discerning-the-eldritch",
+    "distanthorizons",
+    "dungeons-and-taverns",
+    "dungeons-and-taverns-ancient-city-overhaul",
+    "dungeons-and-taverns-desert-temple-overhaul",
+    "dungeons-and-taverns-jungle-temple-overhaul",
+    "dungeons-and-taverns-swamp-hut-overhaul",
+    "dynamic-fps",
+    "easy-arcane-an-irons-spells-spellbooks-addon",
+    "ec-irons-spells-compat",
+    "emf-compat-irons-spells-n-spellbooks",
+    "enderscape",
+    "ends-delight",
+    "energized-power-fd",
+    "entityculling",
+    "epic-knights-shields-armor-and-weapons",
+    "epic-terrain_compatible",
+    "epicterrain",
+    "exclusive-weapons-armor-and-tools",
+    "expanded-delight",
+    "explorations",
+    "explore-ruins-aether",
+    "farm-3x3-farmers-delight-compatibility",
+    "farmers-croptopia",
+    "farmers-delight-contracts-feasts",
+    "farmers-delight-extended",
+    "farmers-delight-kacchi",
+    "farmers-delight-tfc",
+    "ferrite-core",
+    "fleinsopp-delight-a-farmers-delight-add-on",
+    "gensokyo-delight-youkais-feasts",
+    "hazen-n-stuff",
+    "idas",
+    "immersive-armor-hud",
+    "info-tools",
+    "international-food",
+    "inventoryhudplus",
+    "irons-spellbooks-arcane-essence-blocks",
+    "irons-spellbooks-tweaks",
+    "irons-spells-n-spellbooks-dynamic-skill-trees",
+    "irons-spells-n-spellbooks-restricitons",
+    "irons-spells-n-spellbooks-unstable-magic",
+    "iss-food-spelling",
+    "isskjs",
+    "juztsys-structure",
+    "legendary-monsters",
+    "lithium",
+    "luminous-nether",
+    "magic-from-the-east",
+    "mes-moogs-end-structures",
+    "mexicans-delight",
+    "mining-speed-tooltips",
+    "mns-moogs-nether-structures",
+    "modelfix",
+    "modernfix",
+    "moogs-voyager-structures",
+    "more-creatures-and-weapons",
+    "more-delight",
+    "mss-moogs-soaring-structures",
+    "mutant-monsters",
+    "my-nethers-delight",
+    "netherite_tweaks",
+    "nlyb-dungeonstructure-fragments",
+    "noisium",
+    "oceans-delight",
+    "oh-the-biomes-weve-gone",
+    "particle-core",
+    "performancehud",
+    "polars-exploration-additions",
+    "project-mmo-irons-spells-spellbooks-compat",
+    "projecte-emc-for-irons-spellbooks",
+    "random-optimization",
+    "realm-rpg-fallen-adventurers",
+    "repurposed-structures-farmers-delight-compat",
+    "respawning-animals",
+    "right-click-and-milk",
+    "rottencreatures",
+    "schrumbohud",
+    "shoulder-surfing-iron-spells-integration",
+    "shulkerboxtooltip",
+    "sniffers-sniffs-delights",
+    "sodium",
+    "sodium-extra-information",
+    "somake-spells-irons-spells-addon",
+    "spell-engine",
+    "spell-power",
+    "spells-gone-wrong",
+    "stacked-blocks-farmers-delight",
+    "starter-structure",
+    "structure-control-",
+    "structure-layout-optimizer",
+    "structures-spawn-biomes-fix",
+    "tensura-unique-monsters",
+    "terrablender",
+    "the-aethers-delight",
+    "tofudelight",
+    "ubes-delight",
+    "undergarden-delight",
+    "valiant-irons-spells-n-spellbooks-addon",
+    "vampires-delight",
+    "vegan-delight",
+    "when-dungeons-arise",
+    "when-dungeons-arise-seven-seas",
+    "winefoxs_spellbooks",
+    "wizard-samurai-irons-spells-addon",
+    "yungs-better-dungeons",
+    "yungs-better-end-island"
+  ],
+  "responses": [
+    {
+      "schemaVersion": 1,
+      "approved": [
+        "irons-spellbooks-arcane-essence-blocks",
+        "dark-doppelganger",
+        "irons-spells-n-spellbooks-dynamic-skill-trees",
+        "hazen-n-stuff",
+        "magic-from-the-east",
+        "discerning-the-eldritch",
+        "crystal-chronicles",
+        "iss-food-spelling",
+        "wizard-samurai-irons-spells-addon",
+        "somake-spells-irons-spells-addon",
+        "asterism-arcanum-addon-for-irons-spells-and-spellbooks",
+        "irons-spells-n-spellbooks-unstable-magic",
+        "valiant-irons-spells-n-spellbooks-addon",
+        "easy-arcane-an-irons-spells-spellbooks-addon",
+        "irons-spellbooks-tweaks",
+        "cataclysm-spellbooks",
+        "apprentices-codex",
+        "alshanexs-familiars",
+        "spells-gone-wrong",
+        "more-delight",
+        "farmers-delight-extended",
+        "farmers-delight-contracts-feasts",
+        "international-food",
+        "mexicans-delight",
+        "ubes-delight",
+        "vegan-delight",
+        "expanded-delight",
+        "oceans-delight",
+        "ends-delight",
+        "my-nethers-delight",
+        "gensokyo-delight-youkais-feasts",
+        "compat-delight",
+        "aquaculture-delight",
+        "undergarden-delight",
+        "the-aethers-delight",
+        "vampires-delight",
+        "tofudelight",
+        "arsdelight",
+        "autochefs-delight",
+        "sniffers-sniffs-delights",
+        "right-click-and-milk",
+        "farmers-delight-kacchi",
+        "biomes-o-plenty",
+        "oh-the-biomes-weve-gone",
+        "additional-structures",
+        "adorabuild-structures",
+        "moogs-voyager-structures",
+        "when-dungeons-arise",
+        "when-dungeons-arise-seven-seas",
+        "yungs-better-dungeons",
+        "dungeons-and-taverns",
+        "dungeons-and-taverns-jungle-temple-overhaul",
+        "dungeons-and-taverns-desert-temple-overhaul",
+        "dungeons-and-taverns-swamp-hut-overhaul",
+        "dungeons-and-taverns-ancient-city-overhaul",
+        "explorations",
+        "ati-structures-vanilla-edition",
+        "mns-moogs-nether-structures",
+        "mes-moogs-end-structures",
+        "mss-moogs-soaring-structures",
+        "idas",
+        "juztsys-structure",
+        "realm-rpg-fallen-adventurers",
+        "create-let-the-adventure-begin",
+        "create-structures-overhaul",
+        "archaeological_research_exploration",
+        "polars-exploration-additions",
+        "mutant-monsters",
+        "rottencreatures",
+        "more-creatures-and-weapons",
+        "legendary-monsters",
+        "respawning-animals",
+        "tensura-unique-monsters",
+        "cannibal-villages",
+        "luminous-nether",
+        "amplified-nether",
+        "enderscape",
+        "yungs-better-end-island",
+        "dimensional-tears",
+        "sodium",
+        "entityculling",
+        "ferrite-core",
+        "modernfix",
+        "lithium",
+        "noisium",
+        "badoptimizations",
+        "particle-core",
+        "dynamic-fps",
+        "ai-improvements",
+        "modelfix",
+        "random-optimization",
+        "netherite_tweaks",
+        "inventoryhudplus",
+        "shulkerboxtooltip",
+        "immersive-armor-hud",
+        "mining-speed-tooltips",
+        "info-tools",
+        "sodium-extra-information",
+        "performancehud",
+        "epic-knights-shields-armor-and-weapons",
+        "exclusive-weapons-armor-and-tools",
+        "terrablender",
+        "structure-layout-optimizer",
+        "structures-spawn-biomes-fix",
+        "adaptive-performance-tweaks",
+        "distanthorizons",
+        "schrumbohud"
+      ],
+      "rejected": [
+        {
+          "slug": "farmers-delight-tfc",
+          "reason": "CONSTRAINT",
+          "explanation": "依赖TerrafirmaCraft，与整合包环境不符。"
+        },
+        {
+          "slug": "farm-3x3-farmers-delight-compatibility",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Farm 3x3联动，包内无该模组。"
+        },
+        {
+          "slug": "better-farming-with-hoes-farmers-delight-compatibility",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Better Farming with Hoes联动，包内无该模组。"
+        },
+        {
+          "slug": "stacked-blocks-farmers-delight",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Stacked Blocks联动，包内无该模组。"
+        },
+        {
+          "slug": "energized-power-fd",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Energized Power联动，包内无该模组。"
+        },
+        {
+          "slug": "farmers-croptopia",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Croptopia联动，包内无该模组。"
+        },
+        {
+          "slug": "repurposed-structures-farmers-delight-compat",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Repurposed Structures联动，包内无该模组。"
+        },
+        {
+          "slug": "big-globe-farmers-delight-compatibility",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Big Globe联动，包内无该模组。"
+        },
+        {
+          "slug": "brown-cheese-delight-a-farmers-delight-add-on",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅添加单一挪威棕色奶酪，内容过窄。"
+        },
+        {
+          "slug": "fleinsopp-delight-a-farmers-delight-add-on",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅添加单一挪威蘑菇，内容过窄。"
+        },
+        {
+          "slug": "projecte-emc-for-irons-spellbooks",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖ProjectE，包内无该模组。"
+        },
+        {
+          "slug": "project-mmo-irons-spells-spellbooks-compat",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Project MMO，包内无该模组。"
+        },
+        {
+          "slug": "ec-irons-spells-compat",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Expanded Combat，包内无该模组。"
+        },
+        {
+          "slug": "winefoxs_spellbooks",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖TouhouLittleMaid，包内无该模组。"
+        },
+        {
+          "slug": "emf-compat-irons-spells-n-spellbooks",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖EMF动画模型，包内无该模组。"
+        },
+        {
+          "slug": "shoulder-surfing-iron-spells-integration",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Shoulder Surfing，包内无该模组。"
+        },
+        {
+          "slug": "create-wizardry",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Create，包内无该模组。"
+        },
+        {
+          "slug": "create-bugfix-schematic-patch",
+          "reason": "OFF_TOPIC",
+          "explanation": "修复Create机械图纸，包内无Create。"
+        },
+        {
+          "slug": "create-bugfix-clipboard-patch",
+          "reason": "OFF_TOPIC",
+          "explanation": "修复Create剪贴板，包内无Create。"
+        },
+        {
+          "slug": "cobbled-armour-trims",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Cobblemon，与冒险主题无关。"
+        },
+        {
+          "slug": "archers-expansion",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Archers RPG与Spell Engine，包内无该体系。"
+        },
+        {
+          "slug": "spell-engine",
+          "reason": "OFF_TOPIC",
+          "explanation": "为RPG Series服务的魔法库，非铁魔法附属。"
+        },
+        {
+          "slug": "spell-power",
+          "reason": "OFF_TOPIC",
+          "explanation": "为Spell Engine体系服务，非铁魔法附属。"
+        },
+        {
+          "slug": "aces-spell-utils",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅为开发API，无实际玩法内容。"
+        },
+        {
+          "slug": "isskjs",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "KubeJS脚本工具，无直接玩法内容。"
+        },
+        {
+          "slug": "explore-ruins-aether",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Aether维度，包内无该模组。"
+        },
+        {
+          "slug": "aeroblender",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Aether与TerraBlender，包内无Aether。"
+        },
+        {
+          "slug": "cataclysm-dimension",
+          "reason": "CONFLICT",
+          "explanation": "将灾变结构拆入独立维度，改变既有灾变体验。"
+        },
+        {
+          "slug": "alexs-biome-dimensions",
+          "reason": "CONFLICT",
+          "explanation": "把群系拆成独立维度，削弱主世界群系探险。"
+        },
+        {
+          "slug": "structure-control-",
+          "reason": "CONSTRAINT",
+          "explanation": "可禁用维度与结构，与丰富探险目标相悖。"
+        },
+        {
+          "slug": "nlyb-dungeonstructure-fragments",
+          "reason": "OFF_TOPIC",
+          "explanation": "把地牢搬回基地，与外出探险目标相反。"
+        },
+        {
+          "slug": "starter-structure",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅出生点建筑，探险价值有限。"
+        },
+        {
+          "slug": "countereds-terrain-slabs",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅地形加台阶，非群系或结构丰富。"
+        },
+        {
+          "slug": "epicterrain",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅地形重构，无群系或结构内容。"
+        },
+        {
+          "slug": "epic-terrain_compatible",
+          "reason": "OFF_TOPIC",
+          "explanation": "Epic Terrain兼容版，同样无群系结构内容。"
+        },
+        {
+          "slug": "arphex",
+          "reason": "OFF_TOPIC",
+          "explanation": "恐怖蜘蛛主题，与用户需求无关。"
+        },
+        {
+          "slug": "addadd",
+          "reason": "OFF_TOPIC",
+          "explanation": "原版+杂项补充，非探险或魔法重点。"
+        },
+        {
+          "slug": "irons-spells-n-spellbooks-restricitons",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "描述含糊，无法确认具体玩法增益。"
+        },
+        {
+          "slug": "irons-spells-n-spellbooks-unstable-magic",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅新增破坏性法术学派，内容较窄。"
+        },
+        {
+          "slug": "valiant-irons-spells-n-spellbooks-addon",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅新增一个召唤法术，内容过窄。"
+        },
+        {
+          "slug": "easy-arcane-an-irons-spells-spellbooks-addon",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅简化墨水与奥术精华获取，内容过窄。"
+        },
+        {
+          "slug": "irons-spellbooks-arcane-essence-blocks",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅3个堆叠方块，玩法增益有限。"
+        },
+        {
+          "slug": "dark-doppelganger",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅一个镜像Boss，内容较窄。"
+        },
+        {
+          "slug": "irons-spells-n-spellbooks-dynamic-skill-trees",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "依赖Pufferfish's Skills，包内无该模组。"
+        },
+        {
+          "slug": "hazen-n-stuff",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅装备与法术补充，内容较窄。"
+        },
+        {
+          "slug": "discerning-the-eldritch",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅扩展Eldritch学派，内容较窄。"
+        },
+        {
+          "slug": "iss-food-spelling",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅食物附魔法术，内容较窄。"
+        },
+        {
+          "slug": "wizard-samurai-irons-spells-addon",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅一套武士装备与法术书，内容较窄。"
+        },
+        {
+          "slug": "asterism-arcanum-addon-for-irons-spells-and-spellbooks",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅新增星界学派，内容较窄。"
+        },
+        {
+          "slug": "irons-spellbooks-tweaks",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅配置调整，非内容附属。"
+        },
+        {
+          "slug": "spells-gone-wrong",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅自伤与配置调整，非内容扩展。"
+        },
+        {
+          "slug": "somake-spells-irons-spells-addon",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "依赖灾变等联动，内容范围有限。"
+        },
+        {
+          "slug": "cataclysm-spellbooks",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "灾变与铁魔法联动，内容范围有限。"
+        },
+        {
+          "slug": "apprentices-codex",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "学徒魔法内容，范围有限。"
+        },
+        {
+          "slug": "alshanexs-familiars",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增使魔生物，范围有限。"
+        },
+        {
+          "slug": "crystal-chronicles",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "扩展学派与装备群系，范围有限。"
+        },
+        {
+          "slug": "magic-from-the-east",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增东方学派，范围有限。"
+        },
+        {
+          "slug": "more-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增餐食刀具食材，范围有限。"
+        },
+        {
+          "slug": "farmers-delight-extended",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增食谱，范围有限。"
+        },
+        {
+          "slug": "farmers-delight-contracts-feasts",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增契约与宴席，范围有限。"
+        },
+        {
+          "slug": "international-food",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增国际食物，范围有限。"
+        },
+        {
+          "slug": "mexicans-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增墨西哥食物，范围有限。"
+        },
+        {
+          "slug": "ubes-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增菲律宾作物食物，范围有限。"
+        },
+        {
+          "slug": "vegan-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增素食食材，范围有限。"
+        },
+        {
+          "slug": "expanded-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增作物与功能，范围有限。"
+        },
+        {
+          "slug": "oceans-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增海洋料理，范围有限。"
+        },
+        {
+          "slug": "ends-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增末地料理，范围有限。"
+        },
+        {
+          "slug": "my-nethers-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增下界料理，范围有限。"
+        },
+        {
+          "slug": "gensokyo-delight-youkais-feasts",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增日式料理，范围有限。"
+        },
+        {
+          "slug": "compat-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "通用联动，范围有限。"
+        },
+        {
+          "slug": "aquaculture-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "依赖Aquaculture，包内无该模组。"
+        },
+        {
+          "slug": "undergarden-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "依赖The Undergarden，包内无该模组。"
+        },
+        {
+          "slug": "the-aethers-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "依赖The Aether，包内无该模组。"
+        },
+        {
+          "slug": "vampires-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "依赖Vampirism，包内无该模组。"
+        },
+        {
+          "slug": "tofudelight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "依赖TofuCraftReload，包内无该模组。"
+        },
+        {
+          "slug": "arsdelight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "依赖Ars Nouveau，包内无该模组。"
+        },
+        {
+          "slug": "autochefs-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅优化烹饪配方匹配，范围有限。"
+        },
+        {
+          "slug": "sniffers-sniffs-delights",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅嗅探兽挖种子，范围有限。"
+        },
+        {
+          "slug": "right-click-and-milk",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅玻璃瓶挤奶，范围有限。"
+        },
+        {
+          "slug": "farmers-delight-kacchi",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅孟加拉食物，范围有限。"
+        },
+        {
+          "slug": "biomes-o-plenty",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增50+群系，范围有限。"
+        },
+        {
+          "slug": "oh-the-biomes-weve-gone",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增50+群系，范围有限。"
+        },
+        {
+          "slug": "additional-structures",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增200+结构，范围有限。"
+        },
+        {
+          "slug": "adorabuild-structures",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增100+结构，范围有限。"
+        },
+        {
+          "slug": "moogs-voyager-structures",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增130+结构，范围有限。"
+        },
+        {
+          "slug": "when-dungeons-arise",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增地牢结构，范围有限。"
+        },
+        {
+          "slug": "when-dungeons-arise-seven-seas",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增海上船只结构，范围有限。"
+        },
+        {
+          "slug": "yungs-better-dungeons",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "重做地牢，范围有限。"
+        },
+        {
+          "slug": "dungeons-and-taverns",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增地牢酒馆结构，范围有限。"
+        },
+        {
+          "slug": "dungeons-and-taverns-jungle-temple-overhaul",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "重做丛林神庙，范围有限。"
+        },
+        {
+          "slug": "dungeons-and-taverns-desert-temple-overhaul",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "重做沙漠神庙，范围有限。"
+        },
+        {
+          "slug": "dungeons-and-taverns-swamp-hut-overhaul",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "重做沼泽小屋，范围有限。"
+        },
+        {
+          "slug": "dungeons-and-taverns-ancient-city-overhaul",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "重做远古城市，范围有限。"
+        },
+        {
+          "slug": "explorations",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增原版风格结构，范围有限。"
+        },
+        {
+          "slug": "ati-structures-vanilla-edition",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增结构地牢，范围有限。"
+        },
+        {
+          "slug": "mns-moogs-nether-structures",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增下界结构，范围有限。"
+        },
+        {
+          "slug": "mes-moogs-end-structures",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增末地结构，范围有限。"
+        },
+        {
+          "slug": "mss-moogs-soaring-structures",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增浮岛结构，范围有限。"
+        },
+        {
+          "slug": "idas",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增精细结构，范围有限。"
+        },
+        {
+          "slug": "juztsys-structure",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增27个结构，范围有限。"
+        },
+        {
+          "slug": "realm-rpg-fallen-adventurers",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增骷髅宝藏，范围有限。"
+        },
+        {
+          "slug": "create-let-the-adventure-begin",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "依赖Create，包内无该模组。"
+        },
+        {
+          "slug": "create-structures-overhaul",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "依赖Create，包内无该模组。"
+        },
+        {
+          "slug": "archaeological_research_exploration",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "考古探险内容，范围有限。"
+        },
+        {
+          "slug": "polars-exploration-additions",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "鼓励探索，范围有限。"
+        },
+        {
+          "slug": "mutant-monsters",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增变异生物，范围有限。"
+        },
+        {
+          "slug": "rottencreatures",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增僵尸生物，范围有限。"
+        },
+        {
+          "slug": "more-creatures-and-weapons",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增24种生物，范围有限。"
+        },
+        {
+          "slug": "legendary-monsters",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增Boss，范围有限。"
+        },
+        {
+          "slug": "respawning-animals",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅动物重生机制，范围有限。"
+        },
+        {
+          "slug": "tensura-unique-monsters",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "依赖Tensura体系，包内无该模组。"
+        },
+        {
+          "slug": "cannibal-villages",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增食人村庄与海洋生物，范围有限。"
+        },
+        {
+          "slug": "luminous-nether",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增下界群系生物，范围有限。"
+        },
+        {
+          "slug": "amplified-nether",
+          "reason": "CONFLICT",
+          "explanation": "原文声明与Incendium不兼容。"
+        },
+        {
+          "slug": "enderscape",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "末地全面重做，范围有限。"
+        },
+        {
+          "slug": "yungs-better-end-island",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "重做主末地岛，范围有限。"
+        },
+        {
+          "slug": "dimensional-tears",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "改动传送门与末地地形，范围有限。"
+        },
+        {
+          "slug": "sodium",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "渲染引擎替换，范围有限。"
+        },
+        {
+          "slug": "entityculling",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "实体剔除优化，范围有限。"
+        },
+        {
+          "slug": "ferrite-core",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "内存优化，范围有限。"
+        },
+        {
+          "slug": "modernfix",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "综合性能与修复，范围有限。"
+        },
+        {
+          "slug": "lithium",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "游戏逻辑优化，范围有限。"
+        },
+        {
+          "slug": "noisium",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "世界生成优化，范围有限。"
+        },
+        {
+          "slug": "badoptimizations",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "非渲染优化，范围有限。"
+        },
+        {
+          "slug": "particle-core",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "粒子优化，范围有限。"
+        },
+        {
+          "slug": "dynamic-fps",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "后台降耗，范围有限。"
+        },
+        {
+          "slug": "ai-improvements",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "AI性能优化，范围有限。"
+        },
+        {
+          "slug": "modelfix",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "修复模型缝隙，范围有限。"
+        },
+        {
+          "slug": "random-optimization",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "性能与修复，范围有限。"
+        },
+        {
+          "slug": "netherite_tweaks",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "修复下界矿石生成，范围有限。"
+        },
+        {
+          "slug": "inventoryhudplus",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "背包HUD，范围有限。"
+        },
+        {
+          "slug": "shulkerboxtooltip",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "潜影盒提示，范围有限。"
+        },
+        {
+          "slug": "immersive-armor-hud",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "护甲耐久HUD，范围有限。"
+        },
+        {
+          "slug": "mining-speed-tooltips",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "挖掘速度提示，范围有限。"
+        },
+        {
+          "slug": "info-tools",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "坐标时间HUD，范围有限。"
+        },
+        {
+          "slug": "sodium-extra-information",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "Sodium附加信息，范围有限。"
+        },
+        {
+          "slug": "performancehud",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "性能HUD，范围有限。"
+        },
+        {
+          "slug": "epic-knights-shields-armor-and-weapons",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增中世纪装备，范围有限。"
+        },
+        {
+          "slug": "exclusive-weapons-armor-and-tools",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "新增升级装备，范围有限。"
+        },
+        {
+          "slug": "terrablender",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "群系库，范围有限。"
+        },
+        {
+          "slug": "structure-layout-optimizer",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "结构生成优化，范围有限。"
+        },
+        {
+          "slug": "structures-spawn-biomes-fix",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "修复结构生成群系，范围有限。"
+        },
+        {
+          "slug": "adaptive-performance-tweaks",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "自适应性能调整，范围有限。"
+        },
+        {
+          "slug": "distanthorizons",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "远距离渲染，范围有限。"
+        },
+        {
+          "slug": "schrumbohud",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "背包HUD，范围有限。"
+        }
+      ],
+      "allowBackfill": true,
+      "requirements": [
+        {
+          "id": "r-67e552f818f5690f",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "我想玩一个Neoforge1.21.1的冒险整合包",
+              "evidence": [],
+              "gap": ""
+            },
+            {
+              "source": "名字是朝花夕拾",
+              "evidence": [],
+              "gap": ""
+            },
+            {
+              "source": "大概100~200个模组",
+              "evidence": [],
+              "gap": ""
+            },
+            {
+              "source": "要求：",
+              "evidence": [],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-9b9fcfa450a96d4c",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "1）以铁魔法为核心",
+              "evidence": [
+                {
+                  "slug": "irons-spells-n-spellbooks",
+                  "quote": "Iron's Spells 'n Spellbooks A magic mod bringing back the classic RPG spellcasting fantasy.",
+                  "purpose": "已选核心魔法模组"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "多补充一些铁魔法的附属",
+              "evidence": [
+                {
+                  "slug": "magic-from-the-east",
+                  "quote": "An add-on mod for Iron's Spell n' Spellbooks that adding new schools, spells and stuffs inspired from ancient Asian and Middle Eastern culture",
+                  "purpose": "新增学派与法术的附属"
+                },
+                {
+                  "slug": "crystal-chronicles",
+                  "quote": "Addon for Iron's Spells 'n Spellbooks - expanding the schools of magic with unique armors, weapons and biomes.",
+                  "purpose": "扩展学派装备与群系"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-ffffaa35465c974d",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "2）包含Alex生物",
+              "evidence": [
+                {
+                  "slug": "alexs-mobs-1.21.1",
+                  "quote": "Alex's Mobs",
+                  "purpose": "已选Alex生物"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "Alex洞穴",
+              "evidence": [
+                {
+                  "slug": "alexs-caves-unofficial-port",
+                  "quote": "Alex's Caves",
+                  "purpose": "已选Alex洞穴"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "冰火传说",
+              "evidence": [
+                {
+                  "slug": "iceandfire-ce",
+                  "quote": "Ice and Fire",
+                  "purpose": "已选冰火传说"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "灾变",
+              "evidence": [
+                {
+                  "slug": "l_enders-cataclysm",
+                  "quote": "Cataclysm is a mod that adds difficult dungeons, challenging boss-fights and powerful items.",
+                  "purpose": "已选灾变"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "海灵物语",
+              "evidence": [
+                {
+                  "slug": "aquamirae",
+                  "quote": "Aquamirae Ship graveyard with terrible deep sea creatures!",
+                  "purpose": "已选海灵物语"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "yagens-attributes",
+              "evidence": [
+                {
+                  "slug": "yagens-attributes",
+                  "quote": "Yagen's Attributes A Warframe like mod for Minecraft,which changes many aspects of vanilla.",
+                  "purpose": "已选属性模组"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-bc37e982a35501ab",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "3）包含农夫乐事及其附属",
+              "evidence": [
+                {
+                  "slug": "farmers-delight",
+                  "quote": "Farmer's Delight A cozy expansion to farming and cooking!",
+                  "purpose": "已选农夫乐事核心"
+                },
+                {
+                  "slug": "more-delight",
+                  "quote": "Extra meals, knives, and ingredients for Farmer's Delight that improve your culinary experience.",
+                  "purpose": "新增餐食食材的附属"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "特别是整合包内有的模组的乐事联动附属",
+              "evidence": [
+                {
+                  "slug": "aquaculture-delight",
+                  "quote": "Adds Farmer's Delight and Aquaculture compatibility. Vanilla style.",
+                  "purpose": "与Aquaculture联动"
+                },
+                {
+                  "slug": "the-aethers-delight",
+                  "quote": "Adds Compatibility between The Aether and Farmer's Delight",
+                  "purpose": "与Aether联动"
+                }
+              ],
+              "gap": "包内Alex生物、灾变等核心暂无对应乐事联动附属依据。"
+            }
+          ]
+        },
+        {
+          "id": "r-5cf0f6a6a62b3005",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "4）有丰富的群系",
+              "evidence": [
+                {
+                  "slug": "biomes-o-plenty",
+                  "quote": "Adds 50+ unique biomes to enhance your world, with new trees, flowers, and more!",
+                  "purpose": "新增50+群系"
+                },
+                {
+                  "slug": "oh-the-biomes-weve-gone",
+                  "quote": "with over 50+ biomes ranging from the magical to the realistic and all breathtaking!",
+                  "purpose": "新增50+群系"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "结构能够探险",
+              "evidence": [
+                {
+                  "slug": "additional-structures",
+                  "quote": "Adds >200 new structures that integrate perfectly into your world!",
+                  "purpose": "新增200+结构"
+                },
+                {
+                  "slug": "when-dungeons-arise",
+                  "quote": "Adds various elegant -and likely hostile- roguelike dungeons and structures that generate on your worlds!",
+                  "purpose": "新增地牢结构"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-dd92b724e4021036",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "5）有丰富的生物生态",
+              "evidence": [
+                {
+                  "slug": "mutant-monsters",
+                  "quote": "The mutants are back! Face scary creatures and powerful beasts like never before.",
+                  "purpose": "新增变异生物"
+                },
+                {
+                  "slug": "rottencreatures",
+                  "quote": "Rotten Creatures is a mod that aims to add a lot of awesome new zombie mobs to Minecraft!",
+                  "purpose": "新增僵尸类生物"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-db64c85a26399b55",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "6）丰富下界",
+              "evidence": [
+                {
+                  "slug": "incendium",
+                  "quote": "A nether biome overhaul combined with challenging structures to conquer, unique weapons to obtain, and tricky mobs to defeat.",
+                  "purpose": "已选下界群系与结构重做"
+                },
+                {
+                  "slug": "luminous-nether",
+                  "quote": "Explore new nether biomes with dangerous foes! Build with new blocks, and decorate with new decorations!",
+                  "purpose": "新增下界群系与生物"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "末地生态",
+              "evidence": [
+                {
+                  "slug": "nullscape",
+                  "quote": "Transforms the boring Vanilla end into an alien dimension with the most surreal terrain imaginable.",
+                  "purpose": "已选末地地形重做"
+                },
+                {
+                  "slug": "enderscape",
+                  "quote": "Overhauls the End dimension, featuring four atmospheric biomes, new world generation, structures, mobs",
+                  "purpose": "新增末地群系结构生物"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-74115bb006c9ef5b",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "7）有很多优化模组",
+              "evidence": [
+                {
+                  "slug": "sodium",
+                  "quote": "A high-performance rendering engine replacement for Minecraft, which greatly improves frame rates and reduces micro-stutter.",
+                  "purpose": "渲染性能优化"
+                },
+                {
+                  "slug": "ferrite-core",
+                  "quote": "Memory usage optimizations",
+                  "purpose": "内存占用优化"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "现代化UI",
+              "evidence": [
+                {
+                  "slug": "modern-ui",
+                  "quote": "Modern desktop graphics application framework and low-level 3D graphics engine",
+                  "purpose": "已选现代UI框架"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "修复",
+              "evidence": [
+                {
+                  "slug": "modernfix",
+                  "quote": "All-in-one mod that improves performance, reduces memory usage, and fixes many bugs.",
+                  "purpose": "修复大量Bug"
+                },
+                {
+                  "slug": "modelfix",
+                  "quote": "Fixes gaps in Block Models and Item Models",
+                  "purpose": "修复模型缝隙"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-402f7bb1c5ca920e",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "8）有很多实用模组",
+              "evidence": [
+                {
+                  "slug": "inventoryhudplus",
+                  "quote": "Adds your main inventory, potion effects and your equipments to your HUD. And few other features.",
+                  "purpose": "背包与状态HUD"
+                },
+                {
+                  "slug": "shulkerboxtooltip",
+                  "quote": "View the contents of shulker boxes from your inventory",
+                  "purpose": "潜影盒内容预览"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "例如苹果皮",
+              "evidence": [
+                {
+                  "slug": "appleskin",
+                  "quote": "AppleSkin Food/hunger-related HUD improvements",
+                  "purpose": "已选苹果皮"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "jei",
+              "evidence": [
+                {
+                  "slug": "jei",
+                  "quote": "Just Enough Items (JEI) View Items and Recipes",
+                  "purpose": "已选JEI"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "approved": [
+        "irons-spellbooks-arcane-essence-blocks",
+        "dark-doppelganger",
+        "irons-spells-n-spellbooks-dynamic-skill-trees",
+        "hazen-n-stuff",
+        "magic-from-the-east",
+        "discerning-the-eldritch",
+        "crystal-chronicles",
+        "iss-food-spelling",
+        "wizard-samurai-irons-spells-addon",
+        "somake-spells-irons-spells-addon",
+        "asterism-arcanum-addon-for-irons-spells-and-spellbooks",
+        "irons-spells-n-spellbooks-unstable-magic",
+        "valiant-irons-spells-n-spellbooks-addon",
+        "easy-arcane-an-irons-spells-spellbooks-addon",
+        "irons-spellbooks-tweaks",
+        "cataclysm-spellbooks",
+        "apprentices-codex",
+        "alshanexs-familiars",
+        "spells-gone-wrong",
+        "more-delight",
+        "farmers-delight-extended",
+        "farmers-delight-contracts-feasts",
+        "international-food",
+        "mexicans-delight",
+        "ubes-delight",
+        "vegan-delight",
+        "expanded-delight",
+        "oceans-delight",
+        "ends-delight",
+        "my-nethers-delight",
+        "gensokyo-delight-youkais-feasts",
+        "compat-delight",
+        "sniffers-sniffs-delights",
+        "right-click-and-milk",
+        "farmers-delight-kacchi",
+        "biomes-o-plenty",
+        "oh-the-biomes-weve-gone",
+        "additional-structures",
+        "adorabuild-structures",
+        "moogs-voyager-structures",
+        "when-dungeons-arise",
+        "when-dungeons-arise-seven-seas",
+        "yungs-better-dungeons",
+        "dungeons-and-taverns",
+        "dungeons-and-taverns-jungle-temple-overhaul",
+        "dungeons-and-taverns-desert-temple-overhaul",
+        "dungeons-and-taverns-swamp-hut-overhaul",
+        "dungeons-and-taverns-ancient-city-overhaul",
+        "explorations",
+        "ati-structures-vanilla-edition",
+        "mns-moogs-nether-structures",
+        "mes-moogs-end-structures",
+        "mss-moogs-soaring-structures",
+        "idas",
+        "juztsys-structure",
+        "realm-rpg-fallen-adventurers",
+        "archaeological_research_exploration",
+        "polars-exploration-additions",
+        "mutant-monsters",
+        "rottencreatures",
+        "more-creatures-and-weapons",
+        "legendary-monsters",
+        "respawning-animals",
+        "cannibal-villages",
+        "luminous-nether",
+        "enderscape",
+        "yungs-better-end-island",
+        "dimensional-tears",
+        "sodium",
+        "entityculling",
+        "ferrite-core",
+        "modernfix",
+        "lithium",
+        "noisium",
+        "badoptimizations",
+        "particle-core",
+        "dynamic-fps",
+        "ai-improvements",
+        "modelfix",
+        "random-optimization",
+        "netherite_tweaks",
+        "inventoryhudplus",
+        "shulkerboxtooltip",
+        "immersive-armor-hud",
+        "mining-speed-tooltips",
+        "info-tools",
+        "sodium-extra-information",
+        "performancehud",
+        "epic-knights-shields-armor-and-weapons",
+        "exclusive-weapons-armor-and-tools",
+        "terrablender",
+        "structure-layout-optimizer",
+        "structures-spawn-biomes-fix",
+        "adaptive-performance-tweaks",
+        "distanthorizons",
+        "schrumbohud"
+      ],
+      "rejected": [
+        {
+          "slug": "farmers-delight-tfc",
+          "reason": "CONSTRAINT",
+          "explanation": "依赖TerrafirmaCraft，与整合包环境不符。"
+        },
+        {
+          "slug": "farm-3x3-farmers-delight-compatibility",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Farm 3x3联动，包内无该模组。"
+        },
+        {
+          "slug": "better-farming-with-hoes-farmers-delight-compatibility",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Better Farming with Hoes联动，包内无该模组。"
+        },
+        {
+          "slug": "stacked-blocks-farmers-delight",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Stacked Blocks联动，包内无该模组。"
+        },
+        {
+          "slug": "energized-power-fd",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Energized Power联动，包内无该模组。"
+        },
+        {
+          "slug": "farmers-croptopia",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Croptopia联动，包内无该模组。"
+        },
+        {
+          "slug": "repurposed-structures-farmers-delight-compat",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Repurposed Structures联动，包内无该模组。"
+        },
+        {
+          "slug": "big-globe-farmers-delight-compatibility",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅为Big Globe联动，包内无该模组。"
+        },
+        {
+          "slug": "brown-cheese-delight-a-farmers-delight-add-on",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅添加单一挪威棕色奶酪，内容过窄。"
+        },
+        {
+          "slug": "fleinsopp-delight-a-farmers-delight-add-on",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅添加单一挪威蘑菇，内容过窄。"
+        },
+        {
+          "slug": "projecte-emc-for-irons-spellbooks",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖ProjectE，包内无该模组。"
+        },
+        {
+          "slug": "project-mmo-irons-spells-spellbooks-compat",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Project MMO，包内无该模组。"
+        },
+        {
+          "slug": "ec-irons-spells-compat",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Expanded Combat，包内无该模组。"
+        },
+        {
+          "slug": "winefoxs_spellbooks",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖TouhouLittleMaid，包内无该模组。"
+        },
+        {
+          "slug": "emf-compat-irons-spells-n-spellbooks",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖EMF动画模型，包内无该模组。"
+        },
+        {
+          "slug": "shoulder-surfing-iron-spells-integration",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Shoulder Surfing，包内无该模组。"
+        },
+        {
+          "slug": "create-wizardry",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Create，包内无该模组。"
+        },
+        {
+          "slug": "create-bugfix-schematic-patch",
+          "reason": "OFF_TOPIC",
+          "explanation": "修复Create机械图纸，包内无Create。"
+        },
+        {
+          "slug": "create-bugfix-clipboard-patch",
+          "reason": "OFF_TOPIC",
+          "explanation": "修复Create剪贴板，包内无Create。"
+        },
+        {
+          "slug": "cobbled-armour-trims",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Cobblemon，与冒险主题无关。"
+        },
+        {
+          "slug": "archers-expansion",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Archers RPG与Spell Engine，包内无该体系。"
+        },
+        {
+          "slug": "spell-engine",
+          "reason": "OFF_TOPIC",
+          "explanation": "为RPG Series服务的魔法库，非铁魔法附属。"
+        },
+        {
+          "slug": "spell-power",
+          "reason": "OFF_TOPIC",
+          "explanation": "为Spell Engine体系服务，非铁魔法附属。"
+        },
+        {
+          "slug": "aces-spell-utils",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅为开发API，无实际玩法内容。"
+        },
+        {
+          "slug": "isskjs",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "KubeJS脚本工具，无直接玩法内容。"
+        },
+        {
+          "slug": "explore-ruins-aether",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Aether维度，包内无该模组。"
+        },
+        {
+          "slug": "aeroblender",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Aether与TerraBlender，包内无Aether。"
+        },
+        {
+          "slug": "cataclysm-dimension",
+          "reason": "CONFLICT",
+          "explanation": "将灾变结构拆入独立维度，改变既有灾变体验。"
+        },
+        {
+          "slug": "alexs-biome-dimensions",
+          "reason": "CONFLICT",
+          "explanation": "把群系拆成独立维度，削弱主世界群系探险。"
+        },
+        {
+          "slug": "structure-control-",
+          "reason": "CONSTRAINT",
+          "explanation": "可禁用维度与结构，与丰富探险目标相悖。"
+        },
+        {
+          "slug": "nlyb-dungeonstructure-fragments",
+          "reason": "OFF_TOPIC",
+          "explanation": "把地牢搬回基地，与外出探险目标相反。"
+        },
+        {
+          "slug": "starter-structure",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅出生点建筑，探险价值有限。"
+        },
+        {
+          "slug": "countereds-terrain-slabs",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅地形加台阶，非群系或结构丰富。"
+        },
+        {
+          "slug": "epicterrain",
+          "reason": "OFF_TOPIC",
+          "explanation": "仅地形重构，无群系或结构内容。"
+        },
+        {
+          "slug": "epic-terrain_compatible",
+          "reason": "OFF_TOPIC",
+          "explanation": "Epic Terrain兼容版，同样无群系结构内容。"
+        },
+        {
+          "slug": "arphex",
+          "reason": "OFF_TOPIC",
+          "explanation": "恐怖蜘蛛主题，与用户需求无关。"
+        },
+        {
+          "slug": "addadd",
+          "reason": "OFF_TOPIC",
+          "explanation": "原版+杂项补充，非探险或魔法重点。"
+        },
+        {
+          "slug": "irons-spells-n-spellbooks-restricitons",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "描述含糊，无法确认具体玩法增益。"
+        },
+        {
+          "slug": "amplified-nether",
+          "reason": "CONFLICT",
+          "explanation": "原文声明与Incendium不兼容。"
+        },
+        {
+          "slug": "aquaculture-delight",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Aquaculture，包内无该模组。"
+        },
+        {
+          "slug": "undergarden-delight",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖The Undergarden，包内无该模组。"
+        },
+        {
+          "slug": "the-aethers-delight",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖The Aether，包内无该模组。"
+        },
+        {
+          "slug": "vampires-delight",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Vampirism，包内无该模组。"
+        },
+        {
+          "slug": "tofudelight",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖TofuCraftReload，包内无该模组。"
+        },
+        {
+          "slug": "arsdelight",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Ars Nouveau，包内无该模组。"
+        },
+        {
+          "slug": "autochefs-delight",
+          "reason": "INSUFFICIENT_EVIDENCE",
+          "explanation": "仅优化烹饪配方匹配，内容过窄。"
+        },
+        {
+          "slug": "tensura-unique-monsters",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Tensura体系，包内无该模组。"
+        },
+        {
+          "slug": "create-let-the-adventure-begin",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Create，包内无该模组。"
+        },
+        {
+          "slug": "create-structures-overhaul",
+          "reason": "OFF_TOPIC",
+          "explanation": "依赖Create，包内无该模组。"
+        }
+      ],
+      "allowBackfill": true,
+      "requirements": [
+        {
+          "id": "r-67e552f818f5690f",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "我想玩一个Neoforge1.21.1的冒险整合包",
+              "evidence": [],
+              "gap": ""
+            },
+            {
+              "source": "名字是朝花夕拾",
+              "evidence": [],
+              "gap": ""
+            },
+            {
+              "source": "大概100~200个模组",
+              "evidence": [],
+              "gap": ""
+            },
+            {
+              "source": "要求：",
+              "evidence": [],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-9b9fcfa450a96d4c",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "1）以铁魔法为核心",
+              "evidence": [
+                {
+                  "slug": "irons-spells-n-spellbooks",
+                  "quote": "Iron's Spells 'n Spellbooks A magic mod bringing back the classic RPG spellcasting fantasy.",
+                  "purpose": "已选核心魔法模组"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "多补充一些铁魔法的附属",
+              "evidence": [
+                {
+                  "slug": "magic-from-the-east",
+                  "quote": "An add-on mod for Iron's Spell n' Spellbooks that adding new schools, spells and stuffs inspired from ancient Asian and Middle Eastern culture",
+                  "purpose": "新增学派与法术的附属"
+                },
+                {
+                  "slug": "crystal-chronicles",
+                  "quote": "Addon for Iron's Spells 'n Spellbooks - expanding the schools of magic with unique armors, weapons and biomes.",
+                  "purpose": "扩展学派装备与群系"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-ffffaa35465c974d",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "2）包含Alex生物",
+              "evidence": [
+                {
+                  "slug": "alexs-mobs-1.21.1",
+                  "quote": "Alex's Mobs",
+                  "purpose": "已选Alex生物"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "Alex洞穴",
+              "evidence": [
+                {
+                  "slug": "alexs-caves-unofficial-port",
+                  "quote": "Alex's Caves",
+                  "purpose": "已选Alex洞穴"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "冰火传说",
+              "evidence": [
+                {
+                  "slug": "iceandfire-ce",
+                  "quote": "Ice and Fire",
+                  "purpose": "已选冰火传说"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "灾变",
+              "evidence": [
+                {
+                  "slug": "l_enders-cataclysm",
+                  "quote": "Cataclysm is a mod that adds difficult dungeons, challenging boss-fights and powerful items.",
+                  "purpose": "已选灾变"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "海灵物语",
+              "evidence": [
+                {
+                  "slug": "aquamirae",
+                  "quote": "Aquamirae Ship graveyard with terrible deep sea creatures!",
+                  "purpose": "已选海灵物语"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "yagens-attributes",
+              "evidence": [
+                {
+                  "slug": "yagens-attributes",
+                  "quote": "Yagen's Attributes A Warframe like mod for Minecraft,which changes many aspects of vanilla.",
+                  "purpose": "已选属性模组"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-bc37e982a35501ab",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "3）包含农夫乐事及其附属",
+              "evidence": [
+                {
+                  "slug": "farmers-delight",
+                  "quote": "Farmer's Delight A cozy expansion to farming and cooking!",
+                  "purpose": "已选农夫乐事核心"
+                },
+                {
+                  "slug": "more-delight",
+                  "quote": "Extra meals, knives, and ingredients for Farmer's Delight that improve your culinary experience.",
+                  "purpose": "新增餐食食材的附属"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "特别是整合包内有的模组的乐事联动附属",
+              "evidence": [
+                {
+                  "slug": "compat-delight",
+                  "quote": "Adds compatibility between popular mods and Farmer's Delight.",
+                  "purpose": "通用乐事联动"
+                },
+                {
+                  "slug": "iss-food-spelling",
+                  "quote": "An add-on mod for Iron's Spells 'n Spellbooks that allows you to imbue any kind of food with spells using the Arcane Anvil.",
+                  "purpose": "铁魔法与食物联动"
+                }
+              ],
+              "gap": "包内Alex生物、灾变等核心暂无对应乐事联动附属依据。"
+            }
+          ]
+        },
+        {
+          "id": "r-5cf0f6a6a62b3005",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "4）有丰富的群系",
+              "evidence": [
+                {
+                  "slug": "biomes-o-plenty",
+                  "quote": "Adds 50+ unique biomes to enhance your world, with new trees, flowers, and more!",
+                  "purpose": "新增50+群系"
+                },
+                {
+                  "slug": "oh-the-biomes-weve-gone",
+                  "quote": "with over 50+ biomes ranging from the magical to the realistic and all breathtaking!",
+                  "purpose": "新增50+群系"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "结构能够探险",
+              "evidence": [
+                {
+                  "slug": "additional-structures",
+                  "quote": "Adds >200 new structures that integrate perfectly into your world!",
+                  "purpose": "新增200+结构"
+                },
+                {
+                  "slug": "when-dungeons-arise",
+                  "quote": "Adds various elegant -and likely hostile- roguelike dungeons and structures that generate on your worlds!",
+                  "purpose": "新增地牢结构"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-dd92b724e4021036",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "5）有丰富的生物生态",
+              "evidence": [
+                {
+                  "slug": "mutant-monsters",
+                  "quote": "The mutants are back! Face scary creatures and powerful beasts like never before.",
+                  "purpose": "新增变异生物"
+                },
+                {
+                  "slug": "rottencreatures",
+                  "quote": "Rotten Creatures is a mod that aims to add a lot of awesome new zombie mobs to Minecraft!",
+                  "purpose": "新增僵尸类生物"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-db64c85a26399b55",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "6）丰富下界",
+              "evidence": [
+                {
+                  "slug": "incendium",
+                  "quote": "A nether biome overhaul combined with challenging structures to conquer, unique weapons to obtain, and tricky mobs to defeat.",
+                  "purpose": "已选下界群系与结构重做"
+                },
+                {
+                  "slug": "luminous-nether",
+                  "quote": "Explore new nether biomes with dangerous foes! Build with new blocks, and decorate with new decorations!",
+                  "purpose": "新增下界群系与生物"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "末地生态",
+              "evidence": [
+                {
+                  "slug": "nullscape",
+                  "quote": "Transforms the boring Vanilla end into an alien dimension with the most surreal terrain imaginable.",
+                  "purpose": "已选末地地形重做"
+                },
+                {
+                  "slug": "enderscape",
+                  "quote": "Overhauls the End dimension, featuring four atmospheric biomes, new world generation, structures, mobs",
+                  "purpose": "新增末地群系结构生物"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-74115bb006c9ef5b",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "7）有很多优化模组",
+              "evidence": [
+                {
+                  "slug": "sodium",
+                  "quote": "A high-performance rendering engine replacement for Minecraft, which greatly improves frame rates and reduces micro-stutter.",
+                  "purpose": "渲染性能优化"
+                },
+                {
+                  "slug": "ferrite-core",
+                  "quote": "Memory usage optimizations",
+                  "purpose": "内存占用优化"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "现代化UI",
+              "evidence": [
+                {
+                  "slug": "modern-ui",
+                  "quote": "Modern desktop graphics application framework and low-level 3D graphics engine",
+                  "purpose": "已选现代UI框架"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "修复",
+              "evidence": [
+                {
+                  "slug": "modernfix",
+                  "quote": "All-in-one mod that improves performance, reduces memory usage, and fixes many bugs.",
+                  "purpose": "修复大量Bug"
+                },
+                {
+                  "slug": "modelfix",
+                  "quote": "Fixes gaps in Block Models and Item Models",
+                  "purpose": "修复模型缝隙"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        },
+        {
+          "id": "r-402f7bb1c5ca920e",
+          "evidence": [],
+          "gap": "",
+          "criteria": [
+            {
+              "source": "8）有很多实用模组",
+              "evidence": [
+                {
+                  "slug": "inventoryhudplus",
+                  "quote": "Adds your main inventory, potion effects and your equipments to your HUD. And few other features.",
+                  "purpose": "背包与状态HUD"
+                },
+                {
+                  "slug": "shulkerboxtooltip",
+                  "quote": "View the contents of shulker boxes from your inventory",
+                  "purpose": "潜影盒内容预览"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "例如苹果皮",
+              "evidence": [
+                {
+                  "slug": "appleskin",
+                  "quote": "AppleSkin Food/hunger-related HUD improvements",
+                  "purpose": "已选苹果皮"
+                }
+              ],
+              "gap": ""
+            },
+            {
+              "source": "jei",
+              "evidence": [
+                {
+                  "slug": "jei",
+                  "quote": "Just Enough Items (JEI) View Items and Recipes",
+                  "purpose": "已选JEI"
+                }
+              ],
+              "gap": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -10,9 +10,33 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class GoldenAssertionsTest {
+    @Test void quantifiedCaseRequiresGlobalCountEvenWhenLocalTargetsAreSatisfied() throws Exception {
+        var cases = mapper.readTree(Files.readString(Path.of("eval/golden-set-v7.json"))).path("cases");
+        var rule = cases.valueStream().filter(c -> c.path("id").asText().equals("Q01")).findFirst().orElseThrow().path("assert").path("facts");
+        assertFalse(rule.isMissingNode());
+        var insufficient = mapper.readTree("{\"trace\":{\"contract\":{\"quantity\":{\"actual\":38,\"min\":40,\"max\":70,\"met\":false}}}}");
+        assertFalse(GoldenAssertions.check(insufficient, rule).isEmpty());
+        ((tools.jackson.databind.node.ObjectNode) insufficient.at("/trace/contract/quantity")).put("actual",53).put("met",true);
+        assertTrue(GoldenAssertions.check(insufficient, rule).isEmpty());
+    }
+    @Test void quantityAssertionsRejectMissingCountsAndUnretainedOrRepeatedProjects() {
+        var rule = mapper.readTree("{\"quantities\":[{\"source\":\"物流\",\"min\":2,\"max\":4,\"scope\":\"ADDED_ROOTS\"}]}");
+        var facts = mapper.readTree("""
+                {"trace":{"contract":{"requirementLedger":[]}},"requirement_report":{"schemaVersion":1,"requirements":[{"source":"物流","quantity":{"min":2,"max":4,
+                "scope":"ADDED_ROOTS","actual":2,"projects":["a","b"],"complete":true},"mods":[],"missing":[],"criteria":[]}]}}
+                """);
+        assertTrue(GoldenAssertions.checkCoverage(facts, Set.of("a","b"), rule).isEmpty());
+        assertFalse(GoldenAssertions.checkCoverage(facts, Set.of("a"), rule).isEmpty());
+        var row = (tools.jackson.databind.node.ObjectNode) facts.path("requirement_report").path("requirements").get(0);
+        ((tools.jackson.databind.node.ObjectNode)row.path("quantity")).put("actual",1);
+        assertFalse(GoldenAssertions.checkCoverage(facts, Set.of("a","b"), rule).isEmpty());
+        row.remove("quantity");
+        assertFalse(GoldenAssertions.checkCoverage(facts, Set.of("a","b"), rule).isEmpty());
+    }
+
     private final ObjectMapper mapper = new ObjectMapper();
     @Test void bothFrozenDatasetsUseSupportedAssertions() throws Exception {
-        for (String file : List.of("eval/golden-set.json", "eval/golden-set-v2.json", "eval/golden-set-v3.json", "eval/golden-set-v4.json", "eval/golden-set-v5.json", "eval/golden-set-v6.json"))
+        for (String file : List.of("eval/golden-set.json", "eval/golden-set-v2.json", "eval/golden-set-v3.json", "eval/golden-set-v4.json", "eval/golden-set-v5.json", "eval/golden-set-v6.json", "eval/golden-set-v7.json"))
             assertDoesNotThrow(() -> GoldenSetEval.validateSet(mapper.readTree(Files.readAllBytes(Path.of(file)))));
     }
     @Test void compositionRejectsMissingAuditFieldsAndInvalidOptions() {

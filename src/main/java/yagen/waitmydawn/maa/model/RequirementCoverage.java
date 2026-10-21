@@ -16,16 +16,44 @@ public final class RequirementCoverage {
         public EvidenceState(String code, List<String> projects, boolean countsComplete) { this(code, projects, countsComplete, List.of()); }
         public EvidenceState { projects = List.copyOf(projects.stream().distinct().limit(24).toList()); generation = List.copyOf(generation); }
     }
+    public record CountContext(Set<String> roots, Set<String> original, boolean rootsKnown, Set<String> priorRoots) {
+        public CountContext(Set<String> roots, Set<String> original) { this(roots, original, true, original); }
+        public CountContext(Set<String> roots, Set<String> original, boolean known) { this(roots, original, known, known ? original : Set.of()); }
+        public CountContext { roots = Set.copyOf(roots); original = Set.copyOf(original); priorRoots = Set.copyOf(priorRoots); }
+    }
+    public record Quantity(int min, int max, RequirementQuantity.Scope scope, int actual, List<String> projects, boolean complete) {}
     public record CriterionRow(String id, String source, String status, List<Item> mods, int modCount,
-                               List<String> missing, int missingCount, String note, EvidenceState evidenceState) {}
+                               List<String> missing, int missingCount, String note, EvidenceState evidenceState, Quantity quantity) {
+        @com.fasterxml.jackson.annotation.JsonProperty(value="assessment",access=com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
+        public RequirementAssessment.Result assessment() {
+            return RequirementAssessment.assess(status,evidenceState,quantity,modCount,missingCount,List.of());
+        }
+    }
     public record Row(String id, String source, String status, List<Item> mods, int modCount,
-                      List<String> missing, int missingCount, String note, List<CriterionRow> criteria, EvidenceState evidenceState) {}
-    public record Report(int schemaVersion, List<Row> requirements, String repairStatus, List<String> repaired) {}
+                      List<String> missing, int missingCount, String note, List<CriterionRow> criteria, EvidenceState evidenceState, Quantity quantity) {
+        @com.fasterxml.jackson.annotation.JsonProperty(value="assessment",access=com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
+        public RequirementAssessment.Result assessment() {
+            return RequirementAssessment.assess(status,evidenceState,quantity,modCount,missingCount,criteria.stream().map(CriterionRow::assessment).toList());
+        }
+    }
+    public record FinalEvidence(String targetId, String slug, String purpose, String quote, String evidenceType,
+                                String versionId, String factHash, String status, List<String> partners) {}
+    public record Report(int schemaVersion, List<Row> requirements, String repairStatus, List<String> repaired,
+                         List<FinalEvidence> ledger) {
+        public Report(int schemaVersion, List<Row> requirements, String repairStatus, List<String> repaired) {
+            this(schemaVersion, requirements, repairStatus, repaired, List.of());
+        }
+        public Report { ledger = ledger == null ? List.of() : List.copyOf(ledger); }
+    }
     public record VerificationCounts(int provided, int accepted, int vetoed, int missingFacts, int quoteMismatch,
                                      int unknownRequirement, int unknownCriterion) {}
-    public record EvidenceCheck(int provided, int accepted, String reason, List<DimensionGeneration.Proof> generation) {
-        public EvidenceCheck(int provided, int accepted, String reason) { this(provided, accepted, reason, List.of()); }
-        public EvidenceCheck { generation = List.copyOf(generation); }
+    public record Proof(String slug, String purpose, String quote, String factHash, String reason) {}
+    public record EvidenceCheck(int provided, int accepted, String reason, List<DimensionGeneration.Proof> generation, List<Proof> proofs) {
+        public EvidenceCheck(int provided, int accepted, String reason) { this(provided, accepted, reason, List.of(), List.of()); }
+        public EvidenceCheck(int provided, int accepted, String reason, List<DimensionGeneration.Proof> generation) {
+            this(provided, accepted, reason, generation, List.of());
+        }
+        public EvidenceCheck { generation = List.copyOf(generation); proofs = proofs == null ? List.of() : List.copyOf(proofs); }
     }
     public record Verification(List<RequirementReview> reviews, VerificationCounts counts, Map<String, EvidenceCheck> checks) {}
 
@@ -72,7 +100,12 @@ public final class RequirementCoverage {
         String reason = !accepted.isEmpty() ? "VERIFIED" : evidence.isEmpty() ? "NO_EVIDENCE"
                 : count[4] > 0 ? "QUOTE_MISMATCH" : count[3] > 0 ? "FACTS_UNAVAILABLE" : "VETOED";
         checks.put(key, new EvidenceCheck(evidence.size(), accepted.size(), reason,
-                DimensionGeneration.proofs(generationTargets.getOrDefault(key, List.of()), accepted)));
+                DimensionGeneration.proofs(generationTargets.getOrDefault(key, List.of()), accepted).stream()
+                        .filter(p -> ProjectBehavior.owns(facts.get(p.slug()), DimensionGeneration.evidence(
+                                new DimensionGeneration.Goal(p.dimension(), p.dimension(), ""), p.quote()))).toList(),
+                evidence.stream().map(e -> new Proof(e.slug(), e.purpose(), e.quote(), fingerprint(facts.get(e.slug())),
+                        vetoes.contains(e.slug()) ? "VETOED" : !facts.containsKey(e.slug()) ? "FACTS_UNAVAILABLE"
+                                : !quoteMatches(facts.get(e.slug()), e.quote()) ? "QUOTE_MISMATCH" : "VERIFIED")).toList()));
         return accepted;
     }
 
@@ -80,6 +113,12 @@ public final class RequirementCoverage {
         String normalizedQuote = quote.replaceAll("(?U)\\s+", " ").trim();
         if (normalizedQuote.replace(" ", "").length() < 4) return false;
         return fact.contains(quote) || fact.replaceAll("(?U)\\s+", " ").trim().contains(normalizedQuote);
+    }
+    private static String fingerprint(String text) {
+        if (text == null) return "";
+        try { return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8))); }
+        catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
     }
     private static List<RequirementReview.Contribution> quoted(List<RequirementReview.Contribution> evidence, Map<String, String> facts, Set<String> vetoes, int[] count) {
         var accepted = new ArrayList<RequirementReview.Contribution>();
@@ -144,21 +183,91 @@ public final class RequirementCoverage {
                                 DependencyGraph graph, Set<String> selected, Map<String, String> identities,
                                 Map<String, PackAddonPolicy.Project> metadata, String repairStatus, List<String> repaired,
                                 Map<String, EvidenceCheck> checks) {
-        return assess(requirements, reviews, graph, selected, identities, metadata, repairStatus, repaired, checks, Map.of());
+        // 此重载复用已校验快照，不声明已取得新的项目资料。
+        return assess(requirements, reviews, graph, selected, identities, metadata, repairStatus, repaired, checks, null);
     }
     /** projectFacts只接受本轮已取得的项目原文，并在调用前排除明确否决项；不从任意用途解释生成依据。 */
     public static Report assess(List<BuildRequirement> requirements, List<RequirementReview> reviews,
                                 DependencyGraph graph, Set<String> selected, Map<String, String> identities,
                                 Map<String, PackAddonPolicy.Project> metadata, String repairStatus, List<String> repaired,
                                 Map<String, EvidenceCheck> checks, Map<String, String> projectFacts) {
-        return assess(requirements, reviews, graph, selected, identities, metadata, repairStatus, repaired, checks, true,
-                DimensionGeneration.targets(requirements), projectFacts);
+        return assess(requirements, reviews, graph, selected, identities, metadata, repairStatus, repaired, checks, projectFacts, null);
+    }
+    public static Report assess(List<BuildRequirement> requirements, List<RequirementReview> reviews,
+                                DependencyGraph graph, Set<String> selected, Map<String, String> identities,
+                                Map<String, PackAddonPolicy.Project> metadata, String repairStatus, List<String> repaired,
+                                Map<String, EvidenceCheck> checks, Map<String, String> projectFacts, CountContext countContext) {
+        CountContext canonical = null;
+        if (countContext != null) {
+            var original = countContext.original().stream().map(s -> identities.getOrDefault(s,s)).collect(java.util.stream.Collectors.toSet());
+            var prior = countContext.priorRoots().stream().map(s -> identities.getOrDefault(s,s)).collect(java.util.stream.Collectors.toSet());
+            var roots = countContext.roots().stream().map(s -> identities.getOrDefault(s,s))
+                    .filter(s -> !original.contains(s) || prior.contains(s)).collect(java.util.stream.Collectors.toSet());
+            canonical = new CountContext(roots,original,countContext.rootsKnown(),prior);
+        }
+        var current = reviews.stream().map(r -> new RequirementReview(r.id(), currentProofs(r.id(), r.evidence(), checks, projectFacts), r.gap(),
+                r.criteria().stream().map(c -> {
+                    var target = requirements.stream().filter(t -> t.id().equals(r.id())).flatMap(t -> t.criteria().stream())
+                            .filter(t -> t.source().equals(c.source())).findFirst();
+                    return new CriterionReview(c.source(), target.isEmpty() ? c.evidence()
+                            : currentProofs(target.get().key(r.id()), c.evidence(), checks, projectFacts), c.gap());
+                }).toList())).toList();
+        var activeChecks = new LinkedHashMap<String, EvidenceCheck>();
+        checks.forEach((key, check) -> activeChecks.put(key, new EvidenceCheck(check.provided(), check.accepted(), check.reason(),
+                projectFacts == null ? check.generation() : check.generation().stream()
+                        .filter(p -> projectFacts.containsKey(p.slug()) && quoteMatches(projectFacts.get(p.slug()), p.quote())
+                                && ProjectBehavior.owns(projectFacts.get(p.slug()), DimensionGeneration.evidence(
+                                    new DimensionGeneration.Goal(p.dimension(), p.dimension(), ""), p.quote()))).toList(), check.proofs())));
+        var report = assess(requirements, current, graph, selected, identities, metadata, repairStatus, repaired, activeChecks, true,
+                DimensionGeneration.targets(requirements), projectFacts == null ? Map.of() : projectFacts, canonical);
+        var ledger = new ArrayList<FinalEvidence>();
+        var targets = new HashSet<String>();
+        requirements.forEach(r -> { targets.add(r.id()); r.criteria().forEach(c -> targets.add(c.key(r.id()))); });
+        checks.forEach((target, check) -> {
+            if (!targets.contains(target)) return;
+            for (var proof : check.proofs()) {
+                var version = graph.selectedVersions.get(proof.slug());
+                String status = proof.reason();
+                if (status.equals("VERIFIED")) status = !selected.contains(proof.slug()) ? "NOT_RETAINED"
+                        : version == null || version.path("id").asText().isBlank() ? "VERSION_UNVERIFIED"
+                        : projectFacts == null ? "VERIFIED" : !projectFacts.containsKey(proof.slug()) ? "FACTS_UNAVAILABLE"
+                        : !quoteMatches(projectFacts.get(proof.slug()), proof.quote()) ? "FACT_CHANGED" : "VERIFIED";
+                ledger.add(new FinalEvidence(target, proof.slug(), proof.purpose(), proof.quote(), "REVIEW_QUOTE",
+                        version == null ? "" : version.path("id").asText(), proof.factHash(), status, List.of()));
+            }
+        });
+        for (var row : report.requirements()) {
+            addLocalProofs(ledger, row.id(), row.mods(), graph, projectFacts, metadata);
+            row.criteria().forEach(c -> addLocalProofs(ledger, c.id(), c.mods(), graph, projectFacts, metadata));
+        }
+        return new Report(report.schemaVersion(), report.requirements(), report.repairStatus(), report.repaired(),
+                ledger.stream().distinct().sorted(Comparator.comparing(FinalEvidence::targetId).thenComparing(FinalEvidence::slug)
+                        .thenComparing(FinalEvidence::evidenceType).thenComparing(FinalEvidence::quote)).toList());
+    }
+    private static List<RequirementReview.Contribution> currentProofs(String target, List<RequirementReview.Contribution> evidence,
+                                                                     Map<String, EvidenceCheck> checks, Map<String, String> facts) {
+        var check = checks.get(target);
+        if (check == null || check.proofs().isEmpty() || facts == null) return evidence;
+        return evidence.stream().filter(e -> check.proofs().stream().noneMatch(p -> p.slug().equals(e.slug()) && p.quote().equals(e.quote())
+                && p.reason().equals("VERIFIED")) || facts.containsKey(e.slug()) && quoteMatches(facts.get(e.slug()), e.quote())).toList();
+    }
+    private static void addLocalProofs(List<FinalEvidence> ledger, String target, List<Item> items, DependencyGraph graph,
+                                       Map<String, String> facts, Map<String, PackAddonPolicy.Project> metadata) {
+        for (var item : items) if (!item.evidenceType().equals("REVIEW_QUOTE")) {
+            var version = graph.selectedVersions.get(item.slug());
+            String source = Set.of("PROJECT_IDENTITY", "VERSION_RELATION").contains(item.evidenceType())
+                    ? version == null ? null : version.toString()
+                    : item.evidenceType().equals("DESCRIPTION_RELATION") && metadata.containsKey(item.slug())
+                        ? metadata.get(item.slug()).description() : facts == null ? null : facts.get(item.slug());
+            ledger.add(new FinalEvidence(target, item.slug(), item.purpose(), item.quote(), item.evidenceType(),
+                    version == null ? "" : version.path("id").asText(), fingerprint(source), "VERIFIED", item.partners()));
+        }
     }
     private static Report assess(List<BuildRequirement> requirements, List<RequirementReview> reviews,
                                 DependencyGraph graph, Set<String> selected, Map<String, String> identities,
                                 Map<String, PackAddonPolicy.Project> metadata, String repairStatus, List<String> repaired,
                                 Map<String, EvidenceCheck> checks, boolean truncate,
-                                Map<String, List<DimensionGeneration.Goal>> generationTargets, Map<String, String> projectFacts) {
+                                Map<String, List<DimensionGeneration.Goal>> generationTargets, Map<String, String> projectFacts, CountContext countContext) {
         var byId = new HashMap<String, RequirementReview>();
         reviews.forEach(r -> byId.put(r.id(), r));
         var versionProjects = new HashMap<String, String>();
@@ -289,12 +398,12 @@ public final class RequirementCoverage {
                     var evidence = scoped.get(c.source());
                     var childReviews = evidence == null ? List.<RequirementReview>of()
                             : List.of(new RequirementReview(target.id(), evidence.evidence(), evidence.gap()));
-                    var child = assess(List.of(target), childReviews, graph, selected, identities, metadata, repairStatus, repaired, checks, false, generationTargets, projectFacts).requirements();
+                    var child = assess(List.of(target), childReviews, graph, selected, identities, metadata, repairStatus, repaired, checks, false, generationTargets, projectFacts, countContext).requirements();
                     if (child.isEmpty()) continue;
                     var row = child.getFirst();
                     row.mods().forEach(m -> items.put(m.slug(), m));
                     criteria.add(new CriterionRow(row.id(), row.source(), row.status(), row.mods().stream().limit(24).toList(), row.modCount(),
-                            row.missing().stream().limit(24).toList(), row.missingCount(), row.note(), row.evidenceState()));
+                            row.missing().stream().limit(24).toList(), row.missingCount(), row.note(), row.evidenceState(), row.quantity()));
                 }
                 if ((!missing.isEmpty() || !missingCores.isEmpty()) && !items.isEmpty()) status = "PARTIAL";
                 var lacking = criteria.stream().filter(c -> lacking(c.status())).toList();
@@ -316,15 +425,33 @@ public final class RequirementCoverage {
                 }
             }
             evidenceState = new EvidenceState(evidenceState.code(), evidenceState.projects(), evidenceState.countsComplete(), generation);
+            Quantity quantity = null;
+            if (r.quantity() != null) {
+                var q = r.quantity();
+                var counted = items.keySet().stream().filter(slug -> countContext != null && countContext.roots().contains(slug))
+                        .filter(slug -> graph.selectedVersions.containsKey(slug) && !graph.selectedVersions.get(slug).path("id").asText().isBlank())
+                        .filter(slug -> q.scope() != RequirementQuantity.Scope.ADDED_ROOTS || !countContext.original().contains(slug))
+                        .filter(slug -> r.addonCores().stream().noneMatch(core -> identities.getOrDefault(core, core).equals(slug)))
+                        .filter(slug -> { var p = retained.stream().filter(project -> project.slug().equals(slug)).findFirst().orElse(null); return p == null
+                            ? !PackAddonPolicy.infrastructure(slug, "", Set.of()) : !p.infrastructure(); }).sorted().toList();
+                quantity = new Quantity(q.min(), q.max(), q.scope(), counted.size(), counted, countContext != null && (countContext.rootsKnown() || q.scope() == RequirementQuantity.Scope.ADDED_ROOTS) && evidenceState.countsComplete());
+                if (!quantity.complete() || counted.size() < q.min() || counted.size() > q.max()) {
+                    if (!status.equals("NOT_RETAINED")) status = "PARTIAL";
+                    note += "；" + (q.scope() == RequirementQuantity.Scope.ADDED_ROOTS ? "本轮新增" : "全包保留")
+                            + "有依据的内容模组 " + counted.size() + " / " + q.min() + "～" + q.max()
+                            + (quantity.complete() ? " 个" : " 个（计数待核实）");
+                }
+            }
             rows.add(new Row(r.id(), r.source(), status, items.values().stream().limit(truncate ? 24 : Long.MAX_VALUE).toList(), items.size(),
-                    missing.stream().limit(truncate ? 24 : Long.MAX_VALUE).toList(), missing.size(), note, List.copyOf(criteria), evidenceState));
+                    missing.stream().limit(truncate ? 24 : Long.MAX_VALUE).toList(), missing.size(), note, List.copyOf(criteria), evidenceState, quantity));
         }
         return new Report(1, List.copyOf(rows), repairStatus, List.copyOf(repaired));
     }
 
     public static List<String> repairs(Report report, List<RequirementReview> reviews, Set<String> eligible, Set<String> selected) {
         var gaps = report.requirements().stream().filter(r -> r.status().equals("UNVERIFIED") || r.status().equals("PARTIAL"))
-                .filter(r -> r.mods().stream().noneMatch(m -> !m.quote().isBlank())
+                .filter(r -> r.quantity() != null && r.quantity().actual() < r.quantity().min()
+                        || r.mods().stream().noneMatch(m -> !m.quote().isBlank())
                         || r.evidenceState().generation().stream().anyMatch(g -> g.projects().isEmpty())).map(Row::id)
                 .collect(java.util.stream.Collectors.toSet());
         var result = new LinkedHashSet<String>();
@@ -337,6 +464,7 @@ public final class RequirementCoverage {
         });
         var criterionGaps = new HashMap<String, Set<String>>();
         report.requirements().forEach(r -> criterionGaps.put(r.id(), r.criteria().stream().filter(c -> lacking(c.status()))
+                .filter(c -> c.quantity() == null || c.quantity().actual() <= c.quantity().max())
                 .map(CriterionRow::source).collect(java.util.stream.Collectors.toSet())));
         for (var r : reviews) {
             if (gaps.contains(r.id())) groups.add(new RepairGroup(r.evidence(), generationById.getOrDefault(r.id(), List.of())));
@@ -357,12 +485,25 @@ public final class RequirementCoverage {
         return List.copyOf(result);
     }
     private static boolean lacking(String status) { return Set.of("UNVERIFIED", "PARTIAL", "NOT_RETAINED").contains(status); }
+    public static Set<String> missingProofTargets(List<BuildRequirement> requirements, Report report) {
+        var reasons = Set.of("NO_REVIEW", "NO_EVIDENCE", "QUOTE_MISMATCH", "FACTS_UNAVAILABLE", "PURPOSE_PENDING");
+        var missing = new HashSet<String>();
+        report.requirements().forEach(r -> {
+            if (r.criteria().isEmpty() && lacking(r.status()) && reasons.contains(r.evidenceState().code())) missing.add(r.id());
+            r.criteria().stream().filter(c -> lacking(c.status()) && reasons.contains(c.evidenceState().code())).forEach(c -> missing.add(c.id()));
+        });
+        return RequirementQuantities.targets(requirements).stream().filter(r -> missing.contains(r.id()))
+                .filter(r -> r.kind() == BuildRequirement.Kind.CAPABILITY || !r.searches().isEmpty())
+                .limit(12).map(BuildRequirement::id).collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    }
     public static List<BuildRequirement> missingTargets(List<BuildRequirement> requirements, Report report) {
-        var byId = new HashMap<String, Set<String>>();
-        report.requirements().forEach(r -> byId.put(r.id(), r.criteria().stream().filter(c -> lacking(c.status()))
-                .map(CriterionRow::source).collect(java.util.stream.Collectors.toSet())));
-        return requirements.stream().flatMap(r -> r.criteria().stream()
-                        .filter(c -> byId.getOrDefault(r.id(), Set.of()).contains(c.source())).map(c -> c.target(r)))
+        var needed = new HashSet<String>();
+        report.requirements().forEach(r -> {
+            if(r.criteria().isEmpty() && lacking(r.status()) && r.quantity()!=null && r.quantity().actual()<r.quantity().min()) needed.add(r.id());
+            r.criteria().stream().filter(c -> lacking(c.status()) && (c.quantity()==null || c.quantity().actual()<c.quantity().min()))
+                    .forEach(c -> needed.add(c.id()));
+        });
+        return RequirementQuantities.targets(requirements).stream().filter(r -> needed.contains(r.id()))
                 .filter(r -> r.kind() == BuildRequirement.Kind.CAPABILITY && !r.searches().isEmpty()).limit(4).toList();
     }
     /** 定向复核只替换指定子目标的证据，已经支持的其它目标不被增量响应抹掉。 */

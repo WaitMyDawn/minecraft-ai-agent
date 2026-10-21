@@ -1,5 +1,5 @@
 import {computed, ref} from 'vue';
-import {readBuildReport, readReplacementChoices, readRequirementReport, requirementStatus, requirementTone, requirementNote, modProjectLink, issueReason, optimizationRole, optimizationSide} from '../utils/build-report.js';
+import {readBuildReport, readReplacementChoices, readRequirementReport, requirementEvidence, selectionSummary, evidenceTypeLabel, quantitySummary, requirementStatus, requirementTone, requirementNote, modProjectLink, issueReason, optimizationRole, optimizationSide} from '../utils/build-report.js';
 import {authUser, categoryGloss, modInfoCache} from '../store.js';
 import {bindVisibleModInfo} from '../utils/visible-mod-info.js';
 import {loadModInfoCache} from '../features/prefs.js';
@@ -34,7 +34,7 @@ export default {
                 return url.protocol === 'https:' && url.hostname === 'cdn.modrinth.com' ? value : '';
             } catch { return ''; }
         };
-        return {authUser, optimizationRole, optimizationSide, optimizationSlugs, report, replacements, coverage, requirementStatus, requirementTone, requirementNote, requirementSlugs, replacementSlugs, chart, categoryGloss, modProjectLink, issueReason, issueSlugs, icon};
+        return {requirementEvidence, selectionSummary, evidenceTypeLabel, quantitySummary, authUser, optimizationRole, optimizationSide, optimizationSlugs, report, replacements, coverage, requirementStatus, requirementTone, requirementNote, requirementSlugs, replacementSlugs, chart, categoryGloss, modProjectLink, issueReason, issueSlugs, icon};
     },
     template: `
       <div v-if="report || replacements.length || coverage" class="mt-4 space-y-3">
@@ -55,22 +55,48 @@ export default {
             <span v-if="!row.selected.length" class="text-slate-500">已去除该要求</span>
           </div>
         </section>
-        <section v-if="coverage && coverage.requirements.length" class="rounded-xl border border-slate-200 bg-white overflow-hidden">
-          <h4 class="px-4 py-3 bg-slate-50 text-sm font-semibold text-slate-800">逐项构建结果</h4>
+        <section v-if="coverage" class="rounded-xl border border-slate-200 bg-white overflow-hidden">
+          <div class="px-4 py-3 bg-slate-50 space-y-2">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <h4 class="text-sm font-semibold text-slate-800">需求核对结果</h4>
+              <span v-if="coverage.completion" class="rounded-full px-2 py-1 text-xs" :class="requirementTone({assessment:coverage.completion})">{{ coverage.completion.label }}</span>
+            </div>
+            <template v-if="coverage.completion">
+              <p class="text-sm text-slate-700">{{ coverage.completion.quantity.display }} <span class="ml-1 text-xs" :class="coverage.completion.quantity.status === 'NOT_MET' ? 'text-amber-800' : 'text-slate-500'">{{ coverage.completion.quantity.label }}</span></p>
+              <p class="text-xs text-slate-600">逐项目标（含点名核对）：{{ coverage.completion.targets.met }} 项满足，{{ coverage.completion.targets.partial + coverage.completion.targets.notMet }} 项有缺口，{{ coverage.completion.targets.unknown }} 项待核实<span v-if="coverage.completion.targets.waiting">，{{ coverage.completion.targets.waiting }} 项待选择</span>。</p>
+              <p v-if="coverage.completion.note" class="text-xs text-slate-600">{{ coverage.completion.note }}</p>
+            </template>
+            <p v-else class="text-xs text-slate-500">历史记录未包含整体核对结论；下方逐项结果不能代表全局数量已达标。</p>
+          </div>
+          <h4 v-if="coverage.requirements.length" class="px-4 py-2 text-xs font-semibold text-slate-600 border-t border-slate-100">逐项构建结果</h4>
           <details v-for="row in coverage.requirements" :key="row.id" v-visible-mods="{slugs: requirementSlugs(row), owner: authUser?.token}" class="border-t border-slate-100">
             <summary class="px-4 py-3 cursor-pointer text-sm flex items-start justify-between gap-3">
               <span class="text-slate-700">{{ row.source }}</span>
               <span class="shrink-0 rounded-full px-2 py-0.5 text-xs" :class="requirementTone(row)">{{ requirementStatus(row) }}</span>
             </summary>
             <div class="px-4 pb-4 space-y-2">
+              <p class="text-xs text-slate-600">证据：{{ requirementEvidence(row) }}</p>
+              <p v-if="selectionSummary(row)" class="text-xs text-slate-500">{{ selectionSummary(row) }}；要求仍按当前清单核对。</p>
+              <p v-if="row.quantity" class="text-xs text-slate-600">{{ quantitySummary(row) }}</p>
+              <details v-if="row.quantity && row.quantity.projects.length > row.mods.length" class="text-xs text-slate-500">
+                <summary class="cursor-pointer">查看完整计数项目 · {{ row.quantity.projects.length }} 项</summary>
+                <div class="mt-2 flex flex-wrap gap-2"><a v-for="slug in row.quantity.projects" :key="slug" :href="modProjectLink(slug)" target="_blank" rel="noopener noreferrer" class="text-indigo-600 underline">{{ slug }}</a></div>
+              </details>
               <div v-for="criterion in row.criteria" :key="criterion.id" class="rounded-lg border border-slate-100 bg-slate-50/50 p-3 space-y-2">
                 <div class="flex items-start justify-between gap-2 text-xs"><span class="font-semibold text-slate-700">{{ criterion.source }}</span><span class="shrink-0 text-slate-500">{{ requirementStatus(criterion) }}</span></div>
+                <p class="text-xs text-slate-600">证据：{{ requirementEvidence(criterion) }}</p>
+                <p v-if="selectionSummary(criterion)" class="text-xs text-slate-500">{{ selectionSummary(criterion) }}</p>
+                <p v-if="criterion.quantity" class="text-xs text-slate-600">{{ quantitySummary(criterion) }}</p>
+                <details v-if="criterion.quantity && criterion.quantity.projects.length > criterion.mods.length" class="text-xs text-slate-500">
+                  <summary class="cursor-pointer">查看完整计数项目 · {{ criterion.quantity.projects.length }} 项</summary>
+                  <div class="mt-2 flex flex-wrap gap-2"><a v-for="slug in criterion.quantity.projects" :key="slug" :href="modProjectLink(slug)" target="_blank" rel="noopener noreferrer" class="text-indigo-600 underline">{{ slug }}</a></div>
+                </details>
                 <div v-for="mod in criterion.mods" :key="mod.slug" class="text-xs">
                   <a :href="modProjectLink(mod.slug)" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 text-indigo-700">
                     <img v-if="icon(mod.slug)" :src="icon(mod.slug)" alt="" loading="lazy" class="w-6 h-6 rounded">
                     <span v-else class="w-6 h-6 rounded bg-slate-100 inline-flex items-center justify-center">📦</span>
                     <span class="break-all">{{ mod.slug }}</span>
-                  </a><p class="mt-1 text-slate-600">{{ mod.purpose }}</p>
+                  </a><p class="mt-1 text-slate-600">{{ mod.purpose }}</p><p class="mt-1 text-xs text-slate-500">{{ evidenceTypeLabel(mod.evidenceType) }}<span v-if="mod.versionId"> · 选版 {{ mod.versionId }}</span><template v-if="mod.partners.length"> · 关联：<a v-for="partner in mod.partners" :key="partner" :href="modProjectLink(partner)" target="_blank" rel="noopener noreferrer" class="mr-2 text-indigo-600 underline">{{ partner }}</a></template></p>
                   <details v-if="mod.quote" class="mt-1 text-xs text-slate-400"><summary class="cursor-pointer">{{ mod.evidenceType === 'PROJECT_GENERATION' ? '查看项目原文依据' : '查看用途依据' }}</summary><p class="mt-1">{{ mod.quote }}</p></details>
                 </div>
                 <p v-if="criterion.missing.length" class="text-xs text-amber-700">未保留：<a v-for="slug in criterion.missing" :key="slug" :href="modProjectLink(slug)" target="_blank" rel="noopener noreferrer" class="mr-2 underline">{{ slug }}</a></p>
@@ -86,7 +112,7 @@ export default {
                   <span v-else class="w-7 h-7 rounded bg-slate-100 inline-flex items-center justify-center">📦</span>
                   <span class="break-all">{{ mod.slug }}</span>
                 </a>
-                <p class="mt-1 text-xs text-slate-600">{{ mod.purpose }}</p>
+                <p class="mt-1 text-xs text-slate-600">{{ mod.purpose }}</p><p class="mt-1 text-xs text-slate-500">{{ evidenceTypeLabel(mod.evidenceType) }}<span v-if="mod.versionId"> · 选版 {{ mod.versionId }}</span><template v-if="mod.partners.length"> · 关联：<a v-for="partner in mod.partners" :key="partner" :href="modProjectLink(partner)" target="_blank" rel="noopener noreferrer" class="mr-2 text-indigo-600 underline">{{ partner }}</a></template></p>
                 <details v-if="mod.quote" class="mt-1 text-xs text-slate-400"><summary class="cursor-pointer">查看用途依据</summary><p class="mt-1">{{ mod.quote }}</p></details>
               </div>
               <p v-if="row.missing.length" class="text-xs text-amber-800">未保留：<a v-for="slug in row.missing" :key="slug" :href="modProjectLink(slug)" target="_blank" rel="noopener noreferrer" class="mr-2 underline">{{ slug }}</a></p>

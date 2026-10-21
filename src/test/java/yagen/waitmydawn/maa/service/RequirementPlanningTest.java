@@ -6,6 +6,36 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class RequirementPlanningTest {
+    @Test void singleContentFragmentProjectsExistingMappingWithoutInventingTargets() {
+        String source = "补充冷门仓储模组2-4个";
+        var searches = List.of(new BuildIntent.SearchIntent("storage", 100, List.of("storage")));
+        var anchor = RequirementPlanning.anchors(source).entrySet().iterator().next();
+        var r = new BuildRequirement(anchor.getKey(), source, BuildRequirement.Kind.CAPABILITY, List.of(), List.of(),
+                List.of(), searches, SelectionPreferences.fromSource(source), List.of(), RequirementQuantity.fromSource(source));
+        var bound = RequirementPlanning.bind(source, plan(3, List.of(), count(), List.of(r)), Map.of());
+        var criterion = bound.requirements().getFirst().criteria().getFirst();
+        assertEquals(source, criterion.source());
+        assertEquals(searches, criterion.searches());
+        assertEquals(r.preferences(), criterion.preferences());
+        assertEquals(r.quantity(), criterion.quantity());
+        assertEquals(r.projects(), criterion.projects());
+        assertEquals(r.addonCores(), criterion.addonCores());
+    }
+
+    @Test void compositeContentStillRequiresExplicitPerFragmentMapping() {
+        String source = "丰富群系和结构";
+        var anchor = RequirementPlanning.anchors(source).entrySet().iterator().next();
+        var r = new BuildRequirement(anchor.getKey(), source, BuildRequirement.Kind.CAPABILITY, List.of(),
+                List.of(BuildRequirement.Capability.BIOMES, BuildRequirement.Capability.STRUCTURES), List.of(),
+                List.of(new BuildIntent.SearchIntent("worldgen", 100, List.of("biome", "structure"))),
+                SelectionPreferences.DEFAULT, List.of());
+        var failure = assertThrows(RequirementPlanning.InvalidPlan.class,
+                () -> RequirementPlanning.bind(source, plan(3, List.of(), count(), List.of(r)), Map.of()));
+        assertTrue(failure.getMessage().contains(r.id()));
+        assertTrue(failure.getMessage().contains("丰富群系"));
+        assertTrue(failure.getMessage().contains("结构"));
+    }
+
     @Test void namedOnlyNewPlanCannotSmuggleExtraCoreOrUnrequestedAddons() {
         String prompt = "包含core-mod，不额外推荐";
         var r = requirement(prompt, BuildRequirement.Kind.PROJECTS, List.of("core-mod"), List.of());

@@ -1,0 +1,928 @@
+{
+  "requirements": [
+    {
+      "id": "r-67e552f818f5690f",
+      "source": "我想玩一个Neoforge1.21.1的冒险整合包，名字是朝花夕拾，大概100~200个模组，要求：",
+      "kind": "GENERAL",
+      "projects": [],
+      "capabilities": [],
+      "addonCores": [],
+      "searches": [],
+      "preferences": {
+        "popularity": "DEFAULT",
+        "freshness": "DEFAULT"
+      },
+      "criteria": [
+        {
+          "source": "我想玩一个Neoforge1.21.1的冒险整合包",
+          "kind": "GENERAL",
+          "projects": [],
+          "addonCores": [],
+          "searches": [
+            {
+              "category": "adventure",
+              "weight": 100,
+              "keywords": [
+                "adventure",
+                "exploration",
+                "dungeon",
+                "quest"
+              ]
+            }
+          ],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "名字是朝花夕拾",
+          "kind": "GENERAL",
+          "projects": [],
+          "addonCores": [],
+          "searches": [],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "大概100~200个模组",
+          "kind": "GENERAL",
+          "projects": [],
+          "addonCores": [],
+          "searches": [],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "要求：",
+          "kind": "GENERAL",
+          "projects": [],
+          "addonCores": [],
+          "searches": [],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        }
+      ],
+      "quantity": null
+    },
+    {
+      "id": "r-9b9fcfa450a96d4c",
+      "source": "1）以铁魔法为核心，多补充一些铁魔法的附属",
+      "kind": "ADDONS",
+      "projects": [
+        "irons-spells-n-spellbooks"
+      ],
+      "capabilities": [],
+      "addonCores": [
+        "irons-spells-n-spellbooks"
+      ],
+      "searches": [
+        {
+          "category": "magic",
+          "weight": 100,
+          "keywords": [
+            "iron spells addon",
+            "spell expansion",
+            "school of magic",
+            "ritual"
+          ]
+        }
+      ],
+      "preferences": {
+        "popularity": "DEFAULT",
+        "freshness": "DEFAULT"
+      },
+      "criteria": [
+        {
+          "source": "1）以铁魔法为核心",
+          "kind": "PROJECTS",
+          "projects": [
+            "irons-spells-n-spellbooks"
+          ],
+          "addonCores": [],
+          "searches": [],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "多补充一些铁魔法的附属",
+          "kind": "ADDONS",
+          "projects": [
+            "irons-spells-n-spellbooks"
+          ],
+          "addonCores": [
+            "irons-spells-n-spellbooks"
+          ],
+          "searches": [
+            {
+              "category": "magic",
+              "weight": 100,
+              "keywords": [
+                "iron spells addon",
+                "spell expansion",
+                "school of magic",
+                "ritual"
+              ]
+            }
+          ],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": {
+            "min": 5,
+            "max": 10,
+            "scope": "ADDED_ROOTS"
+          }
+        }
+      ],
+      "quantity": null
+    },
+    {
+      "id": "r-ffffaa35465c974d",
+      "source": "2）包含Alex生物、Alex洞穴、冰火传说、灾变、海灵物语、yagens-attributes，",
+      "kind": "PROJECTS",
+      "projects": [
+        "alexs-mobs",
+        "alexs-caves",
+        "iceandfire-ce",
+        "l_enders-cataclysm",
+        "aquamirae",
+        "yagens-attributes"
+      ],
+      "capabilities": [],
+      "addonCores": [],
+      "searches": [],
+      "preferences": {
+        "popularity": "DEFAULT",
+        "freshness": "DEFAULT"
+      },
+      "criteria": [
+        {
+          "source": "2）包含Alex生物",
+          "kind": "PROJECTS",
+          "projects": [
+            "alexs-mobs"
+          ],
+          "addonCores": [],
+          "searches": [],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "Alex洞穴",
+          "kind": "PROJECTS",
+          "projects": [
+            "alexs-caves"
+          ],
+          "addonCores": [],
+          "searches": [],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "冰火传说",
+          "kind": "PROJECTS",
+          "projects": [
+            "iceandfire-ce"
+          ],
+          "addonCores": [],
+          "searches": [],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "灾变",
+          "kind": "PROJECTS",
+          "projects": [
+            "l_enders-cataclysm"
+          ],
+          "addonCores": [],
+          "searches": [],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "海灵物语",
+          "kind": "PROJECTS",
+          "projects": [
+            "aquamirae"
+          ],
+          "addonCores": [],
+          "searches": [],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "yagens-attributes",
+          "kind": "PROJECTS",
+          "projects": [
+            "yagens-attributes"
+          ],
+          "addonCores": [],
+          "searches": [],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        }
+      ],
+      "quantity": null
+    },
+    {
+      "id": "r-bc37e982a35501ab",
+      "source": "3）包含农夫乐事及其附属，特别是整合包内有的模组的乐事联动附属",
+      "kind": "ADDONS",
+      "projects": [
+        "farmers-delight"
+      ],
+      "capabilities": [],
+      "addonCores": [
+        "farmers-delight"
+      ],
+      "searches": [
+        {
+          "category": "food",
+          "weight": 100,
+          "keywords": [
+            "farmers delight addon",
+            "cooking expansion",
+            "crop",
+            "food compatibility"
+          ]
+        }
+      ],
+      "preferences": {
+        "popularity": "DEFAULT",
+        "freshness": "DEFAULT"
+      },
+      "criteria": [
+        {
+          "source": "3）包含农夫乐事及其附属",
+          "kind": "ADDONS",
+          "projects": [
+            "farmers-delight"
+          ],
+          "addonCores": [
+            "farmers-delight"
+          ],
+          "searches": [
+            {
+              "category": "food",
+              "weight": 100,
+              "keywords": [
+                "farmers delight addon",
+                "cooking expansion",
+                "crop",
+                "food compatibility"
+              ]
+            }
+          ],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": {
+            "min": 5,
+            "max": 10,
+            "scope": "ADDED_ROOTS"
+          }
+        },
+        {
+          "source": "特别是整合包内有的模组的乐事联动附属",
+          "kind": "PACK_INTEGRATIONS",
+          "projects": [
+            "farmers-delight"
+          ],
+          "addonCores": [
+            "farmers-delight"
+          ],
+          "searches": [
+            {
+              "category": "food",
+              "weight": 100,
+              "keywords": [
+                "farmers delight compat",
+                "mod integration",
+                "food crossover"
+              ]
+            }
+          ],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        }
+      ],
+      "quantity": null
+    },
+    {
+      "id": "r-5cf0f6a6a62b3005",
+      "source": "4）有丰富的群系和结构能够探险",
+      "kind": "CAPABILITY",
+      "projects": [],
+      "capabilities": [
+        "BIOMES",
+        "STRUCTURES"
+      ],
+      "addonCores": [],
+      "searches": [
+        {
+          "category": "worldgen",
+          "weight": 60,
+          "keywords": [
+            "biome",
+            "terrain",
+            "overworld generation",
+            "structure"
+          ]
+        },
+        {
+          "category": "adventure",
+          "weight": 40,
+          "keywords": [
+            "dungeon",
+            "ruins",
+            "temple",
+            "exploration"
+          ]
+        }
+      ],
+      "preferences": {
+        "popularity": "DEFAULT",
+        "freshness": "DEFAULT"
+      },
+      "criteria": [
+        {
+          "source": "4）有丰富的群系",
+          "kind": "CAPABILITY",
+          "projects": [],
+          "addonCores": [],
+          "searches": [
+            {
+              "category": "worldgen",
+              "weight": 100,
+              "keywords": [
+                "biome",
+                "terrain",
+                "overworld generation"
+              ]
+            }
+          ],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "结构能够探险",
+          "kind": "CAPABILITY",
+          "projects": [],
+          "addonCores": [],
+          "searches": [
+            {
+              "category": "adventure",
+              "weight": 100,
+              "keywords": [
+                "dungeon",
+                "ruins",
+                "temple",
+                "exploration",
+                "structure"
+              ]
+            }
+          ],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        }
+      ],
+      "quantity": null
+    },
+    {
+      "id": "r-dd92b724e4021036",
+      "source": "5）有丰富的生物生态",
+      "kind": "CAPABILITY",
+      "projects": [],
+      "capabilities": [
+        "CREATURE_ECOLOGY"
+      ],
+      "addonCores": [],
+      "searches": [
+        {
+          "category": "mobs",
+          "weight": 100,
+          "keywords": [
+            "creature",
+            "monster",
+            "spawn",
+            "animal",
+            "ecology"
+          ]
+        }
+      ],
+      "preferences": {
+        "popularity": "DEFAULT",
+        "freshness": "DEFAULT"
+      },
+      "criteria": [],
+      "quantity": null
+    },
+    {
+      "id": "r-db64c85a26399b55",
+      "source": "6）丰富下界和末地生态",
+      "kind": "CAPABILITY",
+      "projects": [],
+      "capabilities": [
+        "NETHER",
+        "END"
+      ],
+      "addonCores": [],
+      "searches": [
+        {
+          "category": "worldgen",
+          "weight": 100,
+          "keywords": [
+            "nether biome",
+            "end biome",
+            "nether terrain",
+            "end dimension",
+            "nether structure"
+          ]
+        }
+      ],
+      "preferences": {
+        "popularity": "DEFAULT",
+        "freshness": "DEFAULT"
+      },
+      "criteria": [
+        {
+          "source": "6）丰富下界",
+          "kind": "CAPABILITY",
+          "projects": [],
+          "addonCores": [],
+          "searches": [
+            {
+              "category": "worldgen",
+              "weight": 100,
+              "keywords": [
+                "nether biome",
+                "nether terrain",
+                "nether structure",
+                "nether mob"
+              ]
+            }
+          ],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "末地生态",
+          "kind": "CAPABILITY",
+          "projects": [],
+          "addonCores": [],
+          "searches": [
+            {
+              "category": "worldgen",
+              "weight": 100,
+              "keywords": [
+                "end biome",
+                "end dimension",
+                "end structure",
+                "end mob"
+              ]
+            }
+          ],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        }
+      ],
+      "quantity": null
+    },
+    {
+      "id": "r-74115bb006c9ef5b",
+      "source": "7）有很多优化模组，现代化UI和修复",
+      "kind": "CAPABILITY",
+      "projects": [
+        "modern-ui"
+      ],
+      "capabilities": [
+        "PERFORMANCE",
+        "MODERN_UI",
+        "FIXES"
+      ],
+      "addonCores": [],
+      "searches": [
+        {
+          "category": "optimization",
+          "weight": 60,
+          "keywords": [
+            "performance",
+            "fps",
+            "memory",
+            "render",
+            "loading"
+          ]
+        },
+        {
+          "category": "utility",
+          "weight": 40,
+          "keywords": [
+            "bugfix",
+            "compatibility fix",
+            "hud"
+          ]
+        }
+      ],
+      "preferences": {
+        "popularity": "DEFAULT",
+        "freshness": "DEFAULT"
+      },
+      "criteria": [
+        {
+          "source": "7）有很多优化模组",
+          "kind": "CAPABILITY",
+          "projects": [],
+          "addonCores": [],
+          "searches": [
+            {
+              "category": "optimization",
+              "weight": 100,
+              "keywords": [
+                "performance",
+                "fps",
+                "memory",
+                "render",
+                "loading"
+              ]
+            }
+          ],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "现代化UI",
+          "kind": "PROJECTS",
+          "projects": [
+            "modern-ui"
+          ],
+          "addonCores": [],
+          "searches": [],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "修复",
+          "kind": "CAPABILITY",
+          "projects": [],
+          "addonCores": [],
+          "searches": [
+            {
+              "category": "utility",
+              "weight": 100,
+              "keywords": [
+                "bugfix",
+                "compatibility fix",
+                "patch"
+              ]
+            }
+          ],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        }
+      ],
+      "quantity": null
+    },
+    {
+      "id": "r-402f7bb1c5ca920e",
+      "source": "8）有很多实用模组，例如苹果皮、jei",
+      "kind": "CAPABILITY",
+      "projects": [
+        "appleskin",
+        "jei"
+      ],
+      "capabilities": [
+        "UTILITY"
+      ],
+      "addonCores": [],
+      "searches": [
+        {
+          "category": "utility",
+          "weight": 100,
+          "keywords": [
+            "qol",
+            "hud",
+            "information",
+            "inventory",
+            "tool"
+          ]
+        }
+      ],
+      "preferences": {
+        "popularity": "DEFAULT",
+        "freshness": "DEFAULT"
+      },
+      "criteria": [
+        {
+          "source": "8）有很多实用模组",
+          "kind": "CAPABILITY",
+          "projects": [],
+          "addonCores": [],
+          "searches": [
+            {
+              "category": "utility",
+              "weight": 100,
+              "keywords": [
+                "qol",
+                "hud",
+                "information",
+                "inventory",
+                "tool"
+              ]
+            }
+          ],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "例如苹果皮",
+          "kind": "PROJECTS",
+          "projects": [
+            "appleskin"
+          ],
+          "addonCores": [],
+          "searches": [],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        },
+        {
+          "source": "jei",
+          "kind": "PROJECTS",
+          "projects": [
+            "jei"
+          ],
+          "addonCores": [],
+          "searches": [],
+          "preferences": {
+            "popularity": "DEFAULT",
+            "freshness": "DEFAULT"
+          },
+          "quantity": null
+        }
+      ],
+      "quantity": null
+    }
+  ],
+  "candidates": [
+    "aces-spell-utils",
+    "adaptive-performance-tweaks",
+    "addadd",
+    "aeroblender",
+    "ai-improvements",
+    "alshanexs-familiars",
+    "apprentices-codex",
+    "archaeological_research_exploration",
+    "archers-expansion",
+    "arphex",
+    "asterism-arcanum-addon-for-irons-spells-and-spellbooks",
+    "autochefs-delight",
+    "autosow-by-neni-o",
+    "awesome-dungeon-the-end",
+    "aztec-ruins",
+    "bbrb",
+    "better-combat-x-cataclysm-spellbooks-compatibility",
+    "better-compatibility-checker",
+    "better-farming-with-hoes-farmers-delight-compatibility",
+    "biomes-o-plenty",
+    "brown-cheese-delight-a-farmers-delight-add-on",
+    "campfire-creations",
+    "cannibal-villages",
+    "cataclysm-spellbooks",
+    "cooking-for-blockheads",
+    "create-let-the-adventure-begin",
+    "create-wizardry",
+    "crockercorp-delight",
+    "crops-n-corpses",
+    "croptopia-delight",
+    "crystal-chronicles",
+    "daily-boss-x-irons-spells-n-spellbooks",
+    "dark-doppelganger",
+    "deeper-and-darker-spellbooks",
+    "dimensional-dungeons",
+    "discerning-the-eldritch",
+    "distanthorizons",
+    "dungeons-and-taverns",
+    "dungeons-and-taverns-ancient-city-overhaul",
+    "dungeons-and-taverns-swamp-hut-overhaul",
+    "dungeons-dimensions-nether",
+    "dynamic-fps",
+    "easy-arcane-an-irons-spells-spellbooks-addon",
+    "ec-irons-spells-compat",
+    "emf-compat-irons-spells-n-spellbooks",
+    "ends-delight",
+    "energized-power-fd",
+    "entityculling",
+    "epic-fight-x-irons-spells-enhanced-animation",
+    "epic-terrain_compatible",
+    "epicterrain",
+    "eternal-nether",
+    "expanded-delight",
+    "explorations",
+    "explore-ruins-aether",
+    "farm-3x3-farmers-delight-compatibility",
+    "farmers-croptopia",
+    "farmers-delight-contracts-feasts",
+    "farmers-delight-extended",
+    "farmers-delight-kacchi",
+    "farmers-delight-tfc",
+    "farmers-spell",
+    "ferrite-core",
+    "fleinsopp-delight-a-farmers-delight-add-on",
+    "formations-nether",
+    "fps-horizon",
+    "fps-reducer",
+    "gensokyo-delight-youkais-feasts",
+    "golem-magicka",
+    "grim-kingdoms-lost-structures-ruins",
+    "hazen-n-stuff",
+    "idas",
+    "immersive-armor-hud",
+    "international-food",
+    "inventoryhudplus",
+    "irons-spellbooks-arcane-essence-blocks",
+    "irons-spellbooks-tweaks",
+    "irons-spells-n-spellbooks-dynamic-skill-trees",
+    "irons-spells-n-spellbooks-recolor",
+    "irons-spells-n-spellbooks-restricitons",
+    "irons-spells-n-spellbooks-unstable-magic",
+    "irons-spells-n-spellbooksmonsters-spellbooks",
+    "iss-food-spelling",
+    "isskjs",
+    "jadens-nether-expansion",
+    "jadens-nether-expansion-delight",
+    "kaleidoscope-texture-expansion",
+    "legendary-monsters",
+    "lets-do-addon-corn-expansion",
+    "lithium",
+    "luminous-nether",
+    "magic-from-the-east",
+    "magic-vibe-decorations",
+    "medieval-buildings-end-edition",
+    "medieval-buildings-nether-edition",
+    "mes-moogs-end-structures",
+    "mexicans-delight",
+    "mns-moogs-nether-structures",
+    "modernfix",
+    "more-creatures-and-weapons",
+    "more-delight",
+    "mutant-monsters",
+    "nlyb-dungeonstructure-fragments",
+    "noisium",
+    "oceans-delight",
+    "oh-the-biomes-weve-gone",
+    "one-dimension",
+    "particle-core",
+    "performancehud",
+    "philips-ruins",
+    "polars-exploration-additions",
+    "primal-magick",
+    "project-mmo-irons-spells-spellbooks-compat",
+    "projecte-emc-for-irons-spellbooks",
+    "realm-rpg-fallen-adventurers",
+    "repurposed-structures-farmers-delight-compat",
+    "repurposed-structures-friends-and-foes-compat",
+    "right-click-and-milk",
+    "rottencreatures",
+    "sable-ragdolls-armourers-workshop-compatibility-fix",
+    "shoulder-surfing-iron-spells-integration",
+    "sniffers-sniffs-delights",
+    "sodium",
+    "somake-spells-irons-spells-addon",
+    "spell-engine",
+    "spell-power",
+    "spells-gone-wrong",
+    "stacked-blocks-farmers-delight",
+    "stonehenge",
+    "tensura-compat-irons-spells-n-spellbooks",
+    "tensura-not-enough-bosses",
+    "tensura-unique-monsters",
+    "terrablender",
+    "the-magic-mirror",
+    "ubes-delight",
+    "valiant-irons-spells-n-spellbooks-addon",
+    "vegan-delight",
+    "when-dungeons-arise",
+    "when-dungeons-arise-seven-seas",
+    "winds-spellbooks",
+    "winefoxs_spellbooks",
+    "wizard-samurai-irons-spells-addon",
+    "x+-autofish",
+    "x-plus-autofish",
+    "yungs-better-dungeons",
+    "yungs-better-end-island"
+  ],
+  "retained": [
+    "alexs-caves-unofficial-port",
+    "alexs-mobs-1.21.1",
+    "appleskin",
+    "aquamirae",
+    "farmers-delight",
+    "iceandfire-ce",
+    "incendium",
+    "irons-spells-n-spellbooks",
+    "jei",
+    "l_enders-cataclysm",
+    "modern-ui",
+    "nullscape",
+    "yagens-attributes"
+  ],
+  "facts": {
+    "appleskin": "AppleSkin Food/hunger-related HUD improvements\n",
+    "aquamirae": "Aquamirae Ship graveyard with terrible deep sea creatures!\n",
+    "irons-spells-n-spellbooks": "Iron's Spells 'n Spellbooks A magic mod bringing back the classic RPG spellcasting fantasy. (irons spells and spellbooks)\n",
+    "jei": "Just Enough Items (JEI) View Items and Recipes\n",
+    "l_enders-cataclysm": "L_Ender's Cataclysm Cataclysm is a mod that adds difficult dungeons, challenging boss-fights and powerful items.\n",
+    "modern-ui": "Modern UI Modern desktop graphics application framework and low-level 3D graphics engine\n* Reduce unnecessary RAM usage and greatly reduce object creation\n* Use improved SDF text rendering in 2D/3D (also use batch rendering)",
+    "yagens-attributes": "Yagen's Attributes A Warframe like mod for Minecraft,which changes many aspects of vanilla.\n",
+    "incendium": "A nether biome overhaul combined with challenging structures to conquer, unique weapons to obtain, and tricky mobs to defeat.\nA nether biome overhaul combined with challenging structures to conquer, unique weapons to obtain, and tricky mobs to defeat\n",
+    "nullscape": "Transforms the boring Vanilla end into an alien dimension with the most surreal terrain imaginable. Topped with a couple of new biomes to add to the experience, whilst keeping the end desolate.\nTransforms the boring Vanilla end into an alien dimension with the most surreal terrain imaginable\n",
+    "magic-from-the-east": "Magic From The East An add-on mod for Iron's Spell n' Spellbooks that adding new schools, spells and stuffs inspired from ancient Asian and Middle Eastern culture\n",
+    "more-delight": "More Delight (for Farmer's Delight) Extra meals, knives, and ingredients for Farmer's Delight that improve your culinary experience.\n",
+    "expanded-delight": "Expanded Delight An addon mod for Farmer's Delight\nthat adds many more crops and functionality to the base mod\n",
+    "biomes-o-plenty": "Biomes O' Plenty Adds 50+ unique biomes to enhance your world, with new trees, flowers, and more!\n",
+    "oh-the-biomes-weve-gone": "Oh The Biomes We've Gone An astounding sequel to the original BYG mod for 1.20.1+ with over 50+ biomes ranging from the magical to the realistic and all breathtaking!\n",
+    "rottencreatures": "Rotten Creatures Rotten Creatures is a mod that aims to add a lot of awesome new zombie mobs to Minecraft!\n",
+    "x-plus-autofish": "XPlus Autofish (Fabric / Forge / NeoForge) Automatically reel in and recast the fishing rod when fish bites. Including useful options and bugfixs.\n",
+    "luminous-nether": "Luminous: Nether Explore new nether biomes with dangerous foes! Build with new blocks, and decorate with new decorations!\n![LUMINOUS:NETHER](https://i.imgur.com/2u37Woi.png)\n\nConsider joining the **LUMINOUS** discord, where you can report bugs/get some sneek peaks on projects/updates!\n\n**LUMINOUS:NETHER** expands the base nether experience, adding 2 new biomes, 16 new mobs, 3 legendary beasts with unique drops and abilities, 3 RARE beasts with some unque drops, tons of new blocks, and new gameplay mechanics!\n\n\n### **THE FUNGAL PLAINS**\n![The fungal plains is one of two new biomes in game! Covered in yellow toxic mushrooms and crazed piglin culrists!](https://i.imgur.com/LkS0NVG.png)\nThe **Fungal Plains** is one of two new biomes in LUMINOUS: NETHER - it houses a new faction of piglins, the CULTISTS - which are hostile towards players unless holding a cultist flag, a new item found in the biome.\n\nExplore a new variety of infectious yellow blocks, craft a new \"mushroom\" woodset, build with new fungirrack bricks, and discover unique structures aroundthe biome ranging from ruined portals to bases built in the bones of old monsters. Also find and fight a new curious breed of monster - the MUSHLINS, which find and push the player back with their bouncy head!\n\n\n### **THE ASH FOREST**\n![The Ash forest is another biome added in Luminous nether, with ghostly mobs, new block sets, new wood sets, and new mechanics!](https://i.imgur.com/XIzc0gK.png)\nThe **Ash Forest** is the second biome added with LUMINOUS: NETHER, and it houses minecrafts undeadliest mobs yet! Find new spooky structures like the one pictured above, build with new ash bricks and a \"withered\" woodset! \n\nCheck out the ceiling to see a new feature, Driprot! a strange and twisting vine which grows a new food source in the nether - pale melons! Driprot has its own brick set, bringing a gross and ghastly vibe to your world!\n\n------------------------------------------------------------------------------------------------\n\n**TO EDIT THE WEIGHT/SIZE OF THE BIOMES - DOWNLOAD \"LUMINOUS NETHER TWEAKS\" [HERE!](https://modrinth.com/datapack/luminous-nether-tweaks)**\n\n\n------------------------------------------------------------------------------------------------\n\n\n\n### **NEW MOBS**\n![Mushlin Bumper, Piglin cultist, Piglin Cultist leader, and Piglin Cultist Rider (descriptions below)](https://i.imgur.com/aLdIBDb.png)\n_(From left to right)_\n\n**Mushlin Bumper -** These curious mobs love to bounce players back with their heads! Kill them to get mushlin protein - a new food source!\n\n**Piglin Cultist -** Having given their life to the call of the mushlin king, these cultists will attack ANYONE who gets near them with a new weapon - the Cultist axe!\n\n**Piglin Cultist Leader -** These elite cultists have the ability to summon backup when attacked! Take them out quickly!\n**\nPiglin Cultist Rider -** After learning how to tame the ferocious hoglin, this Cultist rides him into battle, at your health bars expense!\n\n![Piglin Ghost, Pottergeists, Spirit, and Guzzleghast (descriptions below)](https://i.imgur.com/wEnQHDx.png)\n**Piglin Ghost -** Having been killed long ago, these angry souls are confined to spawners in different structures in the ash forest - fight them if you dare!\n\n**Pottergeists -** Long believed to be the souls of lo\n",
+    "jadens-nether-expansion-delight": "Jaden's Nether Expansion Delight Adds 30+ foods, linking Jaden's Nether Expansion and Farmer's Delight in a Vanilla style.\n",
+    "better-compatibility-checker": "Better Compatibility Checker Changes the default server compatibility check to compare modpack versions\n",
+    "inventoryhudplus": "InventoryHUD+ Adds your main inventory, potion effects and your equipments to your HUD. And few other features.\n",
+    "dungeons-and-taverns": "Dungeons and Taverns A Structure Datapack adding dungeons, taverns and other structures to find while you explore the world.\n",
+    "farmers-spell": "Farmer's Spell 'n Spell Book A dual crossover addon for both Iron's Spells 'n Spellbooks and Farmer's Delight, featuring magical culinary recipes and the brand-new School of Gluttony.\n",
+    "sodium": "Sodium A high-performance rendering engine replacement for Minecraft, which greatly improves frame rates and reduces micro-stutter.\nA high-performance rendering engine replacement for Minecraft, which greatly improves frame rates and reduces micro-stutter",
+    "ferrite-core": "FerriteCore Memory usage optimizations\nMemory usage optimizations",
+    "modernfix": "ModernFix All-in-one mod that improves performance, reduces memory usage, and fixes many bugs. Compatible with all your favorite performance mods!\none mod that improves performance, reduces memory usage, and fixes many bugs\nhting performance and can also fix FPS stutters when moving between chunks",
+    "mes-moogs-end-structures": "MES - Moog's End Structures Lots of Vanilla styled structrues to fill up the end dimension with life!\n",
+    "irons-spells-n-spellbooksmonsters-spellbooks": "Iron's Spells 'n Spellbooks:Monsters & Spellbooks A medium sized addon for the popular mod Iron’s Spells ‘n Spellbooks that brings a 100+ spells,2 new spell schools and a ton of new gear and uniqye spell casting enemies\n",
+    "mutant-monsters": "Mutant Monsters The mutants are back! Face scary creatures and powerful beasts like never before.\n",
+    "when-dungeons-arise": "When Dungeons Arise Adds various elegant -and likely hostile- roguelike dungeons and structures that generate on your worlds!\n"
+  },
+  "responses": [
+    "{\"schemaVersion\":1,\"approved\":[\"irons-spellbooks-arcane-essence-blocks\",\"dark-doppelganger\",\"irons-spells-n-spellbooks-dynamic-skill-trees\",\"irons-spells-n-spellbooks-restricitons\",\"hazen-n-stuff\",\"magic-from-the-east\",\"spells-gone-wrong\",\"discerning-the-eldritch\",\"crystal-chronicles\",\"iss-food-spelling\",\"wizard-samurai-irons-spells-addon\",\"somake-spells-irons-spells-addon\",\"asterism-arcanum-addon-for-irons-spells-and-spellbooks\",\"irons-spells-n-spellbooks-unstable-magic\",\"valiant-irons-spells-n-spellbooks-addon\",\"easy-arcane-an-irons-spells-spellbooks-addon\",\"irons-spellbooks-tweaks\",\"irons-spells-n-spellbooksmonsters-spellbooks\",\"winds-spellbooks\",\"apprentices-codex\",\"cataclysm-spellbooks\",\"alshanexs-familiars\",\"create-wizardry\",\"deeper-and-darker-spellbooks\",\"irons-spells-n-spellbooks-recolor\",\"epic-fight-x-irons-spells-enhanced-animation\",\"farmers-spell\",\"more-delight\",\"repurposed-structures-farmers-delight-compat\",\"farmers-croptopia\",\"farmers-delight-extended\",\"sniffers-sniffs-delights\",\"international-food\",\"farmers-delight-contracts-feasts\",\"vegan-delight\",\"mexicans-delight\",\"ends-delight\",\"oceans-delight\",\"expanded-delight\",\"ubes-delight\",\"jadens-nether-expansion-delight\",\"croptopia-delight\",\"autochefs-delight\",\"gensokyo-delight-youkais-feasts\",\"campfire-creations\",\"cooking-for-blockheads\",\"biomes-o-plenty\",\"oh-the-biomes-weve-gone\",\"terrablender\",\"epicterrain\",\"epic-terrain_compatible\",\"yungs-better-dungeons\",\"yungs-better-end-island\",\"when-dungeons-arise\",\"when-dungeons-arise-seven-seas\",\"dungeons-and-taverns\",\"dungeons-and-taverns-ancient-city-overhaul\",\"dungeons-and-taverns-swamp-hut-overhaul\",\"explorations\",\"philips-ruins\",\"stonehenge\",\"aztec-ruins\",\"grim-kingdoms-lost-structures-ruins\",\"realm-rpg-fallen-adventurers\",\"create-let-the-adventure-begin\",\"idas\",\"dimensional-dungeons\",\"mes-moogs-end-structures\",\"awesome-dungeon-the-end\",\"medieval-buildings-end-edition\",\"mns-moogs-nether-structures\",\"formations-nether\",\"eternal-nether\",\"medieval-buildings-nether-edition\",\"luminous-nether\",\"jadens-nether-expansion\",\"dungeons-dimensions-nether\",\"rottencreatures\",\"mutant-monsters\",\"legendary-monsters\",\"more-creatures-and-weapons\",\"arphex\",\"cannibal-villages\",\"sodium\",\"entityculling\",\"noisium\",\"ferrite-core\",\"lithium\",\"modernfix\",\"particle-core\",\"dynamic-fps\",\"fps-reducer\",\"ai-improvements\",\"adaptive-performance-tweaks\",\"distanthorizons\",\"performancehud\",\"inventoryhudplus\",\"immersive-armor-hud\",\"better-compatibility-checker\",\"addadd\",\"x-plus-autofish\",\"autosow-by-neni-o\",\"bbrb\",\"sable-ragdolls-armourers-workshop-compatibility-fix\",\"magic-vibe-decorations\"],\"rejected\":[{\"slug\":\"farmers-delight-tfc\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖泰拉瑞拉法克世界，与本整合包无关。\"},{\"slug\":\"energized-power-fd\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"仅为能源模组联动，包内无该模组。\"},{\"slug\":\"crockercorp-delight\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"Minestuck联动，包内无该模组。\"},{\"slug\":\"kaleidoscope-texture-expansion\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖万花筒模组，包内无该模组。\"},{\"slug\":\"farm-3x3-farmers-delight-compatibility\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Farm 3x3，包内无该模组。\"},{\"slug\":\"better-farming-with-hoes-farmers-delight-compatibility\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Better Farming with Hoes，包内无该模组。\"},{\"slug\":\"stacked-blocks-farmers-delight\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Stacked Blocks，包内无该模组。\"},{\"slug\":\"brown-cheese-delight-a-farmers-delight-add-on\",\"reason\":\"OTHER\",\"explanation\":\"仅加一种挪威奶酪，内容过少。\"},{\"slug\":\"fleinsopp-delight-a-farmers-delight-add-on\",\"reason\":\"OTHER\",\"explanation\":\"仅加一种挪威蘑菇，内容过少。\"},{\"slug\":\"right-click-and-milk\",\"reason\":\"OTHER\",\"explanation\":\"仅玻璃瓶挤奶小功能，价值有限。\"},{\"slug\":\"farmers-delight-kacchi\",\"reason\":\"OTHER\",\"explanation\":\"仅少量孟加拉食物，内容单薄。\"},{\"slug\":\"projecte-emc-for-irons-spellbooks\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖ProjectE，包内无该模组。\"},{\"slug\":\"project-mmo-irons-spells-spellbooks-compat\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Project MMO，包内无该模组。\"},{\"slug\":\"ec-irons-spells-compat\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Expanded Combat，包内无该模组。\"},{\"slug\":\"winefoxs_spellbooks\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖车万女仆，包内无该模组。\"},{\"slug\":\"shoulder-surfing-iron-spells-integration\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Shoulder Surfing，包内无该模组。\"},{\"slug\":\"emf-compat-irons-spells-n-spellbooks\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖EMF动画模型，包内无该模组。\"},{\"slug\":\"tensura-compat-irons-spells-n-spellbooks\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Tensura，包内无该模组。\"},{\"slug\":\"tensura-not-enough-bosses\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Tensura，包内无该模组。\"},{\"slug\":\"tensura-unique-monsters\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Tensura，包内无该模组。\"},{\"slug\":\"better-combat-x-cataclysm-spellbooks-compatibility\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Better Combat，包内无该模组。\"},{\"slug\":\"daily-boss-x-irons-spells-n-spellbooks\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Daily Boss，包内无该模组。\"},{\"slug\":\"golem-magicka\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖ModularGolems，包内无该模组。\"},{\"slug\":\"isskjs\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖KubeJS，包内无该模组。\"},{\"slug\":\"aces-spell-utils\",\"reason\":\"OTHER\",\"explanation\":\"纯开发API，对玩家无直接内容。\"},{\"slug\":\"spell-engine\",\"reason\":\"OTHER\",\"explanation\":\"纯魔法库，非铁魔法附属。\"},{\"slug\":\"spell-power\",\"reason\":\"OTHER\",\"explanation\":\"纯属性库，非铁魔法附属。\"},{\"slug\":\"archers-expansion\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖RPG Series弓箭手，包内无该模组。\"},{\"slug\":\"explore-ruins-aether\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖天境维度，包内无该模组。\"},{\"slug\":\"aeroblender\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖天境与TerraBlender，包内无天境。\"},{\"slug\":\"repurposed-structures-friends-and-foes-compat\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Friends and Foes，包内无该模组。\"},{\"slug\":\"one-dimension\",\"reason\":\"CONFLICT\",\"explanation\":\"合并三维度，破坏下界末地独立生态。\"},{\"slug\":\"nlyb-dungeonstructure-fragments\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"把地牢搬回家，与外出探险目标相反。\"},{\"slug\":\"crops-n-corpses\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"塔防玩法，偏离冒险与乐事主题。\"},{\"slug\":\"primal-magick\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"独立魔法体系，非铁魔法附属。\"},{\"slug\":\"the-magic-mirror\",\"reason\":\"OTHER\",\"explanation\":\"独立小魔法道具，与核心关联弱。\"},{\"slug\":\"fps-horizon\",\"reason\":\"CONFLICT\",\"explanation\":\"要求Embeddium，与已选Sodium渲染器冲突。\"},{\"slug\":\"x+-autofish\",\"reason\":\"DUPLICATE_FUNCTION\",\"explanation\":\"与x-plus-autofish功能重复。\"},{\"slug\":\"peaceful-monsters\",\"reason\":\"OTHER\",\"explanation\":\"和平模式生成怪物，偏离冒险主题。\"},{\"slug\":\"creaturesdominion\",\"reason\":\"INSUFFICIENT_EVIDENCE\",\"explanation\":\"作者自述未完成，不宜入包。\"},{\"slug\":\"creaturechat\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"AI对话功能，与需求无关。\"},{\"slug\":\"craft-spawn-eggs-spawners\",\"reason\":\"OTHER\",\"explanation\":\"刷怪蛋合成，偏离生态丰富目标。\"},{\"slug\":\"fpscompress\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"工厂模拟优化，包内无相关模组。\"},{\"slug\":\"createbetterfps\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Create，包内无该模组。\"},{\"slug\":\"clear-gpu-cache\",\"reason\":\"INSUFFICIENT_EVIDENCE\",\"explanation\":\"用途描述模糊，收益无依据。\"},{\"slug\":\"scalablelux\",\"reason\":\"INSUFFICIENT_EVIDENCE\",\"explanation\":\"Fabric光照优化，NeoForge适用性不明。\"},{\"slug\":\"leaves-be-gone\",\"reason\":\"OTHER\",\"explanation\":\"快速落叶，与优化需求关联弱。\"},{\"slug\":\"cull-leaves\",\"reason\":\"OTHER\",\"explanation\":\"树叶剔除，收益有限且与Sodium重叠。\"},{\"slug\":\"chloride\",\"reason\":\"DUPLICATE_FUNCTION\",\"explanation\":\"Sodium附加，与已选渲染优化重叠。\"},{\"slug\":\"lmd\",\"reason\":\"OTHER\",\"explanation\":\"生物消失调整，与优化目标关联弱。\"},{\"slug\":\"moreculling\",\"reason\":\"DUPLICATE_FUNCTION\",\"explanation\":\"与EntityCulling剔除用途重叠。\"},{\"slug\":\"embeddium\",\"reason\":\"CONFLICT\",\"explanation\":\"与已选Sodium渲染器互斥。\"},{\"slug\":\"hopo-better-underwater-ruins\",\"reason\":\"OTHER\",\"explanation\":\"仅水下遗迹，结构覆盖有限。\"},{\"slug\":\"awesome-dungeon-edition-ocean\",\"reason\":\"OTHER\",\"explanation\":\"仅海洋地牢，结构覆盖有限。\"},{\"slug\":\"dungeons+\",\"reason\":\"OTHER\",\"explanation\":\"重做原版地牢，与YUNG地牢重叠。\"},{\"slug\":\"dungeons-and-taverns-stronghold-overhaul\",\"reason\":\"OTHER\",\"explanation\":\"仅要塞重做，且首次生成卡顿。\"},{\"slug\":\"dungeons-and-taverns-pillager-outpost-overhaul\",\"reason\":\"OTHER\",\"explanation\":\"仅掠夺者前哨重做，覆盖有限。\"},{\"slug\":\"dungeons-and-taverns-woodland-mansion-overhaul\",\"reason\":\"OTHER\",\"explanation\":\"仅林地府邸重做，覆盖有限。\"},{\"slug\":\"dungeons-and-taverns-nether-fortress-overhaul\",\"reason\":\"OTHER\",\"explanation\":\"仅下界要塞重做，覆盖有限。\"},{\"slug\":\"adventure-dungeons\",\"reason\":\"OTHER\",\"explanation\":\"数据包结构，与已选结构重叠。\"},{\"slug\":\"dungeons_delight\",\"reason\":\"OTHER\",\"explanation\":\"怪物烹饪，偏离乐事联动重点。\"},{\"slug\":\"moraymobs\",\"reason\":\"OTHER\",\"explanation\":\"少量怪异生物，生态覆盖有限。\"},{\"slug\":\"arsdelight\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Ars Nouveau，包内无该模组。\"},{\"slug\":\"lets-do-addon-corn-expansion\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Let's Do Farm&Charm，包内无该模组。\"},{\"slug\":\"aeromancy-additions\",\"reason\":\"OTHER\",\"explanation\":\"风系附属，与已选Wind's Spellbooks重叠。\"},{\"slug\":\"golem-spawn-animation\",\"reason\":\"OTHER\",\"explanation\":\"仅铁傀儡生成动画，价值有限。\"},{\"slug\":\"dynamic-performance\",\"reason\":\"INSUFFICIENT_EVIDENCE\",\"explanation\":\"动态调参，与已选优化用途重叠。\"},{\"slug\":\"farmers-delight-tfc\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖泰拉瑞拉法克，与本包无关。\"}],\"allowBackfill\":true,\"requirements\":[{\"id\":\"r-67e552f818f5690f\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"我想玩一个Neoforge1.21.1的冒险整合包\",\"evidence\":[{\"slug\":\"when-dungeons-arise\",\"quote\":\"Adds various elegant -and likely hostile- roguelike dungeons and structures that generate on your worlds!\",\"purpose\":\"提供冒险向地牢探索内容\"}],\"gap\":\"\"},{\"source\":\"名字是朝花夕拾\",\"evidence\":[],\"gap\":\"\"},{\"source\":\"大概100~200个模组\",\"evidence\":[],\"gap\":\"\"},{\"source\":\"要求：\",\"evidence\":[],\"gap\":\"\"}]},{\"id\":\"r-9b9fcfa450a96d4c\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"1）以铁魔法为核心\",\"evidence\":[{\"slug\":\"irons-spells-n-spellbooks\",\"quote\":\"A magic mod bringing back the classic RPG spellcasting fantasy.\",\"purpose\":\"已选核心魔法模组\"}],\"gap\":\"\"},{\"source\":\"多补充一些铁魔法的附属\",\"evidence\":[{\"slug\":\"magic-from-the-east\",\"quote\":\"An add-on mod for Iron's Spell n' Spellbooks that adding new schools, spells and stuffs inspired from ancient Asian and Middle Eastern culture\",\"purpose\":\"新增学派与法术\"},{\"slug\":\"irons-spells-n-spellbooksmonsters-spellbooks\",\"quote\":\"brings a 100+ spells,2 new spell schools and a ton of new gear and uniqye spell casting enemies\",\"purpose\":\"大量法术与施法敌人\"}],\"gap\":\"\"}]},{\"id\":\"r-ffffaa35465c974d\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"2）包含Alex生物\",\"evidence\":[{\"slug\":\"alexs-mobs-1.21.1\",\"quote\":\"Alex's Mobs\",\"purpose\":\"已选生物模组\"}],\"gap\":\"\"},{\"source\":\"Alex洞穴\",\"evidence\":[{\"slug\":\"alexs-caves-unofficial-port\",\"quote\":\"Alex's Caves\",\"purpose\":\"已选洞穴模组\"}],\"gap\":\"\"},{\"source\":\"冰火传说\",\"evidence\":[{\"slug\":\"iceandfire-ce\",\"quote\":\"Ice and Fire\",\"purpose\":\"已选冰火传说\"}],\"gap\":\"\"},{\"source\":\"灾变\",\"evidence\":[{\"slug\":\"l_enders-cataclysm\",\"quote\":\"Cataclysm is a mod that adds difficult dungeons, challenging boss-fights and powerful items.\",\"purpose\":\"已选灾变\"}],\"gap\":\"\"},{\"source\":\"海灵物语\",\"evidence\":[{\"slug\":\"aquamirae\",\"quote\":\"Ship graveyard with terrible deep sea creatures!\",\"purpose\":\"已选海灵物语\"}],\"gap\":\"\"},{\"source\":\"yagens-attributes\",\"evidence\":[{\"slug\":\"yagens-attributes\",\"quote\":\"A Warframe like mod for Minecraft,which changes many aspects of vanilla.\",\"purpose\":\"已选属性模组\"}],\"gap\":\"\"}]},{\"id\":\"r-bc37e982a35501ab\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"3）包含农夫乐事及其附属\",\"evidence\":[{\"slug\":\"more-delight\",\"quote\":\"Extra meals, knives, and ingredients for Farmer's Delight that improve your culinary experience.\",\"purpose\":\"扩充乐事餐食与食材\"},{\"slug\":\"expanded-delight\",\"quote\":\"adds many more crops and functionality to the base mod\",\"purpose\":\"新增作物与功能\"}],\"gap\":\"\"},{\"source\":\"特别是整合包内有的模组的乐事联动附属\",\"evidence\":[{\"slug\":\"farmers-spell\",\"quote\":\"A dual crossover addon for both Iron's Spells 'n Spellbooks and Farmer's Delight\",\"purpose\":\"铁魔法与乐事联动\"},{\"slug\":\"jadens-nether-expansion-delight\",\"quote\":\"Adds 30+ foods, linking Jaden's Nether Expansion and Farmer's Delight in a Vanilla style.\",\"purpose\":\"下界扩展与乐事联动\"}],\"gap\":\"\"}]},{\"id\":\"r-5cf0f6a6a62b3005\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"4）有丰富的群系\",\"evidence\":[{\"slug\":\"biomes-o-plenty\",\"quote\":\"Adds 50+ unique biomes to enhance your world, with new trees, flowers, and more!\",\"purpose\":\"新增50+群系\"},{\"slug\":\"oh-the-biomes-weve-gone\",\"quote\":\"with over 50+ biomes ranging from the magical to the realistic and all breathtaking!\",\"purpose\":\"新增50+群系\"}],\"gap\":\"\"},{\"source\":\"结构能够探险\",\"evidence\":[{\"slug\":\"when-dungeons-arise\",\"quote\":\"Adds various elegant -and likely hostile- roguelike dungeons and structures that generate on your worlds!\",\"purpose\":\"大量地牢结构\"},{\"slug\":\"dungeons-and-taverns\",\"quote\":\"A Structure Datapack adding dungeons, taverns and other structures to find while you explore the world.\",\"purpose\":\"酒馆与地牢结构\"}],\"gap\":\"\"}]},{\"id\":\"r-dd92b724e4021036\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"5）有丰富的生物生态\",\"evidence\":[{\"slug\":\"rottencreatures\",\"quote\":\"aims to add a lot of awesome new zombie mobs to Minecraft!\",\"purpose\":\"新增大量僵尸生物\"},{\"slug\":\"mutant-monsters\",\"quote\":\"Face scary creatures and powerful beasts like never before.\",\"purpose\":\"新增强力变异生物\"}],\"gap\":\"\"}]},{\"id\":\"r-db64c85a26399b55\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"6）丰富下界\",\"evidence\":[{\"slug\":\"incendium\",\"quote\":\"A nether biome overhaul combined with challenging structures to conquer, unique weapons to obtain, and tricky mobs to defeat.\",\"purpose\":\"已选下界群系重做\"},{\"slug\":\"luminous-nether\",\"quote\":\"Explore new nether biomes with dangerous foes!\",\"purpose\":\"新增下界群系与生物\"}],\"gap\":\"\"},{\"source\":\"末地生态\",\"evidence\":[{\"slug\":\"nullscape\",\"quote\":\"Transforms the boring Vanilla end into an alien dimension with the most surreal terrain imaginable.\",\"purpose\":\"已选末地地形重做\"},{\"slug\":\"mes-moogs-end-structures\",\"quote\":\"Lots of Vanilla styled structrues to fill up the end dimension with life!\",\"purpose\":\"末地结构补充\"}],\"gap\":\"\"}]},{\"id\":\"r-74115bb006c9ef5b\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"7）有很多优化模组\",\"evidence\":[{\"slug\":\"sodium\",\"quote\":\"A high-performance rendering engine replacement for Minecraft, which greatly improves frame rates and reduces micro-stutter.\",\"purpose\":\"渲染性能优化\"},{\"slug\":\"ferrite-core\",\"quote\":\"Memory usage optimizations\",\"purpose\":\"内存占用优化\"},{\"slug\":\"modernfix\",\"quote\":\"All-in-one mod that improves performance, reduces memory usage, and fixes many bugs.\",\"purpose\":\"综合性能与修复\"}],\"gap\":\"\"},{\"source\":\"现代化UI\",\"evidence\":[{\"slug\":\"modern-ui\",\"quote\":\"Modern desktop graphics application framework and low-level 3D graphics engine\",\"purpose\":\"已选现代化UI框架\"}],\"gap\":\"\"},{\"source\":\"修复\",\"evidence\":[{\"slug\":\"modernfix\",\"quote\":\"fixes many bugs\",\"purpose\":\"修复大量问题\"},{\"slug\":\"better-compatibility-checker\",\"quote\":\"Changes the default server compatibility check to compare modpack versions\",\"purpose\":\"修复服务器兼容校验\"}],\"gap\":\"\"}]},{\"id\":\"r-402f7bb1c5ca920e\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"8）有很多实用模组\",\"evidence\":[{\"slug\":\"inventoryhudplus\",\"quote\":\"Adds your main inventory, potion effects and your equipments to your HUD.\",\"purpose\":\"HUD信息显示\"},{\"slug\":\"x-plus-autofish\",\"quote\":\"Automatically reel in and recast the fishing rod when fish bites.\",\"purpose\":\"自动钓鱼便利\"}],\"gap\":\"\"},{\"source\":\"例如苹果皮\",\"evidence\":[{\"slug\":\"appleskin\",\"quote\":\"Food/hunger-related HUD improvements\",\"purpose\":\"已选苹果皮\"}],\"gap\":\"\"},{\"source\":\"jei\",\"evidence\":[{\"slug\":\"jei\",\"quote\":\"View Items and Recipes\",\"purpose\":\"已选JEI\"}],\"gap\":\"\"}]}]}",
+    "{\"schemaVersion\":1,\"approved\":[\"irons-spellbooks-arcane-essence-blocks\",\"dark-doppelganger\",\"irons-spells-n-spellbooks-dynamic-skill-trees\",\"irons-spells-n-spellbooks-restricitons\",\"hazen-n-stuff\",\"magic-from-the-east\",\"spells-gone-wrong\",\"discerning-the-eldritch\",\"crystal-chronicles\",\"iss-food-spelling\",\"wizard-samurai-irons-spells-addon\",\"somake-spells-irons-spells-addon\",\"asterism-arcanum-addon-for-irons-spells-and-spellbooks\",\"irons-spells-n-spellbooks-unstable-magic\",\"valiant-irons-spells-n-spellbooks-addon\",\"easy-arcane-an-irons-spells-spellbooks-addon\",\"irons-spellbooks-tweaks\",\"irons-spells-n-spellbooksmonsters-spellbooks\",\"winds-spellbooks\",\"apprentices-codex\",\"cataclysm-spellbooks\",\"alshanexs-familiars\",\"create-wizardry\",\"deeper-and-darker-spellbooks\",\"irons-spells-n-spellbooks-recolor\",\"epic-fight-x-irons-spells-enhanced-animation\",\"farmers-spell\",\"more-delight\",\"repurposed-structures-farmers-delight-compat\",\"farmers-croptopia\",\"farmers-delight-extended\",\"sniffers-sniffs-delights\",\"international-food\",\"farmers-delight-contracts-feasts\",\"vegan-delight\",\"mexicans-delight\",\"ends-delight\",\"oceans-delight\",\"expanded-delight\",\"ubes-delight\",\"jadens-nether-expansion-delight\",\"croptopia-delight\",\"autochefs-delight\",\"gensokyo-delight-youkais-feasts\",\"campfire-creations\",\"cooking-for-blockheads\",\"biomes-o-plenty\",\"oh-the-biomes-weve-gone\",\"terrablender\",\"epicterrain\",\"epic-terrain_compatible\",\"yungs-better-dungeons\",\"yungs-better-end-island\",\"when-dungeons-arise\",\"when-dungeons-arise-seven-seas\",\"dungeons-and-taverns\",\"dungeons-and-taverns-ancient-city-overhaul\",\"dungeons-and-taverns-swamp-hut-overhaul\",\"explorations\",\"philips-ruins\",\"stonehenge\",\"aztec-ruins\",\"grim-kingdoms-lost-structures-ruins\",\"realm-rpg-fallen-adventurers\",\"create-let-the-adventure-begin\",\"idas\",\"dimensional-dungeons\",\"mes-moogs-end-structures\",\"awesome-dungeon-the-end\",\"medieval-buildings-end-edition\",\"mns-moogs-nether-structures\",\"formations-nether\",\"eternal-nether\",\"medieval-buildings-nether-edition\",\"luminous-nether\",\"jadens-nether-expansion\",\"dungeons-dimensions-nether\",\"rottencreatures\",\"mutant-monsters\",\"legendary-monsters\",\"more-creatures-and-weapons\",\"arphex\",\"cannibal-villages\",\"sodium\",\"entityculling\",\"noisium\",\"ferrite-core\",\"lithium\",\"modernfix\",\"particle-core\",\"dynamic-fps\",\"fps-reducer\",\"ai-improvements\",\"adaptive-performance-tweaks\",\"distanthorizons\",\"performancehud\",\"inventoryhudplus\",\"immersive-armor-hud\",\"better-compatibility-checker\",\"addadd\",\"x-plus-autofish\",\"autosow-by-neni-o\",\"bbrb\",\"sable-ragdolls-armourers-workshop-compatibility-fix\",\"magic-vibe-decorations\"],\"rejected\":[{\"slug\":\"farmers-delight-tfc\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖泰拉瑞拉法克世界，与本整合包无关。\"},{\"slug\":\"energized-power-fd\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"仅为能源模组联动，包内无该模组。\"},{\"slug\":\"crockercorp-delight\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"Minestuck联动，包内无该模组。\"},{\"slug\":\"kaleidoscope-texture-expansion\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖万花筒模组，包内无该模组。\"},{\"slug\":\"farm-3x3-farmers-delight-compatibility\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Farm 3x3，包内无该模组。\"},{\"slug\":\"better-farming-with-hoes-farmers-delight-compatibility\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Better Farming with Hoes，包内无该模组。\"},{\"slug\":\"stacked-blocks-farmers-delight\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Stacked Blocks，包内无该模组。\"},{\"slug\":\"brown-cheese-delight-a-farmers-delight-add-on\",\"reason\":\"OTHER\",\"explanation\":\"仅加一种挪威奶酪，内容过少。\"},{\"slug\":\"fleinsopp-delight-a-farmers-delight-add-on\",\"reason\":\"OTHER\",\"explanation\":\"仅加一种挪威蘑菇，内容过少。\"},{\"slug\":\"right-click-and-milk\",\"reason\":\"OTHER\",\"explanation\":\"仅玻璃瓶挤奶小功能，价值有限。\"},{\"slug\":\"farmers-delight-kacchi\",\"reason\":\"OTHER\",\"explanation\":\"仅少量孟加拉食物，内容单薄。\"},{\"slug\":\"projecte-emc-for-irons-spellbooks\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖ProjectE，包内无该模组。\"},{\"slug\":\"project-mmo-irons-spells-spellbooks-compat\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Project MMO，包内无该模组。\"},{\"slug\":\"ec-irons-spells-compat\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Expanded Combat，包内无该模组。\"},{\"slug\":\"winefoxs_spellbooks\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖车万女仆，包内无该模组。\"},{\"slug\":\"shoulder-surfing-iron-spells-integration\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Shoulder Surfing，包内无该模组。\"},{\"slug\":\"emf-compat-irons-spells-n-spellbooks\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖EMF动画模型，包内无该模组。\"},{\"slug\":\"tensura-compat-irons-spells-n-spellbooks\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Tensura，包内无该模组。\"},{\"slug\":\"tensura-not-enough-bosses\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Tensura，包内无该模组。\"},{\"slug\":\"tensura-unique-monsters\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Tensura，包内无该模组。\"},{\"slug\":\"better-combat-x-cataclysm-spellbooks-compatibility\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Better Combat，包内无该模组。\"},{\"slug\":\"daily-boss-x-irons-spells-n-spellbooks\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Daily Boss，包内无该模组。\"},{\"slug\":\"golem-magicka\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖ModularGolems，包内无该模组。\"},{\"slug\":\"isskjs\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖KubeJS，包内无该模组。\"},{\"slug\":\"aces-spell-utils\",\"reason\":\"OTHER\",\"explanation\":\"纯开发API，对玩家无直接内容。\"},{\"slug\":\"spell-engine\",\"reason\":\"OTHER\",\"explanation\":\"纯魔法库，非铁魔法附属。\"},{\"slug\":\"spell-power\",\"reason\":\"OTHER\",\"explanation\":\"纯属性库，非铁魔法附属。\"},{\"slug\":\"archers-expansion\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖RPG Series弓箭手，包内无该模组。\"},{\"slug\":\"explore-ruins-aether\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖天境维度，包内无该模组。\"},{\"slug\":\"aeroblender\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖天境与TerraBlender，包内无天境。\"},{\"slug\":\"repurposed-structures-friends-and-foes-compat\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Friends and Foes，包内无该模组。\"},{\"slug\":\"one-dimension\",\"reason\":\"CONFLICT\",\"explanation\":\"合并三维度，破坏下界末地独立生态。\"},{\"slug\":\"nlyb-dungeonstructure-fragments\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"把地牢搬回家，与外出探险目标相反。\"},{\"slug\":\"crops-n-corpses\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"塔防玩法，偏离冒险与乐事主题。\"},{\"slug\":\"primal-magick\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"独立魔法体系，非铁魔法附属。\"},{\"slug\":\"the-magic-mirror\",\"reason\":\"OTHER\",\"explanation\":\"独立小魔法道具，与核心关联弱。\"},{\"slug\":\"fps-horizon\",\"reason\":\"CONFLICT\",\"explanation\":\"要求Embeddium，与已选Sodium渲染器冲突。\"},{\"slug\":\"x+-autofish\",\"reason\":\"DUPLICATE_FUNCTION\",\"explanation\":\"与x-plus-autofish功能重复。\"},{\"slug\":\"peaceful-monsters\",\"reason\":\"OTHER\",\"explanation\":\"和平模式生成怪物，偏离冒险主题。\"},{\"slug\":\"creaturesdominion\",\"reason\":\"INSUFFICIENT_EVIDENCE\",\"explanation\":\"作者自述未完成，不宜入包。\"},{\"slug\":\"creaturechat\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"AI对话功能，与需求无关。\"},{\"slug\":\"craft-spawn-eggs-spawners\",\"reason\":\"OTHER\",\"explanation\":\"刷怪蛋合成，偏离生态丰富目标。\"},{\"slug\":\"fpscompress\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"工厂模拟优化，包内无相关模组。\"},{\"slug\":\"createbetterfps\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Create，包内无该模组。\"},{\"slug\":\"clear-gpu-cache\",\"reason\":\"INSUFFICIENT_EVIDENCE\",\"explanation\":\"用途描述模糊，收益无依据。\"},{\"slug\":\"scalablelux\",\"reason\":\"INSUFFICIENT_EVIDENCE\",\"explanation\":\"Fabric光照优化，NeoForge适用性不明。\"},{\"slug\":\"leaves-be-gone\",\"reason\":\"OTHER\",\"explanation\":\"快速落叶，与优化需求关联弱。\"},{\"slug\":\"cull-leaves\",\"reason\":\"OTHER\",\"explanation\":\"树叶剔除，收益有限且与Sodium重叠。\"},{\"slug\":\"chloride\",\"reason\":\"DUPLICATE_FUNCTION\",\"explanation\":\"Sodium附加，与已选渲染优化重叠。\"},{\"slug\":\"lmd\",\"reason\":\"OTHER\",\"explanation\":\"生物消失调整，与优化目标关联弱。\"},{\"slug\":\"moreculling\",\"reason\":\"DUPLICATE_FUNCTION\",\"explanation\":\"与EntityCulling剔除用途重叠。\"},{\"slug\":\"embeddium\",\"reason\":\"CONFLICT\",\"explanation\":\"与已选Sodium渲染器互斥。\"},{\"slug\":\"hopo-better-underwater-ruins\",\"reason\":\"OTHER\",\"explanation\":\"仅水下遗迹，结构覆盖有限。\"},{\"slug\":\"awesome-dungeon-edition-ocean\",\"reason\":\"OTHER\",\"explanation\":\"仅海洋地牢，结构覆盖有限。\"},{\"slug\":\"dungeons+\",\"reason\":\"OTHER\",\"explanation\":\"重做原版地牢，与YUNG地牢重叠。\"},{\"slug\":\"dungeons-and-taverns-stronghold-overhaul\",\"reason\":\"OTHER\",\"explanation\":\"仅要塞重做，且首次生成卡顿。\"},{\"slug\":\"dungeons-and-taverns-pillager-outpost-overhaul\",\"reason\":\"OTHER\",\"explanation\":\"仅掠夺者前哨重做，覆盖有限。\"},{\"slug\":\"dungeons-and-taverns-woodland-mansion-overhaul\",\"reason\":\"OTHER\",\"explanation\":\"仅林地府邸重做，覆盖有限。\"},{\"slug\":\"dungeons-and-taverns-nether-fortress-overhaul\",\"reason\":\"OTHER\",\"explanation\":\"仅下界要塞重做，覆盖有限。\"},{\"slug\":\"adventure-dungeons\",\"reason\":\"OTHER\",\"explanation\":\"数据包结构，与已选结构重叠。\"},{\"slug\":\"dungeons_delight\",\"reason\":\"OTHER\",\"explanation\":\"怪物烹饪，偏离乐事联动重点。\"},{\"slug\":\"moraymobs\",\"reason\":\"OTHER\",\"explanation\":\"少量怪异生物，生态覆盖有限。\"},{\"slug\":\"arsdelight\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Ars Nouveau，包内无该模组。\"},{\"slug\":\"lets-do-addon-corn-expansion\",\"reason\":\"OFF_TOPIC\",\"explanation\":\"依赖Let's Do Farm&Charm，包内无该模组。\"},{\"slug\":\"aeromancy-additions\",\"reason\":\"OTHER\",\"explanation\":\"风系附属，与已选Wind's Spellbooks重叠。\"},{\"slug\":\"golem-spawn-animation\",\"reason\":\"OTHER\",\"explanation\":\"仅铁傀儡生成动画，价值有限。\"},{\"slug\":\"dynamic-performance\",\"reason\":\"INSUFFICIENT_EVIDENCE\",\"explanation\":\"动态调参，与已选优化用途重叠。\"}],\"allowBackfill\":true,\"requirements\":[{\"id\":\"r-67e552f818f5690f\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"我想玩一个Neoforge1.21.1的冒险整合包\",\"evidence\":[{\"slug\":\"when-dungeons-arise\",\"quote\":\"Adds various elegant -and likely hostile- roguelike dungeons and structures that generate on your worlds!\",\"purpose\":\"提供冒险向地牢探索内容\"}],\"gap\":\"\"},{\"source\":\"名字是朝花夕拾\",\"evidence\":[],\"gap\":\"\"},{\"source\":\"大概100~200个模组\",\"evidence\":[],\"gap\":\"\"},{\"source\":\"要求：\",\"evidence\":[],\"gap\":\"\"}]},{\"id\":\"r-9b9fcfa450a96d4c\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"1）以铁魔法为核心\",\"evidence\":[{\"slug\":\"irons-spells-n-spellbooks\",\"quote\":\"A magic mod bringing back the classic RPG spellcasting fantasy.\",\"purpose\":\"已选核心魔法模组\"}],\"gap\":\"\"},{\"source\":\"多补充一些铁魔法的附属\",\"evidence\":[{\"slug\":\"magic-from-the-east\",\"quote\":\"An add-on mod for Iron's Spell n' Spellbooks that adding new schools, spells and stuffs inspired from ancient Asian and Middle Eastern culture\",\"purpose\":\"新增学派与法术\"},{\"slug\":\"irons-spells-n-spellbooksmonsters-spellbooks\",\"quote\":\"brings a 100+ spells,2 new spell schools and a ton of new gear and uniqye spell casting enemies\",\"purpose\":\"大量法术与施法敌人\"}],\"gap\":\"\"}]},{\"id\":\"r-ffffaa35465c974d\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"2）包含Alex生物\",\"evidence\":[{\"slug\":\"alexs-mobs-1.21.1\",\"quote\":\"Alex's Mobs\",\"purpose\":\"已选生物模组\"}],\"gap\":\"\"},{\"source\":\"Alex洞穴\",\"evidence\":[{\"slug\":\"alexs-caves-unofficial-port\",\"quote\":\"Alex's Caves\",\"purpose\":\"已选洞穴模组\"}],\"gap\":\"\"},{\"source\":\"冰火传说\",\"evidence\":[{\"slug\":\"iceandfire-ce\",\"quote\":\"Ice and Fire\",\"purpose\":\"已选冰火传说\"}],\"gap\":\"\"},{\"source\":\"灾变\",\"evidence\":[{\"slug\":\"l_enders-cataclysm\",\"quote\":\"Cataclysm is a mod that adds difficult dungeons, challenging boss-fights and powerful items.\",\"purpose\":\"已选灾变\"}],\"gap\":\"\"},{\"source\":\"海灵物语\",\"evidence\":[{\"slug\":\"aquamirae\",\"quote\":\"Ship graveyard with terrible deep sea creatures!\",\"purpose\":\"已选海灵物语\"}],\"gap\":\"\"},{\"source\":\"yagens-attributes\",\"evidence\":[{\"slug\":\"yagens-attributes\",\"quote\":\"A Warframe like mod for Minecraft,which changes many aspects of vanilla.\",\"purpose\":\"已选属性模组\"}],\"gap\":\"\"}]},{\"id\":\"r-bc37e982a35501ab\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"3）包含农夫乐事及其附属\",\"evidence\":[{\"slug\":\"more-delight\",\"quote\":\"Extra meals, knives, and ingredients for Farmer's Delight that improve your culinary experience.\",\"purpose\":\"扩充乐事餐食与食材\"},{\"slug\":\"expanded-delight\",\"quote\":\"adds many more crops and functionality to the base mod\",\"purpose\":\"新增作物与功能\"}],\"gap\":\"\"},{\"source\":\"特别是整合包内有的模组的乐事联动附属\",\"evidence\":[{\"slug\":\"farmers-spell\",\"quote\":\"A dual crossover addon for both Iron's Spells 'n Spellbooks and Farmer's Delight\",\"purpose\":\"铁魔法与乐事联动\"},{\"slug\":\"jadens-nether-expansion-delight\",\"quote\":\"Adds 30+ foods, linking Jaden's Nether Expansion and Farmer's Delight in a Vanilla style.\",\"purpose\":\"下界扩展与乐事联动\"}],\"gap\":\"\"}]},{\"id\":\"r-5cf0f6a6a62b3005\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"4）有丰富的群系\",\"evidence\":[{\"slug\":\"biomes-o-plenty\",\"quote\":\"Adds 50+ unique biomes to enhance your world, with new trees, flowers, and more!\",\"purpose\":\"新增50+群系\"},{\"slug\":\"oh-the-biomes-weve-gone\",\"quote\":\"with over 50+ biomes ranging from the magical to the realistic and all breathtaking!\",\"purpose\":\"新增50+群系\"}],\"gap\":\"\"},{\"source\":\"结构能够探险\",\"evidence\":[{\"slug\":\"when-dungeons-arise\",\"quote\":\"Adds various elegant -and likely hostile- roguelike dungeons and structures that generate on your worlds!\",\"purpose\":\"大量地牢结构\"},{\"slug\":\"dungeons-and-taverns\",\"quote\":\"A Structure Datapack adding dungeons, taverns and other structures to find while you explore the world.\",\"purpose\":\"酒馆与地牢结构\"}],\"gap\":\"\"}]},{\"id\":\"r-dd92b724e4021036\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"5）有丰富的生物生态\",\"evidence\":[{\"slug\":\"rottencreatures\",\"quote\":\"aims to add a lot of awesome new zombie mobs to Minecraft!\",\"purpose\":\"新增大量僵尸生物\"},{\"slug\":\"mutant-monsters\",\"quote\":\"Face scary creatures and powerful beasts like never before.\",\"purpose\":\"新增强力变异生物\"}],\"gap\":\"\"}]},{\"id\":\"r-db64c85a26399b55\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"6）丰富下界\",\"evidence\":[{\"slug\":\"incendium\",\"quote\":\"A nether biome overhaul combined with challenging structures to conquer, unique weapons to obtain, and tricky mobs to defeat.\",\"purpose\":\"已选下界群系重做\"},{\"slug\":\"luminous-nether\",\"quote\":\"Explore new nether biomes with dangerous foes!\",\"purpose\":\"新增下界群系与生物\"}],\"gap\":\"\"},{\"source\":\"末地生态\",\"evidence\":[{\"slug\":\"nullscape\",\"quote\":\"Transforms the boring Vanilla end into an alien dimension with the most surreal terrain imaginable.\",\"purpose\":\"已选末地地形重做\"},{\"slug\":\"mes-moogs-end-structures\",\"quote\":\"Lots of Vanilla styled structrues to fill up the end dimension with life!\",\"purpose\":\"末地结构补充\"}],\"gap\":\"\"}]},{\"id\":\"r-74115bb006c9ef5b\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"7）有很多优化模组\",\"evidence\":[{\"slug\":\"sodium\",\"quote\":\"A high-performance rendering engine replacement for Minecraft, which greatly improves frame rates and reduces micro-stutter.\",\"purpose\":\"渲染性能优化\"},{\"slug\":\"ferrite-core\",\"quote\":\"Memory usage optimizations\",\"purpose\":\"内存占用优化\"},{\"slug\":\"modernfix\",\"quote\":\"All-in-one mod that improves performance, reduces memory usage, and fixes many bugs.\",\"purpose\":\"综合性能与修复\"}],\"gap\":\"\"},{\"source\":\"现代化UI\",\"evidence\":[{\"slug\":\"modern-ui\",\"quote\":\"Modern desktop graphics application framework and low-level 3D graphics engine\",\"purpose\":\"已选现代化UI框架\"}],\"gap\":\"\"},{\"source\":\"修复\",\"evidence\":[{\"slug\":\"modernfix\",\"quote\":\"fixes many bugs\",\"purpose\":\"修复大量问题\"},{\"slug\":\"better-compatibility-checker\",\"quote\":\"Changes the default server compatibility check to compare modpack versions\",\"purpose\":\"修复服务器兼容校验\"}],\"gap\":\"\"}]},{\"id\":\"r-402f7bb1c5ca920e\",\"evidence\":[],\"gap\":\"\",\"criteria\":[{\"source\":\"8）有很多实用模组\",\"evidence\":[{\"slug\":\"inventoryhudplus\",\"quote\":\"Adds your main inventory, potion effects and your equipments to your HUD.\",\"purpose\":\"HUD信息显示\"},{\"slug\":\"x-plus-autofish\",\"quote\":\"Automatically reel in and recast the fishing rod when fish bites.\",\"purpose\":\"自动钓鱼便利\"}],\"gap\":\"\"},{\"source\":\"例如苹果皮\",\"evidence\":[{\"slug\":\"appleskin\",\"quote\":\"Food/hunger-related HUD improvements\",\"purpose\":\"已选苹果皮\"}],\"gap\":\"\"},{\"source\":\"jei\",\"evidence\":[{\"slug\":\"jei\",\"quote\":\"View Items and Recipes\",\"purpose\":\"已选JEI\"}],\"gap\":\"\"}]}]}"
+  ]
+}

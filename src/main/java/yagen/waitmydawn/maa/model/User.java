@@ -32,6 +32,15 @@ public class User {
     private boolean enableBlacklist = false;        // 是否启用模组黑名单
     private boolean enableUserFeedbackRules = false; // 是否参考用户反馈的模组关系规则
 
+    @Column(columnDefinition = "boolean default true not null")
+    private boolean popupAddons = true;
+    @Column(columnDefinition = "boolean default true not null")
+    private boolean popupReplacements = true;
+    @Column(columnDefinition = "boolean default true not null")
+    private boolean popupOverlap = true;
+    @Column(columnDefinition = "boolean default true not null")
+    private boolean popupGeneration = true;
+
     /**
      * 邮箱（**归一化后的小写**，注册/绑定必填，唯一）。
      *
@@ -77,6 +86,13 @@ public class User {
     public void setEnableBlacklist(boolean v) { this.enableBlacklist = v; }
     public boolean isEnableUserFeedbackRules() { return enableUserFeedbackRules; }
     public void setEnableUserFeedbackRules(boolean v) { this.enableUserFeedbackRules = v; }
+    public PopupPreferences getSelectionPreferences() {
+        return new PopupPreferences(popupAddons, popupReplacements, popupOverlap, popupGeneration);
+    }
+    public void setSelectionPreferences(PopupPreferences value) {
+        popupAddons = value.addons(); popupReplacements = value.replacements();
+        popupOverlap = value.overlap(); popupGeneration = value.generation();
+    }
     public String getEmail() { return email; }
     public void setEmail(String v) { this.email = v; }
     public boolean isEmailVerified() { return emailVerified; }

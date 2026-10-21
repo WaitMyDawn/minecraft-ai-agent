@@ -1,0 +1,434 @@
+[
+  {
+    "name": "任意玩法用途已有证据",
+    "row": {
+      "id": "r-0000000000000001",
+      "source": "任意玩法用途已有证据",
+      "status": "SUPPORTING_EVIDENCE",
+      "note": "",
+      "modCount": 1,
+      "missingCount": 0,
+      "mods": [],
+      "missing": [],
+      "criteria": [],
+      "quantity": null,
+      "evidenceState": {
+        "code": "VERIFIED",
+        "projects": [],
+        "countsComplete": true
+      },
+      "assessment": {
+        "schemaVersion": 1,
+        "outcome": "MET",
+        "label": "已满足",
+        "evidenceCode": "VERIFIED",
+        "evidenceLabel": "已有核对依据",
+        "userRemoved": [],
+        "cleanupRemoved": [],
+        "automaticRemoved": []
+      }
+    }
+  },
+  {
+    "name": "点名项目未入包",
+    "row": {
+      "id": "r-0000000000000001",
+      "source": "点名项目未入包",
+      "status": "NOT_RETAINED",
+      "note": "",
+      "modCount": 0,
+      "missingCount": 1,
+      "mods": [],
+      "missing": [],
+      "criteria": [],
+      "quantity": null,
+      "evidenceState": {
+        "code": "PROJECT_MISSING",
+        "projects": [],
+        "countsComplete": true
+      },
+      "assessment": {
+        "schemaVersion": 1,
+        "outcome": "NOT_MET",
+        "label": "未满足",
+        "evidenceCode": "PROJECT_MISSING",
+        "evidenceLabel": "点名项目未保留",
+        "userRemoved": [],
+        "cleanupRemoved": [],
+        "automaticRemoved": []
+      }
+    }
+  },
+  {
+    "name": "部分点名项目仍缺失",
+    "row": {
+      "id": "r-0000000000000001",
+      "source": "部分点名项目仍缺失",
+      "status": "PARTIAL",
+      "note": "",
+      "modCount": 1,
+      "missingCount": 1,
+      "mods": [],
+      "missing": [],
+      "criteria": [],
+      "quantity": null,
+      "evidenceState": {
+        "code": "PROJECT_MISSING",
+        "projects": [],
+        "countsComplete": true
+      },
+      "assessment": {
+        "schemaVersion": 1,
+        "outcome": "PARTIAL",
+        "label": "部分满足",
+        "evidenceCode": "PROJECT_MISSING",
+        "evidenceLabel": "点名项目未保留",
+        "userRemoved": [],
+        "cleanupRemoved": [],
+        "automaticRemoved": []
+      }
+    }
+  },
+  {
+    "name": "资料未完成审核",
+    "row": {
+      "id": "r-0000000000000001",
+      "source": "资料未完成审核",
+      "status": "UNVERIFIED",
+      "note": "",
+      "modCount": 0,
+      "missingCount": 0,
+      "mods": [],
+      "missing": [],
+      "criteria": [],
+      "quantity": null,
+      "evidenceState": {
+        "code": "NO_REVIEW",
+        "projects": [],
+        "countsComplete": true
+      },
+      "assessment": {
+        "schemaVersion": 1,
+        "outcome": "UNKNOWN",
+        "label": "暂无法核实",
+        "evidenceCode": "NO_REVIEW",
+        "evidenceLabel": "用途依据尚未核实",
+        "userRemoved": [],
+        "cleanupRemoved": [],
+        "automaticRemoved": []
+      }
+    }
+  },
+  {
+    "name": "版本待核对",
+    "row": {
+      "id": "r-0000000000000001",
+      "source": "版本待核对",
+      "status": "UNVERIFIED",
+      "note": "",
+      "modCount": 1,
+      "missingCount": 0,
+      "mods": [],
+      "missing": [],
+      "criteria": [],
+      "quantity": null,
+      "evidenceState": {
+        "code": "VERSION_PENDING",
+        "projects": [],
+        "countsComplete": true
+      },
+      "assessment": {
+        "schemaVersion": 1,
+        "outcome": "UNKNOWN",
+        "label": "暂无法核实",
+        "evidenceCode": "VERSION_PENDING",
+        "evidenceLabel": "选版尚未核实",
+        "userRemoved": [],
+        "cleanupRemoved": [],
+        "automaticRemoved": []
+      }
+    }
+  },
+  {
+    "name": "局部数量不足",
+    "row": {
+      "id": "r-0000000000000001",
+      "source": "局部数量不足",
+      "status": "PARTIAL",
+      "note": "",
+      "modCount": 1,
+      "missingCount": 0,
+      "mods": [],
+      "missing": [],
+      "criteria": [],
+      "quantity": {
+        "scope": "ADDED_ROOTS",
+        "min": 2,
+        "max": 4,
+        "actual": 1,
+        "projects": [
+          "one"
+        ],
+        "complete": true
+      },
+      "evidenceState": {
+        "code": "VERIFIED",
+        "projects": [],
+        "countsComplete": true
+      },
+      "assessment": {
+        "schemaVersion": 1,
+        "outcome": "PARTIAL",
+        "label": "部分满足",
+        "evidenceCode": "VERIFIED",
+        "evidenceLabel": "已有核对依据",
+        "userRemoved": [],
+        "cleanupRemoved": [],
+        "automaticRemoved": []
+      }
+    }
+  },
+  {
+    "name": "数量达到但计数证据不完整",
+    "row": {
+      "id": "r-0000000000000001",
+      "source": "数量达到但计数证据不完整",
+      "status": "SUPPORTING_EVIDENCE",
+      "note": "",
+      "modCount": 2,
+      "missingCount": 0,
+      "mods": [],
+      "missing": [],
+      "criteria": [],
+      "quantity": {
+        "scope": "ADDED_ROOTS",
+        "min": 2,
+        "max": 4,
+        "actual": 2,
+        "projects": [
+          "one",
+          "two"
+        ],
+        "complete": false
+      },
+      "evidenceState": {
+        "code": "VERIFIED",
+        "projects": [],
+        "countsComplete": true
+      },
+      "assessment": {
+        "schemaVersion": 1,
+        "outcome": "UNKNOWN",
+        "label": "暂无法核实",
+        "evidenceCode": "VERIFIED",
+        "evidenceLabel": "已有核对依据；数量证据不完整",
+        "userRemoved": [],
+        "cleanupRemoved": [],
+        "automaticRemoved": []
+      }
+    }
+  },
+  {
+    "name": "有项目但审核仍有缺口",
+    "row": {
+      "id": "r-0000000000000001",
+      "source": "有项目但审核仍有缺口",
+      "status": "PARTIAL",
+      "note": "",
+      "modCount": 1,
+      "missingCount": 0,
+      "mods": [],
+      "missing": [],
+      "criteria": [],
+      "quantity": null,
+      "evidenceState": {
+        "code": "REVIEW_GAP",
+        "projects": [],
+        "countsComplete": true
+      },
+      "assessment": {
+        "schemaVersion": 1,
+        "outcome": "PARTIAL",
+        "label": "部分满足",
+        "evidenceCode": "REVIEW_GAP",
+        "evidenceLabel": "审核仍有待核对事项",
+        "userRemoved": [],
+        "cleanupRemoved": [],
+        "automaticRemoved": []
+      }
+    }
+  },
+  {
+    "name": "用户确认尚未完成",
+    "row": {
+      "id": "r-0000000000000001",
+      "source": "用户确认尚未完成",
+      "status": "WAITING_SELECTION",
+      "note": "",
+      "modCount": 0,
+      "missingCount": 0,
+      "mods": [],
+      "missing": [],
+      "criteria": [],
+      "quantity": null,
+      "evidenceState": {
+        "code": "NO_REVIEW",
+        "projects": [],
+        "countsComplete": true
+      },
+      "assessment": {
+        "schemaVersion": 1,
+        "outcome": "WAITING",
+        "label": "待选择",
+        "evidenceCode": "NO_REVIEW",
+        "evidenceLabel": "用途依据尚未核实",
+        "userRemoved": [],
+        "cleanupRemoved": [],
+        "automaticRemoved": []
+      }
+    }
+  },
+  {
+    "name": "复合目标不可由单项覆盖替代",
+    "row": {
+      "id": "r-0000000000000001",
+      "source": "复合目标不可由单项覆盖替代",
+      "status": "SUPPORTING_EVIDENCE",
+      "note": "",
+      "modCount": 1,
+      "missingCount": 0,
+      "mods": [],
+      "missing": [],
+      "criteria": [
+        {
+          "id": "r-0000000000000003",
+          "source": "任意玩法用途已有证据",
+          "status": "SUPPORTING_EVIDENCE",
+          "note": "",
+          "modCount": 1,
+          "missingCount": 0,
+          "mods": [],
+          "missing": [],
+          "criteria": [],
+          "quantity": null,
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        },
+        {
+          "id": "r-0000000000000002",
+          "source": "资料未完成审核",
+          "status": "UNVERIFIED",
+          "note": "",
+          "modCount": 0,
+          "missingCount": 0,
+          "mods": [],
+          "missing": [],
+          "criteria": [],
+          "quantity": null,
+          "evidenceState": {
+            "code": "NO_REVIEW",
+            "projects": [],
+            "countsComplete": true
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "UNKNOWN",
+            "label": "暂无法核实",
+            "evidenceCode": "NO_REVIEW",
+            "evidenceLabel": "用途依据尚未核实",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "quantity": null,
+      "evidenceState": {
+        "code": "VERIFIED",
+        "projects": [],
+        "countsComplete": true
+      },
+      "assessment": {
+        "schemaVersion": 1,
+        "outcome": "PARTIAL",
+        "label": "部分满足",
+        "evidenceCode": "VERIFIED",
+        "evidenceLabel": "已有核对依据",
+        "userRemoved": [],
+        "cleanupRemoved": [],
+        "automaticRemoved": []
+      }
+    }
+  },
+  {
+    "name": "子项完成不能掩盖父项版本待核实",
+    "row": {
+      "id": "r-0000000000000001",
+      "source": "子项完成不能掩盖父项版本待核实",
+      "status": "PARTIAL",
+      "note": "",
+      "modCount": 1,
+      "missingCount": 0,
+      "mods": [],
+      "missing": [],
+      "criteria": [
+        {
+          "id": "r-0000000000000003",
+          "source": "任意玩法用途已有证据",
+          "status": "SUPPORTING_EVIDENCE",
+          "note": "",
+          "modCount": 1,
+          "missingCount": 0,
+          "mods": [],
+          "missing": [],
+          "criteria": [],
+          "quantity": null,
+          "evidenceState": {
+            "code": "VERIFIED",
+            "projects": [],
+            "countsComplete": true
+          },
+          "assessment": {
+            "schemaVersion": 1,
+            "outcome": "MET",
+            "label": "已满足",
+            "evidenceCode": "VERIFIED",
+            "evidenceLabel": "已有核对依据",
+            "userRemoved": [],
+            "cleanupRemoved": [],
+            "automaticRemoved": []
+          }
+        }
+      ],
+      "quantity": null,
+      "evidenceState": {
+        "code": "VERSION_PENDING",
+        "projects": [],
+        "countsComplete": true
+      },
+      "assessment": {
+        "schemaVersion": 1,
+        "outcome": "PARTIAL",
+        "label": "部分满足",
+        "evidenceCode": "VERSION_PENDING",
+        "evidenceLabel": "选版尚未核实",
+        "userRemoved": [],
+        "cleanupRemoved": [],
+        "automaticRemoved": []
+      }
+    }
+  }
+]

@@ -151,6 +151,39 @@ public class ModrinthApiClient {
         fetcher.prefetchVersions(versionIds);
     }
 
+    /** 同时登记精确版本事实，供浏览器合并查询；客户端回执仅留在当前任务内。 */
+    public Map<String, JsonNode> getVersionsBatch(Collection<String> versionIds) {
+        var out = new LinkedHashMap<String, JsonNode>();
+        if (versionIds == null || versionIds.isEmpty()) return out;
+        var ids = versionIds.stream().filter(id -> id != null && !id.isBlank()).distinct().toList();
+        var context = DelegationContext.current();
+        if (context != null) context.checkActive();
+        if (context != null && delegationTasks.isEnabled()) {
+            var results = new java.util.concurrent.ConcurrentHashMap<String, JsonNode>();
+            try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+                var futures = ids.stream().map(id -> yagen.waitmydawn.maa.runtime.ScopedExecutors.runAsync(() -> {
+                    var version = getVersionById(id);
+                    if (version != null) results.put(id, version);
+                }, executor)).toList();
+                try { java.util.concurrent.CompletableFuture.allOf(futures.toArray(java.util.concurrent.CompletableFuture[]::new)).join(); }
+                catch (java.util.concurrent.CompletionException unavailable) {
+                    context.checkActive();
+                    if (unavailable.getCause() instanceof Error fatal) throw fatal;
+                    throw new UnavailableException("部分精确版本资料未能核实，请稍后重试");
+                }
+            }
+            context.checkActive();
+            for (String id : ids) if (results.containsKey(id)) out.put(id, results.get(id));
+        } else {
+            fetcher.prefetchVersions(ids);
+            for (String id : ids) {
+                var version = getVersionById(id);
+                if (version != null) out.put(id, version);
+            }
+        }
+        return out;
+    }
+
     /**
      * 批量取项目元数据。
      *

@@ -12,7 +12,9 @@ class RequirementRepairTest {
         var graph = new DependencyGraph();
         for (String slug : slugs) {
             graph.allSlugs.add(slug);
-            graph.selectedVersions.put(slug, new ObjectMapper().createObjectNode().put("id", slug + "v").put("project_id", slug));
+            var version = new ObjectMapper().createObjectNode().put("id", slug + "v").put("project_id", slug);
+            version.putArray("dependencies");
+            graph.selectedVersions.put(slug, version);
         }
         return new ResolutionResult(graph, ResolutionResult.Status.COMPLETE, Set.of(slugs), List.of(), List.of(), 500, false);
     }
