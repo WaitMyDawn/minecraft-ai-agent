@@ -13,6 +13,7 @@
 
 import {nextTick, computed } from 'vue';
 import {childrenMap, conflictIds, ctxMenu, deleteMarked, deleteMode, globalHighlightId, nodesMap, previewData, rootTreeNodes, searchQuery, selectedMods} from '../store.js';
+import {matchingAncestors, coverTreeRoots} from '../utils/graph-traversal.js';
 
 // 删除标记的切换（改 store 里的 deleteMarked + 重绘本节点）。
 // 它和 paintGraphNode 是一件事，所以住在图谱模块；delete-flow.js 从这儿 import，
@@ -52,16 +53,18 @@ export const buildTreeData = (data) => {
     const map = {};
     data.nodes.forEach(n => map[n.id] = n);
     nodesMap.value = map;
-    const reqBy = {};
-    const depOn = {};
+    const reqBy = Object.create(null);
+    const depOn = Object.create(null);
     data.edges.forEach(e => {
+        if (!map[e.from] || !map[e.to]) return;
         if (!reqBy[e.from]) reqBy[e.from] = [];
         reqBy[e.from].push(e.to);
         if (!depOn[e.to]) depOn[e.to] = [];
         depOn[e.to].push(e.from);
     });
     childrenMap.value = depOn;
-    rootTreeNodes.value = data.nodes.filter(n => !reqBy[n.id]).sort((a, b) => (a.slug || '').localeCompare(b.slug || ''));
+    const ordered = [...data.nodes].sort((a, b) => (a.slug || '').localeCompare(b.slug || ''));
+    rootTreeNodes.value = coverTreeRoots(ordered, ordered.filter(n => !reqBy[n.id]), depOn);
 };
 
 export const toggleModState = (id) => {
@@ -233,32 +236,11 @@ export const renderGraph = (fixedPositions) => {
 
 // ---------- 左侧依赖树的搜索过滤 ----------
 // 与 locateTreeNode / 图谱同属 lab 视图；用的是同一份 nodesMap/childrenMap。
-// 🔥 深度搜索算法 (DFS)：判断一个节点及其所有子孙节点是否包含关键词
-const doesNodeOrChildrenMatch = (nodeId, kw) => {
-    const node = nodesMap.value[nodeId];
-    if (!node) return false;
-
-    // 自己匹配上了
-    if ((node.title && node.title.toLowerCase().includes(kw)) ||
-        (node.slug && node.slug.toLowerCase().includes(kw))) {
-        return true;
-    }
-
-    // 自己没匹配上，去问儿子们
-    const children = childrenMap.value[nodeId] || [];
-    for (let childId of children) {
-        if (doesNodeOrChildrenMatch(childId, kw)) return true;
-    }
-
-    return false;
-};
-
 export const filteredRootNodes = computed(() => {
     let arr = rootTreeNodes.value;
     if (searchQuery.value && searchQuery.value.trim() !== '') {
-        const kw = searchQuery.value.toLowerCase();
-        // 如果某个根节点底下的隐藏层级有符合的模组，这个根节点就会显示出来！
-        arr = arr.filter(n => doesNodeOrChildrenMatch(n.id, kw));
+        const matches = matchingAncestors(nodesMap.value, childrenMap.value, searchQuery.value);
+        arr = arr.filter(n => matches.has(String(n.id)));
     }
     return arr;
 });

@@ -225,6 +225,17 @@
                         </configuration>
                     </execution>
                     <execution>
+                        <id>frontend-graph-cycle-check</id>
+                        <phase>test</phase>
+                        <goals><goal>exec</goal></goals>
+                        <configuration>
+                            <executable>node</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments><argument>eval/fe-graph-cycle-check.mjs</argument></arguments>
+                            <skip>${skipFrontendChecks}</skip>
+                        </configuration>
+                    </execution>
+                    <execution>
                         <id>frontend-build-progress-check</id>
                         <phase>test</phase>
                         <goals><goal>exec</goal></goals>
