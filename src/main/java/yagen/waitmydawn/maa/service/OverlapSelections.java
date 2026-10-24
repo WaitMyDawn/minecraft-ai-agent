@@ -230,10 +230,15 @@ public final class OverlapSelections {
         var issues = JSON.createArrayNode();
         for (var issue : report.path("issues")) if (issue.path("dropped").asBoolean() || selected.contains(issue.path("mod").asText())) issues.add(issue);
         report.set("issues", issues);
+        var dependencyWarnings = JSON.createArrayNode();
+        for (var warning : report.path("dependencyWarnings"))
+            if (selected.contains(warning.path("mod").asText()) && selected.contains(warning.path("dependency").asText())) dependencyWarnings.add(warning);
+        report.set("dependencyWarnings", dependencyWarnings);
         var closure = value.closure().inspect(selected);
         trace.set("assembly", JSON.valueToTree(assembly)); trace.set("requirementCoverage", coverage);
         if (trace.path("resolution") instanceof ObjectNode resolution) {
-            resolution.put("status", closure.status() == DependencyClosure.Status.COMPLETE ? "COMPLETE" : "INCOMPLETE"); resolution.put("unresolved", closure.issues().size());
+            resolution.put("status", closure.status() == DependencyClosure.Status.COMPLETE ? "COMPLETE" : "INCOMPLETE");
+            resolution.put("unresolved", closure.issues().stream().filter(i -> i.severity() != DependencyClosure.Severity.WARNING).count());
         }
         trace.set("overlapSelection", JSON.valueToTree(Map.of("rejected", rejected, "removedIncludingOrphans", removed, "staticClosure", closure, "groups", decisionEvidence(value, rejected), "automaticGroups", value.automatic().keySet())));
         trace.set("quantity", JSON.valueToTree(Map.of("status", "USER_SELECTION", "totalFiles", selected.size(), "roots", roots.size(),

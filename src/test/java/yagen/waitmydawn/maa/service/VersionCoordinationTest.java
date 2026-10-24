@@ -41,31 +41,32 @@ class VersionCoordinationTest {
         verify(api, never()).getVersionById("A1"); verify(api, never()).getVersionById("B1");
         verify(api, never()).getLatestVersion(eq("PA"), anyString(), anyString());
     }
-    @Test void compatibleParentVersionRepairsAnUnavailableExactDependencyWithoutChangingRootIdentity() {
+    @Test void incompatibleDeclaredVersionDoesNotDowngradeEitherProject() {
         var bad = version("Bad", "PB"); ((tools.jackson.databind.node.ObjectNode) bad).putArray("game_versions").add("1.20.1");
         var latest = version("A2", "PA", "vid:Bad"); var older = version("A1", "PA", "PB");
         project("a", "PA", latest); project("b", "PB", version("B1", "PB"));
         when(api.getCompatibleVersions(eq("PA"), anyString(), anyString())).thenReturn(json.createArrayNode().add(latest).add(older));
         var r = engine.resolveWithReport(Set.of("a"), "neoforge", "1.21.1");
         assertTrue(r.isComplete(), r.summary()); assertEquals(Set.of("a", "b"), r.orderedSlugs());
-        assertEquals("A1", r.graph().selectedVersions.get("a").path("id").asText());
-        assertEquals("RESOLVED", r.coordination().status()); assertEquals(1, r.coordination().attempts());
-        verify(api, times(1)).getCompatibleVersions(eq("PA"), anyString(), anyString());
+        assertEquals("A2", r.graph().selectedVersions.get("a").path("id").asText());
+        assertEquals("B1", r.graph().selectedVersions.get("b").path("id").asText());
+        assertEquals(0, r.coordination().attempts());
+        verify(api, never()).getCompatibleVersions(anyString(), anyString(), anyString());
     }
-    @Test void replacingADependencyVersionRemovesOldEdgesAndOrphanDependencies() {
+    @Test void latestDependencyContributesItsOwnEdgesWithoutPullingOldDependencies() {
         project("a", "PA", version("A1", "PA", "vid:B1"));
         project("b", "PB", version("B2", "PB", "PD")); version("B1", "PB", "PE");
         project("d", "PD", version("D1", "PD")); project("e", "PE", version("E1", "PE"));
         var r = engine.resolveWithReport(Set.of("a", "b"), "neoforge", "1.21.1");
-        assertTrue(r.isComplete(), r.summary()); assertEquals(Set.of("a", "b", "e"), r.orderedSlugs());
-        assertEquals(Set.of("e"), r.graph().getDependenciesOf("b"));
+        assertTrue(r.isComplete(), r.summary()); assertEquals(Set.of("a", "b", "d"), r.orderedSlugs());
+        assertEquals(Set.of("d"), r.graph().getDependenciesOf("b"));
     }
     @Test void anImportedPinIsNotOverwrittenByAnotherRootsExactDependency() {
         project("a", "PA", version("A1", "PA", "vid:B1"));
         project("b", "PB", version("B2", "PB")); version("B1", "PB");
         var r = engine.resolveWithReport(Set.of("a", "vid:B2"), "neoforge", "1.21.1");
-        assertFalse(r.isComplete()); assertEquals("B2", r.graph().selectedVersions.get("b").path("id").asText());
-        assertTrue(r.unresolved().stream().anyMatch(u -> u.requiredBy().equals("a") && u.reason() == yagen.waitmydawn.maa.model.ResolutionResult.Reason.VERSION_CONFLICT));
+        assertTrue(r.isComplete()); assertEquals("B2", r.graph().selectedVersions.get("b").path("id").asText());
+        assertTrue(r.unresolved().isEmpty());
         verify(api, never()).getCompatibleVersions(eq("PB"), anyString(), anyString());
     }
     @Test void snapshotAliasesDoNotExhaustTheNodeBudgetForAlreadyResolvedProjects() {
@@ -74,7 +75,7 @@ class VersionCoordinationTest {
         var r = tiny.resolveWithReport(Set.of("vid:A1", "vid:B1"), "neoforge", "1.21.1");
         assertTrue(r.isComplete(), r.summary()); assertFalse(r.budgetExhausted());
     }
-    @Test void unsuccessfulSearchStopsAtTheStateBudget() {
+    @Test void unresolvableDependencyIdentityRemainsIncomplete() {
         var bad = version("Bad", "PBad"); ((tools.jackson.databind.node.ObjectNode) bad).putArray("game_versions").add("1.20.1");
         for (String slug : List.of("a", "b")) {
             String id = "P" + slug;
@@ -83,10 +84,10 @@ class VersionCoordinationTest {
             project(slug, id, versions.get(0)); when(api.getCompatibleVersions(eq(id), anyString(), anyString())).thenReturn(versions);
         }
         var r = engine.resolveWithReport(Set.of("a", "b"), "neoforge", "1.21.1");
-        assertFalse(r.isComplete()); assertEquals(6, r.coordination().attempts()); assertEquals("LIMIT_REACHED", r.coordination().status());
+        assertFalse(r.isComplete()); assertTrue(r.coordination().attempts() <= 6);
         assertEquals(Set.of("a", "b"), r.orderedSlugs());
     }
-    @Test void improvingPartialChoicesAreCombinedWithinTheBudget() {
+    @Test void missingDependencyIdentityDoesNotProduceACompletePack() {
         var bad = version("Bad", "PBad"); ((tools.jackson.databind.node.ObjectNode) bad).putArray("game_versions").add("1.20.1");
         for (String slug : List.of("a", "b")) {
             var latest = version(slug + "2", "P" + slug, "vid:Bad"); var older = version(slug + "1", "P" + slug);
@@ -94,8 +95,9 @@ class VersionCoordinationTest {
             when(api.getCompatibleVersions(eq("P" + slug), anyString(), anyString())).thenReturn(json.createArrayNode().add(latest).add(older));
         }
         var r = engine.resolveWithReport(Set.of("a", "b"), "neoforge", "1.21.1");
-        assertTrue(r.isComplete(), r.summary()); assertEquals(2, r.coordination().attempts());
-        assertEquals(Map.of("a", "a1", "b", "b1"), r.coordination().changes());
+        assertFalse(r.isComplete(), r.summary());
+        assertEquals("a2", r.graph().selectedVersions.get("a").path("id").asText());
+        assertEquals("b2", r.graph().selectedVersions.get("b").path("id").asText());
     }
     @Test void aHardRootPinWinsOverAnAliasRegardlessOfCompletionOrder() {
         project("a", "PA", version("A1", "PA")); version("A2", "PA");
@@ -114,7 +116,7 @@ class VersionCoordinationTest {
         assertTrue(r.isComplete(), r.summary());
         verify(api, never()).getCompatibleVersions(anyString(), anyString(), anyString());
     }
-    @Test void bothOwnersOfContradictoryExactRequirementsCanBeCoordinated() {
+    @Test void contradictoryExactRequirementsKeepAllLatestVersions() {
         var a = version("A1", "PA", "vid:C2"); project("a", "PA", a);
         var latest = version("B2", "PB", "vid:C1");
         var compatible = version("B1", "PB", "PC");
@@ -127,7 +129,7 @@ class VersionCoordinationTest {
         when(api.getCompatibleVersions(eq("PB"), anyString(), anyString())).thenReturn(json.createArrayNode().add(latest).add(compatible));
         var r = engine.resolveWithReport(Set.of("a", "b", "core", "generic"), "neoforge", "1.21.1");
         assertTrue(r.isComplete(), r.summary());
-        assertEquals("B1", r.graph().selectedVersions.get("b").path("id").asText());
+        assertEquals("B2", r.graph().selectedVersions.get("b").path("id").asText());
         assertEquals("C2", r.graph().selectedVersions.get("core").path("id").asText());
         assertTrue(r.coordination().attempts() <= 6); assertTrue(r.coordination().queries() <= 4);
         verify(api, never()).getCompatibleVersions(eq("PG"), anyString(), anyString());

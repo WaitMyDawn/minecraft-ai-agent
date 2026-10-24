@@ -3804,7 +3804,7 @@ public class ChatController {
                 var selectedRoots = resolution.roots().stream().filter(finalPerfectMods::contains).collect(Collectors.toSet());
                 boolean known = structured.mode() == BuildIntent.Mode.NEW || state.getAssembly() != null && state.getAssembly().rootsKnown();
                 var portfolio = OptimizationPortfolio.report(reportOptimizationGoals, optimizationFacts, selectedVersions, selectedRoots, finalPerfectMods.size(), known);
-                presentation = new BuildPresentation.Report(presentation.schemaVersion(), presentation.total(), presentation.categories(), presentation.issues(), portfolio);
+                presentation = new BuildPresentation.Report(presentation.schemaVersion(), presentation.total(), presentation.categories(), presentation.issues(), portfolio, presentation.dependencyWarnings());
             }
             cleanReply += "\n<build_report>" + MessageJson.write(presentation) + "</build_report>";
             yagen.waitmydawn.maa.runtime.BuildProgress.stage("核对逐项目标与用途证据");

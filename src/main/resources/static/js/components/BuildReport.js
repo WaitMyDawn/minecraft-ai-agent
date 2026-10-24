@@ -164,6 +164,30 @@ export default {
           </table>
           <p class="px-4 py-3 text-xs text-slate-500">按 {{ report.total }} 个最终文件计算。模组可有多个类别，占比之和可能超过 100%；未分类表示类别信息尚未取得。</p>
         </section>
+        <details v-if="report.dependencyWarnings.length" class="rounded-xl border border-amber-200 bg-amber-50/50">
+          <summary class="px-4 py-3 cursor-pointer text-sm font-semibold text-amber-900">特定版本依赖提示 · {{ report.dependencyWarnings.length }} 项</summary>
+          <div class="px-4 pb-4 space-y-2">
+            <p class="text-xs text-slate-600">平台声明的特定版本依赖仅作提示，默认仍采用当前 Minecraft 版本与加载器下的最新版。导入锁定或会话中已有的选版予以保留；实际兼容性需运行验证。</p>
+            <div v-for="(row, index) in report.dependencyWarnings" :key="index" v-visible-mods="{slugs: [row.mod, row.dependency], owner: authUser?.token}" class="rounded-lg border border-slate-200 bg-white p-3 text-sm space-y-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-slate-500">{{ index + 1 }}）</span>
+                <a :href="modProjectLink(row.mod)" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 text-indigo-700">
+                  <img v-if="icon(row.mod)" :src="icon(row.mod)" alt="" loading="lazy" class="w-8 h-8 rounded">
+                  <span v-else class="w-8 h-8 rounded bg-slate-100 inline-flex items-center justify-center">📦</span>
+                  <span class="break-all">{{ row.mod }}（版本 {{ row.modVersion }}）</span>
+                </a>
+                <span class="text-slate-500">依赖于</span>
+                <a :href="modProjectLink(row.dependency)" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 text-indigo-700">
+                  <img v-if="icon(row.dependency)" :src="icon(row.dependency)" alt="" loading="lazy" class="w-8 h-8 rounded">
+                  <span v-else class="w-8 h-8 rounded bg-slate-100 inline-flex items-center justify-center">📦</span>
+                  <span class="break-all">{{ row.dependency }}（特定版本 {{ row.requiredVersion }}）</span>
+                </a>
+              </div>
+              <p class="text-xs text-slate-600 break-all">当前 {{ row.dependency }} 的版本是 {{ row.currentVersion }}。</p>
+            </div>
+          </div>
+        </details>
+        <p v-if="report.dependencyWarnings.length" class="text-xs text-slate-600">此为平台记录的依赖版本，与模组真实依赖情况并不全等，具体兼容性看实例运行结果。</p>
         <details v-if="report.issues.length" v-visible-mods="{slugs: issueSlugs, owner: authUser?.token}" class="rounded-xl border border-amber-200 bg-amber-50/50">
           <summary class="px-4 py-3 cursor-pointer text-sm font-semibold text-amber-900">模组调整与前置问题 · {{ report.issues.length }} 项</summary>
           <div class="px-4 pb-4 space-y-2">

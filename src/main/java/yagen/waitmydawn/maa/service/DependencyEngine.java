@@ -219,7 +219,7 @@ public class DependencyEngine {
     //  3. 没有深度限制，改用节点预算（500）；触顶返回 INCOMPLETE 而不是假装成功
     // ==========================================
 
-    /** version_id 型依赖在队列里的前缀（区分"按项目解析"与"按精确版本解析"） */
+    /** 版本引用前缀；根节点按导入版本锁定，依赖节点只借此定位项目。 */
     private static final String VID_PREFIX = "vid:";
 
     private ResolutionResult doResolve(Set<String> initialSlugs, String loader, String mcVersion,
@@ -342,7 +342,6 @@ public class DependencyEngine {
         List<String[]> incompatiblePairs = java.util.Collections.synchronizedList(new ArrayList<>());
         Set<String> rootSlugs = ConcurrentHashMap.newKeySet();
         Set<String> hardPinnedSlugs = ConcurrentHashMap.newKeySet();
-        Set<String> dependencyPins = ConcurrentHashMap.newKeySet();
         java.util.concurrent.atomic.AtomicBoolean budgetExhausted = new java.util.concurrent.atomic.AtomicBoolean(false);
 
         Queue<String> queue = new ConcurrentLinkedQueue<>(initialSlugs);
@@ -406,17 +405,18 @@ public class DependencyEngine {
                                 String versionId = key.substring(VID_PREFIX.length());
                                 JsonNode pinned = apiClient.getVersionById(versionId);
                                 if (pinned == null) {
-                                    failed.put(key, ResolutionResult.Reason.VERSION_CONFLICT);
+                                    failed.put(key, isRootLevel ? ResolutionResult.Reason.VERSION_CONFLICT : ResolutionResult.Reason.PROJECT_NOT_FOUND);
                                     failedDetail.put(key, "精确版本 " + versionId + " 查不到");
                                     return;
                                 }
-                                if (!supportsEnv(pinned, mcVersion, loader)) {
+                                if (isRootLevel && !supportsEnv(pinned, mcVersion, loader)) {
                                     failed.put(key, ResolutionResult.Reason.VERSION_CONFLICT);
                                     failedDetail.put(key, "上游锁定的版本 " + versionId + " 不支持 " + mcVersion + "/" + loader);
                                     return;
                                 }
                                 projectId = pinned.path("project_id").asText();
-                                latestVersion = pinned;
+                                // 导入根节点保留锁定；平台依赖版本仅用于识别项目，选版仍按当前环境。
+                                if (isRootLevel) latestVersion = pinned;
                             } else {
                                 projectId = null;
                             }
@@ -458,7 +458,7 @@ public class DependencyEngine {
                             idToSlug.put(VID_PREFIX + latestVersion.path("id").asText(), realSlug);
                             synchronized (graph) {
                                 JsonNode previous = graph.selectedVersions.get(realSlug);
-                                boolean pinned = key.startsWith(VID_PREFIX);
+                                boolean pinned = isRootLevel && key.startsWith(VID_PREFIX);
                                 boolean previousHardPin = hardPinnedSlugs.contains(realSlug);
                                 if (previous != null && !previous.path("id").asText().equals(latestVersion.path("id").asText())
                                         && pinned && graph.pinnedSlugs.contains(realSlug)) {
@@ -466,13 +466,11 @@ public class DependencyEngine {
                                 }
                                 if (isRootLevel && pinned) hardPinnedSlugs.add(realSlug);
                                 if (previous == null || (pinned && isRootLevel && (!previousHardPin
-                                        || latestVersion.path("id").asText().compareTo(previous.path("id").asText()) < 0))
-                                        || (pinned && !hardPinnedSlugs.contains(realSlug) && (!dependencyPins.contains(realSlug)
                                         || latestVersion.path("id").asText().compareTo(previous.path("id").asText()) < 0))) {
                                     graph.selectedVersions.put(realSlug, latestVersion);
                                 }
                                 if (isRootLevel && pinned) graph.pinnedSlugs.add(realSlug);
-                                if (pinned) dependencyPins.add(realSlug);
+                                if (!pinned && previousHardPin) latestVersion = previous;
                             }
                             graph.allSlugs.add(realSlug);
                             if (isRootLevel) rootSlugs.add(realSlug);
@@ -496,12 +494,12 @@ public class DependencyEngine {
                                     boolean hasProject = !depProject.isEmpty() && !"null".equals(depProject);
                                     boolean hasVersion = !depVersion.isEmpty() && !"null".equals(depVersion);
                                     if (SINYTRA_ECOSYSTEM_IDS.contains(depProject)) continue;
-                                    if (hasVersion) {
-                                        requiredPairs.add(new String[]{realSlug, VID_PREFIX + depVersion, latestVersion.path("id").asText()});
-                                        nextLevel.add(VID_PREFIX + depVersion);
-                                    } else if (hasProject) {
+                                    if (hasProject) {
                                         requiredPairs.add(new String[]{realSlug, depProject, latestVersion.path("id").asText()});
                                         nextLevel.add(depProject);
+                                    } else if (hasVersion) {
+                                        requiredPairs.add(new String[]{realSlug, VID_PREFIX + depVersion, latestVersion.path("id").asText()});
+                                        nextLevel.add(VID_PREFIX + depVersion);
                                     }
                                 }
                             }
@@ -605,12 +603,6 @@ public class DependencyEngine {
             String dependent = pair[0];
             String target = pair[1];
             String targetSlug = toSlug.apply(target);
-            JsonNode selected = graph.selectedVersions.get(targetSlug);
-            if (target.startsWith(VID_PREFIX) && selected != null && !target.substring(VID_PREFIX.length()).equals(selected.path("id").asText())) {
-                unresolved.add(new ResolutionResult.Unresolved(targetSlug, dependent, ResolutionResult.Reason.VERSION_CONFLICT,
-                        "需要精确版本 " + target.substring(VID_PREFIX.length()) + "，实际选择 " + selected.path("id").asText()));
-                continue;
-            }
             if (kept.contains(targetSlug)) {
                 graph.addEdge(dependent, targetSlug);
                 continue;

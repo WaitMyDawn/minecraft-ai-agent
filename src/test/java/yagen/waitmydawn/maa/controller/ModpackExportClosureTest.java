@@ -23,7 +23,7 @@ class ModpackExportClosureTest {
         graph.allSlugs.addAll(Set.of("root", "library"));
         graph.addEdge("root", "library");
         var root = mapper.createObjectNode().put("id", "va").put("project_id", "A");
-        root.putArray("dependencies").addObject().put("dependency_type", "required").put("project_id", "B");
+        root.putArray("dependencies").addObject().put("dependency_type", "required").put("project_id", "B").put("version_id", "vb-old");
         var library = mapper.createObjectNode().put("id", "vb").put("project_id", "B");
         library.putArray("dependencies");
         graph.selectedVersions.put("root", root);
@@ -84,6 +84,9 @@ class ModpackExportClosureTest {
         var entries = archive(result.getBody());
         assertEquals(2, entries.get("modrinth.index.json").path("files").size());
         assertEquals("COMPLETE", entries.get("maa-diagnostics.json").path("closure").path("status").asText());
+        var issue = entries.get("maa-diagnostics.json").path("closure").path("issues").get(0);
+        assertEquals("VERSION_MISMATCH", issue.path("code").asText());
+        assertEquals("WARNING", issue.path("severity").asText());
         var request = request(List.of("A")); request.allowIncomplete = true;
         assertEquals(400, controller.buildPack(request, "two").getStatusCode().value());
         request.selectedIds = List.of("outside");

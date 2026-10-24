@@ -8,6 +8,25 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class BuildPresentationTest {
+    @Test void advisoryDependenciesShowBothSelectedVersionsAndTheDeclaredVersionNumber() {
+        var json = new ObjectMapper();
+        var api = mock(ModrinthApiClient.class);
+        var graph = new DependencyGraph();
+        graph.allSlugs.addAll(Set.of("addon", "library"));
+        var addon = json.createObjectNode().put("id", "A2").put("project_id", "PA").put("version_number", "2.0");
+        addon.putArray("dependencies").addObject().put("dependency_type", "required").put("project_id", "PB").put("version_id", "B1");
+        var library = json.createObjectNode().put("id", "B3").put("project_id", "PB").put("version_number", "3.0");
+        library.putArray("dependencies");
+        graph.selectedVersions.put("addon", addon); graph.selectedVersions.put("library", library);
+        when(api.getVersionById("B1")).thenReturn(json.createObjectNode().put("version_number", "1.0"));
+        var resolution = new ResolutionResult(graph, ResolutionResult.Status.COMPLETE, Set.of("addon"), List.of(), List.of(), 500, false);
+        var closure = DependencyClosure.capture(graph, List.of(), Map.of()).inspect(graph.allSlugs);
+        var report = BuildPresentation.create(api, graph, resolution, closure, graph.allSlugs, Map.of());
+        assertTrue(report.issues().isEmpty());
+        assertEquals(List.of(new BuildPresentation.DependencyWarning("addon", "2.0", "library", "1.0", "B1", "3.0")), report.dependencyWarnings());
+        when(api.getVersionById("B1")).thenThrow(new ModrinthApiClient.UnavailableException("fixture"));
+        assertEquals("B1", BuildPresentation.create(api, graph, resolution, closure, graph.allSlugs, Map.of()).dependencyWarnings().getFirst().requiredVersion());
+    }
     @Test void retainedProjectIsNotReportedAsDroppedAfterDependencyRepair() {
         var graph = new DependencyGraph();
         graph.allSlugs.add("core");

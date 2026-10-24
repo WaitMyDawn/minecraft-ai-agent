@@ -48,7 +48,7 @@ class DependencyEngineTest {
     }
 
     @Test
-    void exactVersionTakesPriorityWhenUpstreamProvidesBothIdentifiers() {
+    void latestVersionTakesPriorityWhenUpstreamProvidesBothIdentifiers() {
         register("a", "PA", List.of());
         when(api.getLatestVersion(eq("PA"), eq(MC), anyString())).thenReturn(json(
                 "{\"id\":\"A1\",\"dependencies\":[{\"project_id\":\"PB\",\"version_id\":\"V9\",\"dependency_type\":\"required\"}]}"));
@@ -57,7 +57,8 @@ class DependencyEngineTest {
                 + "\"game_versions\":[\"" + MC + "\"],\"loaders\":[\"" + NEOFORGE + "\"],\"dependencies\":[]}"));
         var result = resolve("a");
         assertTrue(result.isComplete());
-        assertEquals("V9", result.graph().selectedVersions.get("b").path("id").asText());
+        assertEquals("b-v1", result.graph().selectedVersions.get("b").path("id").asText());
+        verify(api, never()).getVersionById("V9");
         assertEquals(Set.of("b"), result.graph().getDependenciesOf("a"));
     }
 
@@ -254,7 +255,10 @@ class DependencyEngineTest {
                 "version_id 型前置必须被解析，实际=" + r.orderedSlugs());
         assertTrue(r.isComplete());
         assertEquals(Set.of("b"), r.graph().getDependenciesOf("a"));
-        assertEquals("V9", r.graph().selectedVersions.get("b").path("id").asText());
+        assertEquals("b-v1", r.graph().selectedVersions.get("b").path("id").asText());
+        var closure = yagen.waitmydawn.maa.model.DependencyClosure.capture(r.graph(), r.unresolved(), java.util.Map.of()).inspect(r.orderedSlugs());
+        assertEquals(yagen.waitmydawn.maa.model.DependencyClosure.Status.COMPLETE, closure.status());
+        assertTrue(closure.issues().stream().anyMatch(i -> i.dependency().equals("b") && i.versionId().equals("V9")));
     }
 
     @Test

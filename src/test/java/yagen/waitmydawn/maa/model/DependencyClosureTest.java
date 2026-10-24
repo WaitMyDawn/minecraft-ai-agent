@@ -31,7 +31,7 @@ class DependencyClosureTest {
         assertTrue(broken.issues().stream().anyMatch(i -> i.dependency().equals("library") && i.code().equals("MISSING_REQUIRED")));
         assertEquals(DependencyClosure.Status.COMPLETE, snapshot.inspect(Set.of("library")).status());
     }
-    @Test void exactVersionIsRequiredAndVersionOnlyReferencesResolve() {
+    @Test void exactVersionDifferencesAreAdvisoryAndVersionOnlyReferencesResolve() {
         var graph = graph();
         var dependencies = ((ObjectNode) graph.selectedVersions.get("root")).withArray("dependencies");
         dependencies.removeAll();
@@ -41,6 +41,14 @@ class DependencyClosureTest {
         dependencies.addObject().put("dependency_type", "required").put("project_id", "B").put("version_id", "other");
         assertTrue(DependencyClosure.capture(graph, List.of(), Map.of()).inspect(Set.of("root", "library")).issues()
                 .stream().anyMatch(i -> i.code().equals("VERSION_MISMATCH")));
+        var report = DependencyClosure.capture(graph, List.of(), Map.of()).inspect(Set.of("root", "library"));
+        assertEquals(DependencyClosure.Status.COMPLETE, report.status());
+        assertEquals(DependencyClosure.Severity.WARNING, report.issues().getFirst().severity());
+        dependencies.removeAll();
+        dependencies.addObject().put("dependency_type", "required").put("version_id", "other");
+        var aliased = DependencyClosure.capture(graph, List.of(), Map.of("vid:other", "library"));
+        assertEquals("library", aliased.inspect(Set.of("root", "library")).issues().getFirst().dependency());
+        assertEquals(DependencyClosure.Status.INCOMPLETE, aliased.inspect(Set.of("root")).status());
     }
     @Test void prunedMissingDependenciesRemainVisibleAndNetworkUncertaintyIsNotAbsence() {
         var graph = graph();

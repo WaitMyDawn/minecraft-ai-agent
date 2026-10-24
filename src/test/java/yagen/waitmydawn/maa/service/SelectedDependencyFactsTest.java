@@ -11,7 +11,7 @@ import static org.mockito.ArgumentMatchers.*;
 
 /** 固定公开选版事实的局部复现；不访问网络，不证明安装后的运行兼容。 */
 class SelectedDependencyFactsTest {
-    @Test void contradictoryAddonPinsCanBeRepairedWhileAGenuineTerrainConflictRemainsVisible() throws Exception {
+    @Test void contradictoryAddonPinsAreAdvisoryWhileAGenuineTerrainConflictRemainsVisible() throws Exception {
         var json = new ObjectMapper();
         var fixture = json.readTree(Files.readString(Path.of("src/test/resources/dependency-facts/20261017-selected-constraints.json")));
         var api = mock(ModrinthApiClient.class);
@@ -32,8 +32,11 @@ class SelectedDependencyFactsTest {
         var result = new DependencyEngine(api, knowledge).resolveWithReport(roots, "neoforge", "1.21.1");
         assertFalse(result.isComplete());
         assertTrue(result.orderedSlugs().containsAll(roots));
-        assertEquals("La8SvoPm", result.graph().selectedVersions.get("ends-delight").path("id").asText());
-        assertEquals("XJKk7DgU", result.graph().selectedVersions.get("farmers-delight").path("id").asText());
+        assertEquals("YTApg6Hl", result.graph().selectedVersions.get("ends-delight").path("id").asText());
+        assertEquals("9gp7w8NC", result.graph().selectedVersions.get("farmers-delight").path("id").asText());
+        var closure = yagen.waitmydawn.maa.model.DependencyClosure.capture(result.graph(), result.unresolved(), Map.of()).inspect(result.orderedSlugs());
+        assertTrue(closure.issues().stream().anyMatch(i -> i.dependent().equals("farmers-delight-contracts-feasts")
+                && i.code().equals("VERSION_MISMATCH") && i.severity() == yagen.waitmydawn.maa.model.DependencyClosure.Severity.WARNING));
         assertTrue(result.unresolved().stream().noneMatch(u -> u.reason() == ResolutionResult.Reason.VERSION_CONFLICT));
         assertTrue(result.unresolved().stream().anyMatch(u -> u.reason() == ResolutionResult.Reason.CONFLICT_BETWEEN_ROOTS
                 && u.requiredBy().equals("epicterrain") && u.slug().equals("terrablender")));

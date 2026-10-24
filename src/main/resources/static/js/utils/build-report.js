@@ -17,7 +17,11 @@ export const readBuildReport = (content) => {
                 codes: Array.isArray(i.codes) ? i.codes.filter(v => typeof v === 'string' && /^[A-Z_]{1,64}$/.test(v)).slice(0, 16) : [i.reason],
                 requiredVersions: Array.isArray(i.requiredVersions) ? i.requiredVersions.filter(v => typeof v === 'string'
                     && /^[A-Za-z0-9_.-]{1,128}$/.test(v)).slice(0, 32) : i.versionId ? [i.versionId] : []}));
-        return {...report, categories, issues, optimization: readOptimizationPortfolio(report.optimization)};
+        const dependencyWarnings = Array.isArray(report.dependencyWarnings) ? report.dependencyWarnings.slice(0, 8192)
+            .filter(row => row && ['mod', 'dependency', 'requiredVersionId'].every(key => typeof row[key] === 'string'
+                && /^[A-Za-z0-9_.-]{1,128}$/.test(row[key]))
+                && ['modVersion', 'requiredVersion', 'currentVersion'].every(key => typeof row[key] === 'string' && row[key].length <= 256)) : [];
+        return {...report, categories, issues, dependencyWarnings, optimization: readOptimizationPortfolio(report.optimization)};
     } catch { return null; }
 };
 

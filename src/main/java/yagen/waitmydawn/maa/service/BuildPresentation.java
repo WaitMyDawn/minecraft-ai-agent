@@ -17,7 +17,13 @@ public final class BuildPresentation {
             this(mod, dependency, versionId, reason, dropped, "", List.of(reason), versionId.isBlank() ? List.of() : List.of(versionId));
         }
     }
-    public record Report(int schemaVersion, int total, Map<String, Integer> categories, List<Issue> issues, OptimizationPortfolio.Report optimization) {
+    public record DependencyWarning(String mod, String modVersion, String dependency, String requiredVersion,
+                                    String requiredVersionId, String currentVersion) {}
+    public record Report(int schemaVersion, int total, Map<String, Integer> categories, List<Issue> issues,
+                         OptimizationPortfolio.Report optimization, List<DependencyWarning> dependencyWarnings) {
+        public Report(int schemaVersion, int total, Map<String, Integer> categories, List<Issue> issues, OptimizationPortfolio.Report optimization) {
+            this(schemaVersion, total, categories, issues, optimization, List.of());
+        }
         public Report(int schemaVersion, int total, Map<String, Integer> categories, List<Issue> issues) { this(schemaVersion, total, categories, issues, null); }
     }
 
@@ -29,6 +35,8 @@ public final class BuildPresentation {
             references.put("vid:" + version.path("id").asText(), slug);
         });
         Set<Issue> issues = new LinkedHashSet<>();
+        var warnings = new LinkedHashSet<DependencyWarning>();
+        var versionLabels = new HashMap<String, String>();
         int[] lookupBudget = {32};
         resolution.dropped().stream().filter(d -> !selected.contains(d.slug()))
                 .forEach(d -> issues.add(new Issue(d.slug(), "", "", d.reason().name(), true, d.detail(), List.of(d.reason().name()), List.of())));
@@ -41,6 +49,21 @@ public final class BuildPresentation {
         }
         for (var issue : closure.issues()) {
             String dependency = resolve(api, issue.dependency(), references, lookupBudget);
+            if (issue.code().equals("VERSION_MISMATCH") && issue.severity() == DependencyClosure.Severity.WARNING) {
+                String required = versionLabels.get(issue.versionId());
+                if (required == null) {
+                    required = issue.versionId();
+                    if (lookupBudget[0]-- > 0) try {
+                        required = versionLabel(api.getVersionById(issue.versionId()), issue.versionId());
+                    } catch (ModrinthApiClient.UnavailableException unavailable) {
+                        // 版本号补全失败时保留平台 ID，提示仍可追溯。
+                    }
+                    versionLabels.put(issue.versionId(), required);
+                }
+                warnings.add(new DependencyWarning(issue.dependent(), versionLabel(graph.selectedVersions.get(issue.dependent()), "未知"),
+                        dependency, required, issue.versionId(), versionLabel(graph.selectedVersions.get(dependency), "未知")));
+                continue;
+            }
             issues.add(new Issue(issue.dependent(), dependency,
                     !issue.versionId().isBlank() ? issue.versionId() : issue.dependency().startsWith("vid:") ? issue.dependency().substring(4) : "", issue.code(), false));
         }
@@ -58,7 +81,13 @@ public final class BuildPresentation {
             merged.add(new Issue(first.mod(), first.dependency(), versions.size() == 1 ? versions.getFirst() : "", first.reason(), first.dropped(),
                     detail.substring(0, Math.min(1000, detail.length())), rows.stream().flatMap(i -> i.codes().stream()).distinct().sorted().toList(), versions));
         }
-        return new Report(1, selected.size(), Map.copyOf(categories), List.copyOf(merged));
+        return new Report(1, selected.size(), Map.copyOf(categories), List.copyOf(merged), null, List.copyOf(warnings));
+    }
+    private static String versionLabel(tools.jackson.databind.JsonNode version, String fallback) {
+        if (version == null) return fallback;
+        String label = version.path("version_number").asText("");
+        if (label.isBlank()) label = version.path("id").asText(fallback);
+        return label.substring(0, Math.min(256, label.length()));
     }
     private static String resolve(ModrinthApiClient api, String reference, Map<String, String> references, int[] budget) {
         if (reference == null || reference.isBlank()) return "";

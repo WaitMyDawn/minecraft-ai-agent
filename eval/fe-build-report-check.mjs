@@ -8,6 +8,12 @@ assert.equal(cleanChatReply('构建完成<mods>a,b</mods><trace>{}</trace><const
 const text = '已生成整合包\n<build_report>' + JSON.stringify({schemaVersion: 1, total: 10,
     categories: {magic: 8, adventure: 7}, issues: [{mod: 'addon', dependency: 'core', versionId: 'V1', reason: 'VERSION_CONFLICT', dropped: false}]}) + '</build_report>';
 const report = readBuildReport(text);
+assert.deepEqual(report.dependencyWarnings, []);
+const warning = {mod: 'addon', modVersion: '2.0', dependency: 'core', requiredVersion: '1.0', requiredVersionId: 'V1', currentVersion: '3.0'};
+const warningsReport = rows => readBuildReport('<build_report>' + JSON.stringify({schemaVersion: 1, total: 2,
+    categories: {}, issues: [], dependencyWarnings: rows}) + '</build_report>');
+assert.deepEqual(warningsReport([warning]).dependencyWarnings, [warning]);
+assert.deepEqual(warningsReport([null, {...warning, dependency: 'javascript:bad'}, {...warning, currentVersion: 'x'.repeat(257)}]).dependencyWarnings, []);
 assert.equal(report.categories[0].percentage, 80);
 assert.equal(report.categories[1].percentage, 70);
 assert.equal(report.issues[0].dependency, 'core');

@@ -7,7 +7,7 @@ import java.util.*;
 public record DependencyClosure(Map<String, String> versions, List<Requirement> requirements, List<Issue> unresolved) {
     private static final int MAX_REQUIREMENTS = 8192;
     public enum Status { COMPLETE, INCOMPLETE, UNVERIFIED }
-    public enum Severity { BROKEN, UNKNOWN }
+    public enum Severity { BROKEN, UNKNOWN, WARNING }
     public record Requirement(String dependent, String dependency, String versionId) {}
     public record Issue(String dependent, String dependency, String code, Severity severity, String versionId) {
         public Issue { versionId = Objects.requireNonNullElse(versionId, ""); }
@@ -50,7 +50,8 @@ public record DependencyClosure(Map<String, String> versions, List<Requirement> 
                 if (!projectId.isBlank()) {
                     addRequirement(requirements, issues, new Requirement(dependent, aliases.getOrDefault(projectId, projectId), versionId));
                 } else if (!versionId.isBlank()) {
-                    addRequirement(requirements, issues, new Requirement(dependent, byVersion.getOrDefault(versionId, "vid:" + versionId), versionId));
+                    addRequirement(requirements, issues, new Requirement(dependent,
+                            aliases.getOrDefault("vid:" + versionId, byVersion.getOrDefault(versionId, "vid:" + versionId)), versionId));
                 } else {
                     issues.add(new Issue(dependent, dependency.path("file_name").asText(""), "UNVERIFIED_FILE_DEPENDENCY", Severity.UNKNOWN));
                 }
@@ -95,11 +96,12 @@ public record DependencyClosure(Map<String, String> versions, List<Requirement> 
                 if (!explained) issues.add(new Issue(requirement.dependent(), requirement.dependency(), "MISSING_REQUIRED", Severity.BROKEN, requirement.versionId()));
             } else if (!requirement.versionId().isBlank()
                     && !requirement.versionId().equals(versions.get(requirement.dependency()))) {
-                issues.add(new Issue(requirement.dependent(), requirement.dependency(), "VERSION_MISMATCH", Severity.BROKEN, requirement.versionId()));
+                // 平台精确依赖不覆盖选版；项目已保留时仅提示声明与实际版本的差异。
+                issues.add(new Issue(requirement.dependent(), requirement.dependency(), "VERSION_MISMATCH", Severity.WARNING, requirement.versionId()));
             }
         }
         List<Issue> ordered = issues.stream().sorted(Comparator.comparing(Issue::dependent).thenComparing(Issue::dependency).thenComparing(Issue::code)).toList();
         return new Report(ordered.stream().anyMatch(i -> i.severity() == Severity.BROKEN) ? Status.INCOMPLETE
-                : ordered.isEmpty() ? Status.COMPLETE : Status.UNVERIFIED, ordered);
+                : ordered.stream().anyMatch(i -> i.severity() == Severity.UNKNOWN) ? Status.UNVERIFIED : Status.COMPLETE, ordered);
     }
 }
